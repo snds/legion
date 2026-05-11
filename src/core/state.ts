@@ -154,8 +154,10 @@ export function getCamDist(z: number): number {
   if (z < T_OUTER_SYS) return lerpDist(T_INNER_SYS,   T_OUTER_SYS,  120,    1000);
   if (z < T_HELIO)     return lerpDist(T_OUTER_SYS,   T_HELIO,      1000,   2800);
   if (z < T_SECTOR)    return lerpDist(T_HELIO,       T_SECTOR,     2800,   5500);
-  if (z < T_ARM)       return lerpDist(T_SECTOR,      T_ARM,        5500,   9500);
-  return lerpDist(T_ARM, 1.0, 9500, 16000);
+  if (z < T_ARM)       return lerpDist(T_SECTOR,      T_ARM,        5500,   12000);
+  // Galaxy max distance pushed out so the 15-kpc (5000 WU) disc fills
+  // the viewport edge-to-edge at FOV 72° rather than floating small.
+  return lerpDist(T_ARM, 1.0, 12000, 24000);
 }
 
 // ── State Shape ──────────────────────────────────────────────────

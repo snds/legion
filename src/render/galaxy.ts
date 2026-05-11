@@ -383,7 +383,9 @@ export function createGalaxy(): Group {
     const arm = Math.floor(Math.random() * ARMS);
     const armAngle = (Math.PI * 2 / ARMS) * arm;
     const r = 0.3 + Math.random() * GAL_RADIUS;
-    const spiralTwist = r * 0.55;
+    // Tighter log-spiral pitch: previously r*0.55 read as concentric
+    // rings rather than arms. Closer to a real Sb/Sbc galaxy now.
+    const spiralTwist = Math.log(r + 0.5) * 1.6;
     const spread = ARM_SPREAD * (1 + r * 0.04);
     const theta = armAngle + spiralTwist + (Math.random() - 0.5) * spread;
     const diskHeight = 0.12 + r * 0.01;
@@ -454,8 +456,11 @@ export function createGalaxy(): Group {
   galGeo.setAttribute('position', new Float32BufferAttribute(armPts, 3));
   galGeo.setAttribute('color', new Float32BufferAttribute(armCols, 3));
   const starFieldMat = new PointsMaterial({
-    size: 2.0, vertexColors: true, sizeAttenuation: false,
-    transparent: true, opacity: 0.9, depthWrite: false,
+    size: 1.8, vertexColors: true, sizeAttenuation: false,
+    // Lower base opacity so particles read as bright resolved stars
+    // ON TOP of the diffuse shader, not AS the disc itself.
+    transparent: true, opacity: 0.55, depthWrite: false,
+    blending: AdditiveBlending,
   });
   const starField = new Points(galGeo, starFieldMat);
   galaxy.add(starField);
@@ -572,13 +577,15 @@ export function createGalaxy(): Group {
     side: DoubleSide,
     blending: NormalBlending,
     uniforms: {
-      uBulgeColor:   { value: new Color(0xfff0c8) },  // warm yellow-white
-      uArmColor:     { value: new Color(0xc9a988) },  // pale sepia
-      uDustColor:    { value: new Color(0x2a1612) },  // brown-black silhouette
-      uBulgeRadius:  { value: 0.22 },                 // bulge as fraction of disc radius
-      uArmTwist:     { value: 4.2 },                  // log-spiral tightness
+      uBulgeColor:   { value: new Color(0xffe2a8) },
+      uArmColor:     { value: new Color(0xd9b894) },
+      uDustColor:    { value: new Color(0x180b08) },
+      uBulgeRadius:  { value: 0.28 },
+      // Looser log-spiral pitch — 8.5 read as concentric rings.
+      // 5.0 gives recognizable Sb-type sweeping arms.
+      uArmTwist:     { value: 5.0 },
       uArmCount:     { value: 4.0 },
-      uDustStrength: { value: 0.85 },
+      uDustStrength: { value: 0.92 },
       uOpacity:      { value: 1.0 },
       uTime:         { value: 0 },
     },
@@ -588,7 +595,10 @@ export function createGalaxy(): Group {
     discMat,
   );
   disc.rotation.x = -Math.PI / 2;
-  disc.renderOrder = -1;   // render under particles & nebulae
+  // Render disc AFTER the additive particle field so the shader's
+  // continuous diffuse layer is the dominant visual, with bright
+  // particles still glowing through where they overlap.
+  disc.renderOrder = 2;
   galaxy.add(disc);
   GALAXY_LOD.discMat = discMat;
 

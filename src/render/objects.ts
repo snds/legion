@@ -121,6 +121,7 @@ export function createStarMesh(color: number, radius: number, name = 'ε ERIDANI
   group.userData.type = 'star';
   group.userData.name = name;
   group.userData.spectralType = spectralInfo;
+  group.userData.bodyRadius = radius;
 
   // Procedural sun shader system (surface + glow + corona rays)
   const sunSys = createSunSystem(radius);
@@ -177,6 +178,7 @@ export function createPlanetMesh(
   group.userData.name = name;
   group.userData.hasAtmosphere = hasAtmosphere;
   group.userData.planetTypeId = planetType;
+  group.userData.bodyRadius = size;  // for camera per-object scale
 
   const segments = VP.get('planetSegments');
   const c = new Color(color);
@@ -555,6 +557,7 @@ export function createMoonMesh(
   group.name = `moon-${name}`;
   group.userData.type = 'moon';
   group.userData.name = name;
+  group.userData.bodyRadius = size;
 
   const segments = 32;
   const c = new Color(color);

@@ -53,6 +53,28 @@ function fovForDistance(camDist: number): number {
   return FOV_WIDE;
 }
 
+// Per-object focus scale: the close-in tiers (surface, low-orbit, orbit)
+// frame the focused body's bounding radius rather than absolute world
+// units. A reference planet (Earth ≈ 0.3 WU radius) gives scale 1.0;
+// a gas giant 2.0 WU → scale 6.67; a small moon 0.08 WU → scale 0.27.
+const FOCUS_REFERENCE_RADIUS = 0.3;
+
+function tierScaleMultiplier(domain: string, scale: number): number {
+  // Close-in tiers should scale with the focused body; system+ tiers
+  // are absolute (their frame is the system, not the body).
+  switch (domain) {
+    case 'surface':
+    case 'low-orbit':
+      return scale;
+    case 'orbit':
+      // Half-scale lerp so ORBIT can frame a body+its moons without
+      // ballooning for a gas giant.
+      return 1 + (scale - 1) * 0.5;
+    default:
+      return 1;
+  }
+}
+
 export class CameraController {
   private cam: PerspectiveCamera;
   private theta = 0.4;      // current azimuth angle (smoothed)
@@ -67,6 +89,9 @@ export class CameraController {
   // transforms above them.
   private trackedObject: Object3D | null = null;
   private readonly _trackPos = new Vector3();
+  // Per-object scale (set from trackedObject.userData.bodyRadius). 1.0
+  // means "use absolute camDist"; >1 multiplies close-tier distances.
+  private focusScale = 1.0;
 
   constructor(cam: PerspectiveCamera) {
     this.cam = cam;
@@ -85,6 +110,7 @@ export class CameraController {
    */
   focusOn(x: number, y: number, z: number): void {
     this.trackedObject = null;
+    this.focusScale = 1.0;
     Game.data.camFocusTarget = { x, y, z };
   }
 
@@ -100,6 +126,11 @@ export class CameraController {
       // lurch from wherever the camera previously was.
       obj.getWorldPosition(this._trackPos);
       Game.data.camFocusTarget = { x: this._trackPos.x, y: this._trackPos.y, z: this._trackPos.z };
+      // Derive close-tier scale factor from the body's geometry radius.
+      const r = (obj.userData?.bodyRadius as number | undefined) ?? FOCUS_REFERENCE_RADIUS;
+      this.focusScale = Math.max(0.1, r / FOCUS_REFERENCE_RADIUS);
+    } else {
+      this.focusScale = 1.0;
     }
   }
 
@@ -121,8 +152,11 @@ export class CameraController {
     // ── Zoom Interpolation (lerp 0.06) ──
     data.zoomLevel += (data.targetZoom - data.zoomLevel) * ZOOM_LERP;
 
-    // Derive camera distance from piecewise curve
-    data.camDist = getCamDist(data.zoomLevel);
+    // Derive camera distance from piecewise curve. Close-in tiers
+    // (surface / low-orbit / orbit) multiply by focusScale so the
+    // framing is proportional to the focused body's actual radius.
+    const baseDist = getCamDist(data.zoomLevel);
+    data.camDist = baseDist * tierScaleMultiplier(data.zoomDomain, this.focusScale);
 
     // ── Focus Interpolation (lerp 0.05) ──
     if (data.camFocusTarget) {

@@ -78,13 +78,13 @@ export const galacticDiscFragmentShader = /* glsl */ `
 
     // Arm density profile — pow() narrows the arms vs the gaps.
     float armBand = 0.5 + 0.5 * cos(armPhase * uArmCount);
-    float arms = pow(armBand, 2.2);
+    float arms = pow(armBand, 1.7);  // softer power = arms read at more radii
 
     // Bulge: smooth Gaussian falloff anchored at the center.
-    float bulge = exp(-pow(r / uBulgeRadius, 2.0) * 3.2);
+    float bulge = exp(-pow(r / uBulgeRadius, 2.0) * 2.5);
 
-    // Overall radial disc envelope (declines with r, fades to nothing at edge).
-    float discEnv = exp(-r * 2.3) * (1.0 - smoothstep(0.78, 1.0, r));
+    // Overall radial disc envelope — slower falloff so outer arms keep presence.
+    float discEnv = exp(-r * 1.6) * (1.0 - smoothstep(0.88, 1.0, r));
 
     // Sampled cloud noise, rotated by log(r) so the noise field
     // swirls with the spiral — keeps the grain feeling continuous
@@ -106,21 +106,21 @@ export const galacticDiscFragmentShader = /* glsl */ `
     dust *= 1.0 - smoothstep(0.78, 0.95, r);    // no dust at extreme edge
 
     // ── Compose ──
-    // Arm/inter-arm color modulation: arms slightly warmer, gaps slightly cooler.
-    vec3 armTint = mix(uArmColor * 0.6, uArmColor, arms);
-    vec3 baseDisc = armTint * (discEnv + arms * 0.55) * cloud * 1.6;
-    vec3 bulgeContribution = uBulgeColor * bulge * 1.7;
+    // Arm/inter-arm color modulation: arms warmer + brighter, gaps cooler + dimmer.
+    vec3 armTint = mix(uArmColor * 0.5, uArmColor * 1.15, arms);
+    vec3 baseDisc = armTint * (discEnv + arms * 0.9) * (0.7 + cloud * 0.6) * 2.2;
+    vec3 bulgeContribution = uBulgeColor * bulge * 2.4;
     vec3 color = baseDisc + bulgeContribution;
 
     // Dust occlusion — multiplicative darkening toward uDustColor.
     color = mix(color, color * uDustColor, dust * uDustStrength);
 
-    // Alpha = how much of this disc is present here.
-    // Bulge and arms each contribute. Dust both darkens color AND lifts
-    // alpha slightly so it occludes the starfield rather than vanishing.
-    float coverage = clamp(discEnv * (0.4 + arms * 0.6) + bulge * 0.95, 0.0, 1.0);
-    coverage *= cloud;
-    coverage += dust * 0.35; // dust lanes register against background
+    // Alpha = how much of this disc is present here. Heavier weighting on
+    // discEnv + arms + bulge so the diffuse layer reads as the dominant
+    // visual rather than a faint tint behind the additive particle field.
+    float coverage = discEnv * (0.65 + arms * 0.9) + bulge * 1.4;
+    coverage *= (0.5 + cloud * 0.7);
+    coverage += dust * 0.55;
     coverage = clamp(coverage, 0.0, 1.0);
 
     gl_FragColor = vec4(color, coverage * uOpacity);

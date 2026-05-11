@@ -40,6 +40,16 @@ function applyDomain(domain: DomainName): void {
   if (!targets) return;
   const { layers, eclipticGrid, oortCloud, galaxyArms, sectorOrb } = targets;
 
+  // Asteroid belt is a band inside the local layer. It only reads as
+  // meaningful content when the system disc is the subject — surface/
+  // low-orbit close-up shots get a distracting horizontal stripe at the
+  // top of the frame, so hide it there too.
+  const belt = layers.local.getObjectByName('asteroid-belt');
+  if (belt) {
+    belt.visible =
+      domain === 'orbit' || domain === 'inner-system' || domain === 'outer-system';
+  }
+
   // Defaults: everything off, then selectively enable
   layers.local.visible = false;
   layers.regional.visible = false;
@@ -105,26 +115,30 @@ function applyDomain(domain: DomainName): void {
     case 'arm':
       // Immersed inside the Orion Spur — galactic particles dominate
       // the field of view, regional system markers float as nav targets.
-      // Camera distance now sits within the disc particle volume.
+      // Force a near-in-plane camera angle so the disc surrounds us
+      // (galaxy tier left phi at 0.35 = top-down; arm wants horizon-level).
       layers.regional.visible = true;
       layers.galactic.visible = true;
       if (galaxyArms) galaxyArms.visible = true;
       setBackgroundOpacity(0.20, 0.06);
+      Game.data.targetPhi = 1.3;
       break;
 
-    case 'galaxy':
-      // Full Milky Way disc. Recenter focus on Sgr A* so the disc fits
-      // the viewport symmetrically; the user can still scroll back to
-      // approach the home system. (focus-on event clears any active
-      // object tracking — explicit position wins.)
+    case 'galaxy': {
+      // Full Milky Way disc. At this tier the camera needs both:
+      //   1. focus on the galaxy center (Sgr A*) so the disc is framed
+      //      symmetrically — otherwise it sits off to one side.
+      //   2. a near-top-down polar angle (phi ≈ 0.35 rad ≈ 20° from
+      //      top) so the disc isn't viewed near edge-on. Without this
+      //      the paper-thin disc collapses into a horizontal line.
       layers.galactic.visible = true;
       if (galaxyArms) galaxyArms.visible = true;
       setBackgroundOpacity(0.08, 0.02);
-      {
-        const sgr = getGalaxyOffset();
-        Events.emit('camera:focus-on', { x: sgr.x, y: sgr.y, z: sgr.z });
-      }
+      const sgr = getGalaxyOffset();
+      Events.emit('camera:focus-on', { x: sgr.x, y: sgr.y, z: sgr.z });
+      Game.data.targetPhi = 0.35;
       break;
+    }
   }
 }
 

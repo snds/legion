@@ -232,6 +232,17 @@ async function boot(): Promise<void> {
     worldExtras.sectorOrb,
   );
 
+  // ── 8d. Default focus: home habitable planet ──
+  // Without this, the camera starts pointed at the star, making the
+  // close-in tiers (surface, low-orbit, orbit) frame the inside of
+  // the sun rather than a planet.
+  const homePlanetName = systemId === 'sol' ? 'Earth' : 'Romulus';
+  scene.traverse((obj) => {
+    if (obj.userData?.type === 'planet' && obj.userData?.name === homePlanetName) {
+      camCtrl.trackObject(obj);
+    }
+  });
+
   // ── 9. Star Graph ──
   const systemEids: number[] = [];
   // Collect all system entity IDs from the ECS
@@ -469,7 +480,10 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol'): WorldExtras {
 
     const marker = createSystemMarker(sCfg.name, sCfg.color, sCfg.hasBobs, sCfg.isHome);
 
-    const REGIONAL_SCALE = 800;
+    // Regional scale chosen so the nearest neighbors land at ~1500-2500 WU
+    // (visible inside the heliopause camDist 1000-2800 frustum) and all 16
+    // systems fit within the sector camDist 2800-5500 viewport.
+    const REGIONAL_SCALE = 250;
     marker.position.set(
       sCfg.x * REGIONAL_SCALE,
       sCfg.y * REGIONAL_SCALE * 0.3,
@@ -492,6 +506,7 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol'): WorldExtras {
   const beltInner = isSol ? 2.1 : 2.5;
   const beltOuter = isSol ? 3.3 : 4.5;
   const asteroidBelt = createAsteroidBelt(beltInner, beltOuter);
+  asteroidBelt.group.name = 'asteroid-belt';
   layers.local.add(asteroidBelt.group);
 
   // ── Heliopause ──
@@ -513,7 +528,9 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol'): WorldExtras {
   // ── Sector orb (Homeworld-style sensor bubble, visible at sector tier) ──
   // Sits at the home origin in scene space; visibility system shows/hides
   // it per zoom domain.
-  const sectorOrb = createSectorOrb(8000);
+  // Sector orb radius matches the regional-system spread — encloses the
+  // ~16 nearest navigable systems comfortably.
+  const sectorOrb = createSectorOrb(3000);
   scene.add(sectorOrb);
 
   return { eclipticGrid, oortCloud, galaxyArms: galaxyGroup, sectorOrb, bobEids };
