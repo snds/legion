@@ -403,13 +403,21 @@ export function createGalaxy(): Group {
   for (let i = 0; i < ARM_COUNT; i++) {
     const arm = Math.floor(Math.random() * ARMS);
     const armAngle = (Math.PI * 2 / ARMS) * arm;
-    // Arms start at the bar tip radius (~2.7 kpc) — gas/young stars
-    // mostly live in the disc beyond that, not inside the bar.
-    const r = 2.7 + Math.random() * (GAL_RADIUS - 2.7);
+    // Arms start at the bar tip radius (~2.7 kpc). Exponential-disc-like
+    // radial distribution: pow(u, 1.7) biases particles toward smaller r
+    // (matches the Milky Way's ~3 kpc disc scale length and removes the
+    // bright outer ring artifact of uniform-r sampling, since 2πr·dr
+    // area weighting otherwise over-concentrates the rim).
+    const u = Math.random();
+    const r = 2.7 + Math.pow(u, 1.7) * (GAL_RADIUS - 2.7);
     const spiralTwist = Math.log(r / 2.7) * ARM_TWIST;
-    const spread = ARM_SPREAD * (1 + r * 0.03);
+    // Arm spread widens significantly with radius — outer arms feather
+    // into the inter-arm population rather than reading as crisp bands.
+    const spread = ARM_SPREAD * (1 + r * 0.18);
     const theta = armAngle + spiralTwist + ARM_PHASE_OFFSET + (Math.random() - 0.5) * spread;
-    const diskHeight = 0.08 + r * 0.005;   // thin-disc realistic — 0.08-0.16 kpc
+    // Thin disc scale height grows with r ("disc flaring" — observed in
+    // Gaia data). Inner thin disc ~0.1 kpc, outer puffs to ~0.3 kpc.
+    const diskHeight = 0.06 + r * 0.018;
     const height = (Math.random() - 0.5) * diskHeight * 2;
 
     const x = r * Math.cos(theta) * KPC;

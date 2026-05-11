@@ -81,9 +81,34 @@ export const galacticDiscFragmentShader = /* glsl */ `
     float lr = log(max(r, 0.02));
     float armPhase = theta - lr * uArmTwist + uArmPhaseOffset;
 
-    // Arm density profile — pow() narrows the arms vs the gaps.
+    // Arm density profile — variable sharpness with radius so arms
+    // feather into the inter-arm regions at the outer disc (matching
+    // observed Milky Way / Gaia density maps where arms diffuse with
+    // increasing galactocentric radius).
     float armBand = 0.5 + 0.5 * cos(armPhase * uArmCount);
-    float arms = pow(armBand, 1.7);
+    // Sharpness 2.0 in the inner third → 0.7 at the edge. The cos band
+    // raised to a lower power widens dramatically, so outer arms read
+    // as broad density gradients rather than thin lanes.
+    float armSharpness = mix(2.0, 0.7, smoothstep(0.15, 0.85, r));
+    float arms = pow(armBand, armSharpness);
+
+    // Inner attenuation: arms fade as r→0 so the central kpc is
+    // bulge+bar territory, not concentric arm rings (the visual
+    // problem at the very center previously).
+    arms *= smoothstep(0.08, 0.26, r);
+    // Outer taper: smooth fade so the disc rim doesn't read as a hard
+    // arm boundary.
+    arms *= 1.0 - smoothstep(0.82, 1.0, r);
+
+    // Arm-edge noise breakup — varies arm density along its length so
+    // the band has texture rather than uniform luminosity. (The swirl
+    // and rot used by cloud-noise are defined later; recompute inline.)
+    float swirlEarly = -lr * 1.4;
+    mat2 rotEarly = mat2(cos(swirlEarly), -sin(swirlEarly), sin(swirlEarly), cos(swirlEarly));
+    vec2 lengthNoise = rotEarly * (p * 3.5);
+    float armDensityNoise = fbm(lengthNoise);
+    arms *= mix(0.55, 1.15, armDensityNoise);
+
     // Asymmetric arm strength — real Milky Way has two principal arms
     // (Sagittarius/Perseus) brighter than the other two (Norma/Scutum).
     float principal = 0.5 + 0.5 * cos(armPhase * 2.0);
@@ -113,13 +138,18 @@ export const galacticDiscFragmentShader = /* glsl */ `
     float cloud = fbm(sUV);
     cloud = mix(0.5, cloud, 0.95);
 
-    // Dust pattern — higher-frequency noise modulated by the arm phase,
-    // attenuated near the bulge and near the disc edge. Concentrated
-    // along the *inner* edge of each arm where real dust lanes live.
+    // Dust pattern — broken filaments concentrated along the trailing
+    // (inner) edge of each arm where real density-wave compression
+    // produces dust lanes (Cassini/Gaia/Hubble observations of M51,
+    // M83, NGC 1300 all show this morphology). Modulated by two FBM
+    // octaves at different frequencies for patchy, non-uniform lanes.
     vec2 dustUV = rot * (p * 14.0) + vec2(armPhase * 1.8, 0.0);
     float dustNoise = fbm(dustUV);
+    float dustFine = fbm(p * 36.0);             // high-freq breakup
     float armEdge = pow(arms, 0.8) * (0.55 + 0.45 * cos(armPhase * uArmCount - 0.6));
     float dust = smoothstep(0.45, 0.78, dustNoise * armEdge);
+    // Break the dust into patchy filaments rather than continuous bands.
+    dust *= 0.45 + 0.55 * dustFine;
     dust *= smoothstep(0.08, 0.25, r);          // no dust through the bulge
     dust *= 1.0 - smoothstep(0.78, 0.95, r);    // no dust at extreme edge
 
