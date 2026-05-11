@@ -14,9 +14,29 @@
 
 export const galacticDiscVertexShader = /* glsl */ `
   varying vec2 vUv;
+
+  // Galactic-warp uniforms. Real Milky Way disc bends out of the
+  // galactic plane at large radii — measured by HI / OB-star surveys
+  // to grow linearly from ~7 kpc outward, reaching ±1 kpc amplitude
+  // by 15 kpc. Modeled here as: z_warp(r,θ) = amp(r) * sin(θ - θ_nodes).
+  uniform float uWarpAmplitude;  // peak displacement at r=1 (world units)
+  uniform float uWarpInnerR;     // normalized r below which warp is zero
+  uniform float uWarpAngle;      // line-of-nodes azimuth (radians)
+
   void main() {
     vUv = uv;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    vec2 p = uv - 0.5;
+    float r = length(p) * 2.0;
+    float theta = atan(p.y, p.x);
+
+    vec3 pos = position;
+    // Disc geometry is in local XY (later rotated -π/2 about X to lie
+    // in the galactic plane). Local-Z displacement therefore becomes
+    // world-Y displacement — the "above / below the plane" direction.
+    float amp = max(0.0, r - uWarpInnerR) * uWarpAmplitude;
+    pos.z += amp * sin(theta - uWarpAngle);
+
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
   }
 `;
 

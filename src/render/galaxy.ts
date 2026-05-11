@@ -396,6 +396,17 @@ export function createGalaxy(): Group {
   // from the Sun→GC line. Particle arms emerge from the bar tips.
   const BAR_ANGLE = Math.PI * 25 / 180;
   const ARM_PHASE_OFFSET = BAR_ANGLE;
+  // Galactic warp — must match the disc shader's uWarp* uniforms so
+  // particles ride the same warped plane as the procedural disc.
+  const WARP_AMP_KPC = 1.0;       // amplitude at r=15 kpc (matches shader 333 WU / KPC=333)
+  const WARP_INNER_KPC = 7.5;     // onset radius
+  const WARP_ANGLE = Math.PI * 0.7;
+  const warpY = (rk: number, xk: number, zk: number): number => {
+    if (rk <= WARP_INNER_KPC) return 0;
+    const amp = (rk - WARP_INNER_KPC) / (GAL_RADIUS - WARP_INNER_KPC) * WARP_AMP_KPC;
+    const theta = Math.atan2(zk, xk);
+    return amp * Math.sin(theta - WARP_ANGLE);
+  };
 
   const armPts: number[] = [];
   const armCols: number[] = [];
@@ -420,9 +431,11 @@ export function createGalaxy(): Group {
     const diskHeight = 0.06 + r * 0.018;
     const height = (Math.random() - 0.5) * diskHeight * 2;
 
-    const x = r * Math.cos(theta) * KPC;
-    const y = height * KPC;
-    const z = r * Math.sin(theta) * KPC;
+    const xk = r * Math.cos(theta);
+    const zk = r * Math.sin(theta);
+    const x = xk * KPC;
+    const z = zk * KPC;
+    const y = (height + warpY(r, xk, zk)) * KPC;
     armPts.push(x, y, z);
 
     // Mostly white/cream with rare warm and rare blue. These are
@@ -600,9 +613,12 @@ export function createGalaxy(): Group {
     const spiralTwist = Math.log(r / 2.7) * ARM_TWIST;
     const radialOffset = 0.08 + Math.random() * 0.10;
     const theta = armAngle + spiralTwist + ARM_PHASE_OFFSET - radialOffset;
-    const x = r * Math.cos(theta) * KPC;
-    const z = r * Math.sin(theta) * KPC;
-    const y = (Math.random() - 0.5) * 0.04 * KPC;
+    const xk = r * Math.cos(theta);
+    const zk = r * Math.sin(theta);
+    const x = xk * KPC;
+    const z = zk * KPC;
+    const heightK = (Math.random() - 0.5) * 0.04;
+    const y = (heightK + warpY(r, xk, zk)) * KPC;
     dustPts.push(x, y, z);
   }
   const dustGeo = new BufferGeometry();
@@ -650,6 +666,12 @@ export function createGalaxy(): Group {
       uDustStrength:   { value: 0.92 },
       uOpacity:        { value: 1.0 },
       uTime:           { value: 0 },
+      // Galactic warp — disc bends out of plane past 7.5 kpc. Reaches
+      // ~1 kpc amplitude (333 WU) at the disc edge, sinusoidal in θ
+      // with line-of-nodes oriented around the galactic-anti-center.
+      uWarpAmplitude:  { value: 333 },           // WU at r=1 (15 kpc)
+      uWarpInnerR:     { value: 0.5 },           // 7.5 kpc onset
+      uWarpAngle:      { value: Math.PI * 0.7 }, // line of nodes
     },
   });
   const disc = new Mesh(
@@ -699,9 +721,12 @@ export function createGalaxy(): Group {
     // Nebulae are star-forming regions concentrated in the arms.
     const spiralTwist = Math.log(r / 2.7) * ARM_TWIST;
     const theta = armAngle + spiralTwist + ARM_PHASE_OFFSET + (Math.random() - 0.5) * 0.5;
-    const x = r * Math.cos(theta) * KPC;
-    const z = r * Math.sin(theta) * KPC;
-    const y = (Math.random() - 0.5) * 0.3 * KPC;
+    const xk = r * Math.cos(theta);
+    const zk = r * Math.sin(theta);
+    const x = xk * KPC;
+    const z = zk * KPC;
+    const heightK = (Math.random() - 0.5) * 0.3;
+    const y = (heightK + warpY(r, xk, zk)) * KPC;
 
     const hueShift = Math.random();
     const nebR = 0.65 + hueShift * 0.3;
@@ -1139,6 +1164,127 @@ export function createGalaxy(): Group {
     const lbl = makeLabelSprite(p.name, 'rgba(255,255,255,0.55)', 36);
     lbl.scale.set(420, 105, 1);
     lbl.position.set(pos.x, pos.y + 25, pos.z);
+    galaxy.add(lbl);
+  });
+
+  // ── 12c. Satellite Galaxies (LMC + SMC) ────────────────────────
+  //
+  // Large and Small Magellanic Clouds — the Milky Way's two largest
+  // dwarf-irregular companions. Real distances 50 / 62 kpc; here scaled
+  // to ~25 / 32 kpc so they fit inside the galaxy-tier viewport while
+  // preserving their actual sky-plane positions (galactic-anti-center,
+  // far below the disc plane). Both are dwarf-irregular morphology
+  // (no spiral structure), so represented as warm diffuse blobs with
+  // a brighter core and a recognizable label.
+  //
+  // Galactic coords used: LMC l=280°, b=-33°; SMC l=302°, b=-44°.
+
+  interface Satellite {
+    name: string;
+    label: string;
+    galX: number; galY: number; galZ: number;  // kpc relative to Sgr A*
+    sizeKpc: number;
+    color: number;
+    coreColor: number;
+  }
+  const SATELLITES: Satellite[] = [
+    {
+      name: 'lmc', label: 'LMC',
+      // Sun at (8.3, 0, 0). LMC sky position l=280° b=-33° d_compressed=18 kpc.
+      // Cartesian offset from Sun: (d·cosB·cos(l-180), d·sinB, d·cosB·sin(l-180))
+      galX: 8.3 + 18 * Math.cos(-33 * Math.PI / 180) * Math.cos((280 - 180) * Math.PI / 180),
+      galY:       18 * Math.sin(-33 * Math.PI / 180),
+      galZ:       18 * Math.cos(-33 * Math.PI / 180) * Math.sin((280 - 180) * Math.PI / 180),
+      sizeKpc: 4.3,
+      color: 0xffd9a8,
+      coreColor: 0xfff0d0,
+    },
+    {
+      name: 'smc', label: 'SMC',
+      // SMC l=302° b=-44° d_compressed=22 kpc.
+      galX: 8.3 + 22 * Math.cos(-44 * Math.PI / 180) * Math.cos((302 - 180) * Math.PI / 180),
+      galY:       22 * Math.sin(-44 * Math.PI / 180),
+      galZ:       22 * Math.cos(-44 * Math.PI / 180) * Math.sin((302 - 180) * Math.PI / 180),
+      sizeKpc: 3.0,
+      color: 0xffe0aa,
+      coreColor: 0xfff0d6,
+    },
+  ];
+
+  SATELLITES.forEach(sat => {
+    const pos = new Vector3(sat.galX * KPC, sat.galY * KPC, sat.galZ * KPC);
+    const sizeWU = sat.sizeKpc * KPC;
+
+    // Outer diffuse halo
+    const cloud = new Sprite(new SpriteMaterial({
+      map: nebulaTex, color: sat.color,
+      transparent: true, blending: AdditiveBlending,
+      depthWrite: false, opacity: 0.55,
+    }));
+    cloud.scale.set(sizeWU * 2.0, sizeWU * 1.4, 1);  // slight elongation
+    cloud.position.copy(pos);
+    galaxy.add(cloud);
+
+    // Brighter inner core
+    const core = new Sprite(new SpriteMaterial({
+      map: glowTex, color: sat.coreColor,
+      transparent: true, blending: AdditiveBlending,
+      depthWrite: false, opacity: 0.75,
+    }));
+    core.scale.set(sizeWU * 0.7, sizeWU * 0.55, 1);
+    core.position.copy(pos);
+    galaxy.add(core);
+
+    // Star sprinkle inside the dwarf galaxy — a few hundred small particles
+    // distributed in an irregular blob.
+    const SAT_STARS = 600;
+    const satPts: number[] = [];
+    const satCols: number[] = [];
+    for (let i = 0; i < SAT_STARS; i++) {
+      let lx = 0, ly = 0, lz = 0;
+      for (let attempt = 0; attempt < 6; attempt++) {
+        lx = Math.random() * 2 - 1;
+        ly = Math.random() * 2 - 1;
+        lz = Math.random() * 2 - 1;
+        if (lx * lx + ly * ly + lz * lz <= 1) break;
+      }
+      // Elongated ellipsoid (real LMC/SMC are flattened, partially-disrupted dwarfs)
+      satPts.push(
+        pos.x + lx * sat.sizeKpc * KPC * 0.7,
+        pos.y + ly * sat.sizeKpc * KPC * 0.25,
+        pos.z + lz * sat.sizeKpc * KPC * 0.55,
+      );
+      const c = 0.85 + Math.random() * 0.15;
+      satCols.push(c, c * 0.95, c * 0.85);
+    }
+    const satGeo = new BufferGeometry();
+    satGeo.setAttribute('position', new Float32BufferAttribute(satPts, 3));
+    satGeo.setAttribute('color', new Float32BufferAttribute(satCols, 3));
+    const satField = new Points(satGeo, new PointsMaterial({
+      size: 2.0, vertexColors: true, sizeAttenuation: false,
+      transparent: true, opacity: 0.65, depthWrite: false,
+      blending: AdditiveBlending,
+    }));
+    galaxy.add(satField);
+
+    // Invisible raycast hit target — clickable as a galactic landmark.
+    const hit = new Mesh(
+      new SphereGeometry(sizeWU * 0.9, 12, 12),
+      new MeshBasicMaterial({ color: sat.color, transparent: true, opacity: 0.0001, depthWrite: false }),
+    );
+    hit.position.copy(pos);
+    hit.userData = {
+      type: 'phenomenon',
+      name: sat.label === 'LMC' ? 'Large Magellanic Cloud' : 'Small Magellanic Cloud',
+      subtype: 'Satellite Galaxy',
+      description: `Dwarf irregular galaxy, ${sat.label === 'LMC' ? '~50' : '~62'} kpc from Sol`,
+    };
+    galaxy.add(hit);
+
+    // Label
+    const lbl = makeLabelSprite(sat.label, 'rgba(255,255,255,0.65)', 44);
+    lbl.scale.set(500, 125, 1);
+    lbl.position.set(pos.x, pos.y + sizeWU * 0.9, pos.z);
     galaxy.add(lbl);
   });
 
