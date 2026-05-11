@@ -42,6 +42,9 @@ export const planetSurfaceFragmentShader = /* glsl */ `
   uniform bool uHasTexture;
   uniform float uTime;
   uniform bool uHasAtmosphere;
+  uniform float uSpecularScale;   // 0..1, gates specular intensity per planet class
+  uniform vec3 uTwilightTint;     // warm rim color at the terminator
+  uniform float uTwilightStrength;
 
   varying vec3 vNormal;
   varying vec3 vWorldPos;
@@ -106,14 +109,23 @@ export const planetSurfaceFragmentShader = /* glsl */ `
 
     vec3 surfaceColor = mix(nightColor, dayColor, dayFactor);
 
-    // Specular highlight (Blinn-Phong)
+    // Specular highlight (Blinn-Phong) — gated by uSpecularScale per planet class.
+    // Oceanic worlds get strong specular (sea-glint), ice giants medium,
+    // rocky and gas giants none.
     // Guard: if L and V are opposite, L+V ≈ 0 → normalize produces NaN
     vec3 halfVec = L + V;
     float halfLen = length(halfVec);
     vec3 H = halfLen > 0.0001 ? halfVec / halfLen : vec3(0.0, 1.0, 0.0);
     float spec = pow(max(dot(N, H), 0.0), uSpecularPower);
     spec *= smoothstep(0.0, uSpecularOffset, NdotL); // only on day side
-    surfaceColor += vec3(spec * 0.3);
+    surfaceColor += vec3(spec * 0.35) * uSpecularScale;
+
+    // Twilight band — warm scattering tint exactly at the terminator.
+    // Peaks where the sun grazes the surface; falls off into day and night.
+    float terminatorBand = 1.0 - abs(NdotL * 2.0 - 0.0) ; // 1 near terminator
+    terminatorBand = clamp(1.0 - abs(NdotL), 0.0, 1.0);
+    terminatorBand = pow(terminatorBand, 8.0);
+    surfaceColor += uTwilightTint * terminatorBand * uTwilightStrength;
 
     gl_FragColor = vec4(surfaceColor, 1.0);
   }

@@ -152,6 +152,45 @@ const ColorGradingShader = {
   `,
 };
 
+// ── Chromatic Aberration ─────────────────────────────────────────
+// Subtle radial RGB split — sells the "we are looking at a screen"
+// diegesis. Strength ramps from 0 at center to uMaxOffset at corners.
+
+const ChromaticAberrationShader = {
+  uniforms: {
+    tDiffuse: { value: null },
+    uMaxOffset: { value: 0.0025 }, // ~2px on a 1080p canvas at corners
+    uFalloff: { value: 1.8 },      // higher = effect stays near corners
+  },
+  vertexShader: /* glsl */ `
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: /* glsl */ `
+    uniform sampler2D tDiffuse;
+    uniform float uMaxOffset;
+    uniform float uFalloff;
+    varying vec2 vUv;
+
+    void main() {
+      vec2 center = vec2(0.5);
+      vec2 dir = vUv - center;
+      float r = length(dir) * 2.0;             // 0 at center, ~1.4 at corners
+      float strength = pow(clamp(r, 0.0, 1.0), uFalloff) * uMaxOffset;
+      vec2 offset = normalize(dir + 1e-6) * strength;
+
+      float red   = texture2D(tDiffuse, vUv + offset).r;
+      float green = texture2D(tDiffuse, vUv).g;
+      float blue  = texture2D(tDiffuse, vUv - offset).b;
+
+      gl_FragColor = vec4(red, green, blue, 1.0);
+    }
+  `,
+};
+
 // ── Vignette Shader ──────────────────────────────────────────────
 
 const VignetteShader = {
@@ -241,6 +280,10 @@ export function createPostProcessing(
 
   // Track insert index for lens flare (after bloom)
   const lensFlareInsertIndex = composer.passes.length;
+
+  // 3.5. Chromatic aberration (subtle radial RGB split for diegetic-screen feel)
+  const chromaticAberrationPass = new ShaderPass(ChromaticAberrationShader);
+  composer.addPass(chromaticAberrationPass);
 
   // 4. Vignette
   const vignettePass = new ShaderPass(VignetteShader);

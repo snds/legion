@@ -85,11 +85,24 @@ export function createStationMesh(cfg: StationConfig): Group {
   g.userData = proxy.userData;
 
   // Hex icon — visible at system+ when mesh too small
+  // Internal glyph + capacity ring + module pips give the icon real anatomy
+  // (vocabulary: Oblivion Tet HUD, Homeworld 2 station markers).
+  const stType = cfg.stationType.toLowerCase();
+  const internal: 'station' | 'factory' | 'comms' | 'mine' =
+    stType.includes('shipyard') || stType.includes('forge') ? 'factory'
+    : stType.includes('mining') || stType.includes('extractor') ? 'mine'
+    : stType.includes('sensor') || stType.includes('relay') || stType.includes('beacon') ? 'comms'
+    : 'station';
+  // Module count maps to vertex pips (clamped 0..6). Each pip = a module bay online.
+  const pips = Math.max(0, Math.min(6, cfg.modules.length));
   const icon = createIcon({
     shape: 'hex',
     color: '#889098',
     label: cfg.name.toUpperCase(),
     sublabel: cfg.stationType.toUpperCase(),
+    internal,
+    capacity: cfg.capacity / 100,
+    pips,
   });
   icon.visible = false;
   icon.userData.isIcon = true;

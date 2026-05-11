@@ -195,6 +195,16 @@ export function createPlanetMesh(
       uHasTexture: { value: false },
       uTime: { value: 0 },
       uHasAtmosphere: { value: hasAtmosphere },
+      // Specular gating: Oceanic = 1.0 (sea glint), Ice giants = 0.55,
+      // Rocky/Gas/Dwarf = 0 (no plausible specular highlight).
+      uSpecularScale: { value: planetType === 1 ? 1.0 : planetType === 2 ? 0.55 : 0.0 },
+      // Twilight scattering tint — warmer for thicker atmospheres.
+      uTwilightTint: { value: new Vector3(
+        planetType === 1 ? 1.0 : planetType === 0 ? 0.95 : 0.7,
+        planetType === 1 ? 0.55 : planetType === 0 ? 0.45 : 0.35,
+        planetType === 1 ? 0.25 : planetType === 0 ? 0.20 : 0.45,
+      ) },
+      uTwilightStrength: { value: hasAtmosphere ? 0.18 : 0.0 },
     },
   });
 
@@ -558,6 +568,9 @@ export function createMoonMesh(
       uHasTexture: { value: false },
       uTime: { value: 0 },
       uHasAtmosphere: { value: false },
+      uSpecularScale: { value: 0.0 }, // moons: no specular
+      uTwilightTint: { value: new Vector3(0.95, 0.45, 0.20) },
+      uTwilightStrength: { value: 0.0 },
     },
   });
 

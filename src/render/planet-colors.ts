@@ -50,3 +50,81 @@ export const ATMOSPHERE_COLORS: Record<number, AtmosphereColorSet> = {
 export function getAtmosphereColor(planetType: number): AtmosphereColorSet {
   return ATMOSPHERE_COLORS[planetType] ?? ATMOSPHERE_COLORS[0];
 }
+
+// ── Stellar Classification (Planckian / blackbody) ────────────────
+// Mapped from Morgan-Keenan main-sequence temperatures.
+// Used by galactic-view star markers so each system reads as a real
+// star, not an arbitrary colored disc.
+//
+//   O  ≳30000K  blue
+//   B  10000–30000K  blue-white
+//   A  7500–10000K   white
+//   F  6000–7500K    yellow-white
+//   G  5200–6000K    yellow (Sun)
+//   K  3700–5200K    orange
+//   M  2400–3700K    red
+//   L/T  brown dwarfs, deep red
+
+export type StellarClass = 'O' | 'B' | 'A' | 'F' | 'G' | 'K' | 'M' | 'L';
+
+/** Approximate sRGB for the photospheric color at each class. */
+export const STELLAR_CLASS_COLOR: Record<StellarClass, number> = {
+  O: 0x9bb0ff,
+  B: 0xaabfff,
+  A: 0xcad7ff,
+  F: 0xf8f7ff,
+  G: 0xfff4e8,
+  K: 0xffd2a1,
+  M: 0xff9966,
+  L: 0xff6b3d,
+};
+
+/** Halo tint — slightly more saturated than the core, for bloom sprite. */
+export const STELLAR_CLASS_HALO: Record<StellarClass, number> = {
+  O: 0x6a8cff,
+  B: 0x8aa8ff,
+  A: 0xc0d0ff,
+  F: 0xf6f0ff,
+  G: 0xffe6c2,
+  K: 0xffb070,
+  M: 0xff7a3a,
+  L: 0xff4a1a,
+};
+
+/**
+ * Best-effort classify a star name → MK class. The catalog uses real
+ * stars whose classes are well known; anything unknown falls back to G.
+ */
+const KNOWN_CLASSES: Record<string, StellarClass> = {
+  'Sol': 'G',
+  'Epsilon Eridani': 'K',
+  'Proxima Centauri': 'M',
+  'Tau Ceti': 'G',
+  'Ross 128': 'M',
+  'TRAPPIST-1': 'M',
+  'Sirius': 'A',
+  'Procyon': 'F',
+  'Wolf 359': 'M',
+  'Luyten': 'M',
+  'Lacaille 9352': 'M',
+  '61 Cygni': 'K',
+};
+
+export function classifyStar(name: string): StellarClass {
+  return KNOWN_CLASSES[name] ?? 'G';
+}
+
+export interface StellarRender {
+  core: number;
+  halo: number;
+  cls: StellarClass;
+}
+
+export function getStellarRender(name: string): StellarRender {
+  const cls = classifyStar(name);
+  return {
+    core: STELLAR_CLASS_COLOR[cls],
+    halo: STELLAR_CLASS_HALO[cls],
+    cls,
+  };
+}

@@ -66,7 +66,7 @@ import {
   createEclipticGrid,
   STATION_DATA, COMET_DATA, type StationConfig,
 } from './render/scene-objects';
-import { createGalaxy, getGalaxyOffset } from './render/galaxy';
+import { createGalaxy, getGalaxyOffset, updateGalaxyAnimations } from './render/galaxy';
 import { createPostProcessing, type PostProcessingContext } from './render/post-processing';
 import { createLensFlare, type LensFlareSystem } from './render/lens-flare';
 import { Debug } from './debug/debug-overlay';
@@ -338,6 +338,9 @@ async function boot(): Promise<void> {
 
     // 9c. Lens flare update (star position → screen space)
     lensFlare.update(starOrigin, camera, dt);
+
+    // 9d. Galaxy animations (dashed lines, chevron pulses)
+    updateGalaxyAnimations(elapsedTime);
 
     // 10. Render (post-processing pipeline)
     postCtx.render(elapsedTime);

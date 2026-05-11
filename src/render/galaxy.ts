@@ -9,17 +9,20 @@
 // The galaxy group is built in galactic coordinates (Sgr A* at origin),
 // then offset by the caller so the home system maps to scene (0,0,0).
 //
-// Reference: Galaxy explorer video — volumetric spiral arms, magenta
-// nebula clusters, bright core glow, thin disk with visible height.
+// Star markers are halo+core sprite stacks (no flat opaque discs).
+// Influence rings + bob-space lines + transit paths are animated
+// dashed lines driven by uTime via a shared ShaderMaterial factory.
+// Transit progress carries a chevron token along the path.
 // ═══════════════════════════════════════════════════════════════════
 
 import {
   Group, Mesh, Points, Line, Sprite,
   SphereGeometry, RingGeometry, BufferGeometry,
-  MeshBasicMaterial, PointsMaterial, SpriteMaterial, LineBasicMaterial,
+  MeshBasicMaterial, PointsMaterial, SpriteMaterial, ShaderMaterial,
   Float32BufferAttribute, Vector3, DoubleSide, AdditiveBlending,
-  CanvasTexture,
+  CanvasTexture, Color,
 } from 'three';
+import { getStellarRender } from './planet-colors';
 
 // ── Scale Constants ──────────────────────────────────────────────
 
@@ -42,8 +45,61 @@ function makeGlowTexture(size = 128): CanvasTexture {
   grad.addColorStop(1, 'rgba(255,200,150,0)');
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, size, size);
-  const tex = new CanvasTexture(cv);
-  return tex;
+  return new CanvasTexture(cv);
+}
+
+/** Tight, slightly Gaussian dot — for the crisp core of a star marker. */
+function makeStarCoreTexture(size = 64): CanvasTexture {
+  const cv = document.createElement('canvas');
+  cv.width = size; cv.height = size;
+  const ctx = cv.getContext('2d')!;
+  const grad = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  grad.addColorStop(0.0, 'rgba(255,255,255,1)');
+  grad.addColorStop(0.35, 'rgba(255,255,255,0.95)');
+  grad.addColorStop(0.6, 'rgba(255,255,255,0.25)');
+  grad.addColorStop(1.0, 'rgba(255,255,255,0)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, size, size);
+  return new CanvasTexture(cv);
+}
+
+/** Bright, soft, additive halo — large diffuse falloff for stellar bloom. */
+function makeStarHaloTexture(size = 256): CanvasTexture {
+  const cv = document.createElement('canvas');
+  cv.width = size; cv.height = size;
+  const ctx = cv.getContext('2d')!;
+  const grad = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  grad.addColorStop(0.0, 'rgba(255,255,255,0.55)');
+  grad.addColorStop(0.15, 'rgba(255,255,255,0.32)');
+  grad.addColorStop(0.4, 'rgba(255,255,255,0.08)');
+  grad.addColorStop(0.7, 'rgba(255,255,255,0.02)');
+  grad.addColorStop(1.0, 'rgba(255,255,255,0)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, size, size);
+  return new CanvasTexture(cv);
+}
+
+/** Forward-pointing chevron, for transit tokens riding a dashed path. */
+function makeChevronTexture(size = 64): CanvasTexture {
+  const cv = document.createElement('canvas');
+  cv.width = size; cv.height = size;
+  const ctx = cv.getContext('2d')!;
+  ctx.clearRect(0, 0, size, size);
+  ctx.strokeStyle = 'rgba(255,255,255,0.95)';
+  ctx.fillStyle = 'rgba(255,255,255,0.4)';
+  ctx.lineWidth = 4;
+  ctx.lineJoin = 'round';
+  ctx.beginPath();
+  ctx.moveTo(size * 0.5, size * 0.2);
+  ctx.lineTo(size * 0.8, size * 0.65);
+  ctx.lineTo(size * 0.6, size * 0.65);
+  ctx.lineTo(size * 0.5, size * 0.85);
+  ctx.lineTo(size * 0.4, size * 0.65);
+  ctx.lineTo(size * 0.2, size * 0.65);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  return new CanvasTexture(cv);
 }
 
 function makeNebulaTexture(size = 128): CanvasTexture {
@@ -77,6 +133,84 @@ function makeLabelSprite(
   }));
   sp.scale.set(600, 150, 1);
   return sp;
+}
+
+// ── Animated Dashed Line Shader ──────────────────────────────────
+// Reads the `lineDistance` attribute populated by Line.computeLineDistances().
+// Fragment discards the gap segments; uTime scrolls the dash along the path.
+// Tracked in DASHED_MATERIALS so the per-frame updater can tick them all.
+
+const DASHED_MATERIALS: ShaderMaterial[] = [];
+
+interface DashedOpts {
+  color: number;
+  opacity?: number;
+  dash?: number;
+  gap?: number;
+  speed?: number;
+}
+
+function createDashedMaterial(opts: DashedOpts): ShaderMaterial {
+  const mat = new ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    uniforms: {
+      uColor: { value: new Color(opts.color) },
+      uOpacity: { value: opts.opacity ?? 0.6 },
+      uDash: { value: opts.dash ?? 18 },
+      uGap: { value: opts.gap ?? 24 },
+      uTime: { value: 0 },
+      uSpeed: { value: opts.speed ?? 12 },
+    },
+    vertexShader: /* glsl */ `
+      attribute float lineDistance;
+      varying float vLineDistance;
+      void main() {
+        vLineDistance = lineDistance;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      uniform vec3 uColor;
+      uniform float uOpacity;
+      uniform float uDash;
+      uniform float uGap;
+      uniform float uTime;
+      uniform float uSpeed;
+      varying float vLineDistance;
+      void main() {
+        float total = uDash + uGap;
+        float d = mod(vLineDistance - uTime * uSpeed, total);
+        if (d > uDash) discard;
+        // Soft endcap on each dash segment for less aliasing
+        float edge = min(d, uDash - d);
+        float a = smoothstep(0.0, 1.5, edge);
+        gl_FragColor = vec4(uColor, uOpacity * a);
+      }
+    `,
+  });
+  DASHED_MATERIALS.push(mat);
+  return mat;
+}
+
+/** Build a dashed Line from a list of points. */
+function dashedLine(points: Vector3[], opts: DashedOpts): Line {
+  const geo = new BufferGeometry().setFromPoints(points);
+  const line = new Line(geo, createDashedMaterial(opts));
+  line.computeLineDistances();
+  return line;
+}
+
+/** Per-frame tick — call once per render frame with elapsed seconds. */
+export function updateGalaxyAnimations(t: number): void {
+  for (const m of DASHED_MATERIALS) {
+    m.uniforms.uTime.value = t;
+  }
+  for (const ch of TRANSIT_CHEVRONS) {
+    // Pulse the chevron alpha gently
+    const pulse = 0.65 + 0.35 * Math.sin(t * 2.0 + ch.userData.phase);
+    (ch.material as SpriteMaterial).opacity = ch.userData.baseOpacity * pulse;
+  }
 }
 
 // ── Galaxy Data ──────────────────────────────────────────────────
@@ -118,6 +252,9 @@ const TRANSIT_BOBS = [
   { name: 'Magellan', color: 0xddaa44, from: 'Epsilon Eridani', to: 'TRAPPIST-1', progress: 0.35 },
 ];
 
+// Track chevron sprites so the per-frame tick can pulse them.
+const TRANSIT_CHEVRONS: Sprite[] = [];
+
 // ── Galaxy Builder ───────────────────────────────────────────────
 
 /**
@@ -125,11 +262,18 @@ const TRANSIT_BOBS = [
  * Caller must offset by getGalaxyOffset() to place home system at scene origin.
  */
 export function createGalaxy(): Group {
+  // Reset per-frame trackers (createGalaxy may be called more than once under HMR)
+  DASHED_MATERIALS.length = 0;
+  TRANSIT_CHEVRONS.length = 0;
+
   const galaxy = new Group();
   galaxy.name = 'galaxy';
 
   const glowTex = makeGlowTexture();
   const nebulaTex = makeNebulaTexture();
+  const coreTex = makeStarCoreTexture();
+  const haloTex = makeStarHaloTexture();
+  const chevronTex = makeChevronTexture();
 
   // ── 1. Spiral Arm Particles (120K) ────────────────────────────
 
@@ -148,7 +292,6 @@ export function createGalaxy(): Group {
     const spiralTwist = r * 0.55;
     const spread = ARM_SPREAD * (1 + r * 0.04);
     const theta = armAngle + spiralTwist + (Math.random() - 0.5) * spread;
-    // Disk height: thin near center, slightly thicker at edges
     const diskHeight = 0.12 + r * 0.01;
     const height = (Math.random() - 0.5) * diskHeight * 2;
 
@@ -157,7 +300,6 @@ export function createGalaxy(): Group {
     const z = r * Math.sin(theta) * KPC;
     armPts.push(x, y, z);
 
-    // Color: brighter and warmer toward center, cooler at edges
     const dist = Math.sqrt(x * x + z * z);
     const maxR = GAL_RADIUS * KPC;
     const radialFade = dist / maxR;
@@ -174,11 +316,11 @@ export function createGalaxy(): Group {
 
   const BULGE_COUNT = 20000;
   for (let i = 0; i < BULGE_COUNT; i++) {
-    const r = Math.pow(Math.random(), 0.65) * 2.5; // kpc, concentrated center
+    const r = Math.pow(Math.random(), 0.65) * 2.5;
     const theta = Math.random() * Math.PI * 2;
     const phi = Math.acos(2 * Math.random() - 1);
     const x = r * Math.sin(phi) * Math.cos(theta) * KPC;
-    const y = r * Math.cos(phi) * KPC * 0.4; // oblate
+    const y = r * Math.cos(phi) * KPC * 0.4;
     const z = r * Math.sin(phi) * Math.sin(theta) * KPC;
     armPts.push(x, y, z);
     const b = 0.45 + Math.random() * 0.45;
@@ -186,11 +328,9 @@ export function createGalaxy(): Group {
   }
 
   // ── 2b. Bright Inner Disk (10K) ──────────────────────────────
-  // Dense warm ring 2–6 kpc — the bright band visible edge-on in the reference
-
   const INNER_DISK = 10000;
   for (let i = 0; i < INNER_DISK; i++) {
-    const r = 2 + Math.random() * 4; // kpc
+    const r = 2 + Math.random() * 4;
     const theta = Math.random() * Math.PI * 2;
     const height = (Math.random() - 0.5) * 0.08;
     const x = r * Math.cos(theta) * KPC;
@@ -202,14 +342,13 @@ export function createGalaxy(): Group {
   }
 
   // ── 3. Halo Particles (8K) ────────────────────────────────────
-
   const HALO_COUNT = 8000;
   for (let i = 0; i < HALO_COUNT; i++) {
-    const r = 1 + Math.random() * 18; // kpc, extends beyond disk
+    const r = 1 + Math.random() * 18;
     const theta = Math.random() * Math.PI * 2;
     const phi = Math.acos(2 * Math.random() - 1);
     const x = r * Math.sin(phi) * Math.cos(theta) * KPC;
-    const y = r * Math.cos(phi) * KPC * 0.7; // more spherical than disk
+    const y = r * Math.cos(phi) * KPC * 0.7;
     const z = r * Math.sin(phi) * Math.sin(theta) * KPC;
     armPts.push(x, y, z);
     const b = 0.06 + Math.random() * 0.08;
@@ -227,7 +366,6 @@ export function createGalaxy(): Group {
 
   // ── 4. Core Glow ─────────────────────────────────────────────
 
-  // Primary bright core
   const coreGlow = new Sprite(new SpriteMaterial({
     map: glowTex, color: 0xfff8e0,
     transparent: true, blending: AdditiveBlending,
@@ -236,7 +374,6 @@ export function createGalaxy(): Group {
   coreGlow.scale.set(2800, 2800, 1);
   galaxy.add(coreGlow);
 
-  // Secondary larger dim glow for falloff
   const coreHalo = new Sprite(new SpriteMaterial({
     map: glowTex, color: 0xffeedd,
     transparent: true, blending: AdditiveBlending,
@@ -245,7 +382,6 @@ export function createGalaxy(): Group {
   coreHalo.scale.set(5000, 5000, 1);
   galaxy.add(coreHalo);
 
-  // Tertiary wide warm wash (fills the inner disk area)
   const coreWash = new Sprite(new SpriteMaterial({
     map: glowTex, color: 0xffe8cc,
     transparent: true, blending: AdditiveBlending,
@@ -255,7 +391,6 @@ export function createGalaxy(): Group {
   galaxy.add(coreWash);
 
   // ── 5. Nebula Clusters (along spiral arms) ────────────────────
-
   const NEBULA_COUNT = 50;
   for (let i = 0; i < NEBULA_COUNT; i++) {
     const arm = Math.floor(Math.random() * ARMS);
@@ -267,7 +402,6 @@ export function createGalaxy(): Group {
     const z = r * Math.sin(theta) * KPC;
     const y = (Math.random() - 0.5) * 0.3 * KPC;
 
-    // Vary color between magenta and blue-purple (matching reference)
     const hueShift = Math.random();
     const nebR = 0.65 + hueShift * 0.3;
     const nebG = 0.08 + (1 - hueShift) * 0.15;
@@ -320,9 +454,16 @@ export function createGalaxy(): Group {
       const a = (j / 128) * Math.PI * 2;
       ringPts.push(new Vector3(Math.cos(a) * r * KPC, 0, Math.sin(a) * r * KPC));
     }
+    // Sector rings stay as soft solid lines (orientation reference, not active state)
     sectorGrid.add(new Line(
       new BufferGeometry().setFromPoints(ringPts),
-      new LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.04 }),
+      new ShaderMaterial({
+        transparent: true,
+        depthWrite: false,
+        uniforms: { uColor: { value: new Color(0xffffff) }, uOpacity: { value: 0.045 } },
+        vertexShader: 'void main(){gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}',
+        fragmentShader: 'uniform vec3 uColor;uniform float uOpacity;void main(){gl_FragColor=vec4(uColor,uOpacity);}',
+      }),
     ));
   }
   for (let q = 0; q < 4; q++) {
@@ -332,12 +473,18 @@ export function createGalaxy(): Group {
         new Vector3(0, 0, 0),
         new Vector3(Math.cos(a) * 22 * KPC, 0, Math.sin(a) * 22 * KPC),
       ]),
-      new LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.06 }),
+      new ShaderMaterial({
+        transparent: true,
+        depthWrite: false,
+        uniforms: { uColor: { value: new Color(0xffffff) }, uOpacity: { value: 0.06 } },
+        vertexShader: 'void main(){gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}',
+        fragmentShader: 'uniform vec3 uColor;uniform float uOpacity;void main(){gl_FragColor=vec4(uColor,uOpacity);}',
+      }),
     ));
   }
   galaxy.add(sectorGrid);
 
-  // ── 8. Quadrant Labels ──────────────────────────────────────────
+  // ── 8. Quadrant + Arm Labels ───────────────────────────────────
 
   const qR = 10 * KPC;
   [
@@ -351,7 +498,6 @@ export function createGalaxy(): Group {
     galaxy.add(lbl);
   });
 
-  // Arm labels
   [
     { name: 'ORION–CYGNUS', x: 8 * KPC, z: 1.5 * KPC },
     { name: 'PERSEUS', x: 11 * KPC, z: 3 * KPC },
@@ -363,10 +509,14 @@ export function createGalaxy(): Group {
     galaxy.add(lbl);
   });
 
-  // ── 9. Known Systems as Galactic Markers ──────────────────────
+  // ── 9. Known Systems as Halo+Core Star Markers ────────────────
+  //
+  // Replaces the previous flat MeshBasicMaterial disc with a real-star
+  // vocabulary: invisible raycast mesh + colored bloom halo + crisp
+  // white core, Planckian-tinted by MK class. Active systems get a
+  // larger halo, brighter core, and an animated dashed influence ring.
 
-  const lyToWu = KPC / 1000; // light-years to world units at galactic scale
-  const influenceSpheres: Mesh[] = [];
+  const lyToWu = KPC / 1000;
 
   GAL_SYSTEMS.forEach(sys => {
     const pos = new Vector3(
@@ -374,66 +524,76 @@ export function createGalaxy(): Group {
       sys.localY * lyToWu,
       SOL_GAL_POS.z + sys.localZ * lyToWu,
     );
-    const size = sys.hasBobs ? 25 : 12;
+
+    const stellar = getStellarRender(sys.name);
+    const isActive = sys.hasBobs;
+
+    // Invisible raycast target (kept so existing click handlers work).
     const marker = new Mesh(
-      new SphereGeometry(size, 12, 12),
-      new MeshBasicMaterial({
-        color: sys.color, transparent: true,
-        opacity: sys.hasBobs ? 0.9 : 0.25,
-      }),
+      new SphereGeometry(isActive ? 18 : 10, 8, 8),
+      new MeshBasicMaterial({ color: stellar.core, transparent: true, opacity: 0.0001, depthWrite: false }),
     );
     marker.position.copy(pos);
     marker.userData = { type: 'gal_system', ...sys, _pos: pos };
     galaxy.add(marker);
 
-    // Glow + influence for active systems
-    if (sys.hasBobs) {
-      const glow = new Sprite(new SpriteMaterial({
-        map: glowTex, color: sys.color,
-        transparent: true, blending: AdditiveBlending,
-        depthWrite: false, opacity: 0.25,
-      }));
-      glow.scale.set(200, 200, 1);
-      marker.add(glow);
+    // Colored bloom halo — larger for active systems so eye is drawn to them.
+    const haloScale = isActive ? 360 + sys.bobCount * 30 : 140;
+    const halo = new Sprite(new SpriteMaterial({
+      map: haloTex, color: stellar.halo,
+      transparent: true, blending: AdditiveBlending,
+      depthWrite: false, opacity: isActive ? 0.85 : 0.35,
+    }));
+    halo.scale.set(haloScale, haloScale, 1);
+    marker.add(halo);
 
+    // Crisp white-hot core — small, additive, always on top.
+    const coreScale = isActive ? 110 : 60;
+    const core = new Sprite(new SpriteMaterial({
+      map: coreTex, color: stellar.core,
+      transparent: true, blending: AdditiveBlending,
+      depthWrite: false, opacity: isActive ? 1.0 : 0.65,
+    }));
+    core.scale.set(coreScale, coreScale, 1);
+    marker.add(core);
+
+    if (isActive) {
+      // Animated dashed influence ring (replaces the solid LineBasicMaterial ring)
       const infR = 60 + sys.bobCount * 30;
-      const infSphere = new Mesh(
-        new SphereGeometry(infR, 24, 24),
-        new MeshBasicMaterial({
-          color: sys.color, transparent: true, opacity: 0.04,
-          side: DoubleSide, depthWrite: false,
-        }),
-      );
-      infSphere.position.copy(pos);
-      galaxy.add(infSphere);
-      influenceSpheres.push(infSphere);
-
-      // Influence ring
       const ringPts: Vector3[] = [];
-      for (let j = 0; j <= 64; j++) {
-        const a = (j / 64) * Math.PI * 2;
+      for (let j = 0; j <= 96; j++) {
+        const a = (j / 96) * Math.PI * 2;
         ringPts.push(new Vector3(Math.cos(a) * infR, 0, Math.sin(a) * infR));
       }
-      const infRing = new Line(
-        new BufferGeometry().setFromPoints(ringPts),
-        new LineBasicMaterial({ color: sys.color, transparent: true, opacity: 0.12 }),
-      );
+      const infRing = dashedLine(ringPts, {
+        color: stellar.halo, opacity: 0.45, dash: 12, gap: 16, speed: 6,
+      });
       infRing.position.copy(pos);
       galaxy.add(infRing);
+
+      // Translucent influence disc (gives the ring weight without being heavy)
+      const discGeo = new RingGeometry(infR * 0.05, infR, 64);
+      const disc = new Mesh(discGeo, new MeshBasicMaterial({
+        color: stellar.halo, side: DoubleSide,
+        transparent: true, opacity: 0.025, depthWrite: false,
+      }));
+      disc.rotation.x = -Math.PI / 2;
+      disc.position.copy(pos);
+      galaxy.add(disc);
     }
 
     // Label
     const lbl = makeLabelSprite(
       sys.name,
-      sys.hasBobs ? 'rgba(255,255,255,0.5)' : 'rgba(255,255,255,0.15)',
-      sys.hasBobs ? 40 : 32,
+      isActive ? 'rgba(255,255,255,0.55)' : 'rgba(255,255,255,0.18)',
+      isActive ? 40 : 32,
     );
     lbl.scale.set(400, 100, 1);
-    lbl.position.set(0, size + 25, 0);
+    lbl.position.set(0, (isActive ? 28 : 18), 0);
     marker.add(lbl);
   });
 
-  // ── 10. Bob Space Overlay ─────────────────────────────────────
+  // ── 10. Bob Space Overlay (dashed) ────────────────────────────
 
   const bobSystems = GAL_SYSTEMS.filter(s => s.hasBobs);
   if (bobSystems.length > 1) {
@@ -444,10 +604,9 @@ export function createGalaxy(): Group {
     ));
     for (let i = 0; i < positions.length; i++) {
       for (let j = i + 1; j < positions.length; j++) {
-        galaxy.add(new Line(
-          new BufferGeometry().setFromPoints([positions[i], positions[j]]),
-          new LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.03 }),
-        ));
+        galaxy.add(dashedLine([positions[i], positions[j]], {
+          color: 0xffffff, opacity: 0.12, dash: 8, gap: 14, speed: 4,
+        }));
       }
     }
   }
@@ -462,41 +621,38 @@ export function createGalaxy(): Group {
     );
     const infR = ac.influenceRadius * lyToWu;
 
-    // Influence sphere
     const sphere = new Mesh(
       new SphereGeometry(infR, 24, 24),
       new MeshBasicMaterial({
-        color: ac.color, transparent: true, opacity: 0.06,
+        color: ac.color, transparent: true, opacity: 0.05,
         side: DoubleSide, depthWrite: false,
       }),
     );
     sphere.position.copy(pos);
     galaxy.add(sphere);
 
-    // Boundary ring
+    // Dashed boundary — distinct from Bob influence (different dash cadence)
     const ringPts: Vector3[] = [];
-    for (let j = 0; j <= 64; j++) {
-      const a = (j / 64) * Math.PI * 2;
+    for (let j = 0; j <= 96; j++) {
+      const a = (j / 96) * Math.PI * 2;
       ringPts.push(new Vector3(
         pos.x + Math.cos(a) * infR, 0,
         pos.z + Math.sin(a) * infR,
       ));
     }
-    galaxy.add(new Line(
-      new BufferGeometry().setFromPoints(ringPts),
-      new LineBasicMaterial({ color: ac.color, transparent: true, opacity: 0.15 }),
-    ));
+    galaxy.add(dashedLine(ringPts, {
+      color: ac.color, opacity: 0.5, dash: 20, gap: 14, speed: 3,
+    }));
 
-    // Label
     const lbl = makeLabelSprite(ac.name, `rgba(255,255,255,0.3)`, 36);
     lbl.scale.set(350, 88, 1);
     lbl.position.set(pos.x, 15, pos.z);
     galaxy.add(lbl);
   });
 
-  // ── 12. Transit Lines ─────────────────────────────────────────
+  // ── 12. Transit Lines + Chevron Tokens ─────────────────────────
 
-  TRANSIT_BOBS.forEach(tb => {
+  TRANSIT_BOBS.forEach((tb, i) => {
     const fromSys = GAL_SYSTEMS.find(s => s.name === tb.from);
     const toSys = GAL_SYSTEMS.find(s => s.name === tb.to);
     if (!fromSys || !toSys) return;
@@ -512,42 +668,77 @@ export function createGalaxy(): Group {
       SOL_GAL_POS.z + toSys.localZ * lyToWu,
     );
 
-    // Full path (faint)
-    galaxy.add(new Line(
-      new BufferGeometry().setFromPoints([fromPos, toPos]),
-      new LineBasicMaterial({ color: tb.color, transparent: true, opacity: 0.08 }),
-    ));
-
-    // Progress marker
-    const progressPt = fromPos.clone().lerp(toPos, tb.progress);
-    const bobDot = new Mesh(
-      new SphereGeometry(10, 8, 8),
-      new MeshBasicMaterial({ color: tb.color }),
-    );
-    bobDot.position.copy(progressPt);
-    galaxy.add(bobDot);
-
-    const dotGlow = new Sprite(new SpriteMaterial({
-      map: glowTex, color: tb.color,
-      transparent: true, blending: AdditiveBlending,
-      opacity: 0.15,
+    // Animated dashed transit path
+    galaxy.add(dashedLine([fromPos, toPos], {
+      color: tb.color, opacity: 0.7, dash: 14, gap: 10, speed: 22,
     }));
-    dotGlow.scale.set(100, 100, 1);
-    bobDot.add(dotGlow);
+
+    // Chevron token at current progress
+    const progressPt = fromPos.clone().lerp(toPos, tb.progress);
+    const chevron = new Sprite(new SpriteMaterial({
+      map: chevronTex, color: tb.color,
+      transparent: true, depthWrite: false,
+    }));
+    chevron.scale.set(80, 80, 1);
+    chevron.position.copy(progressPt);
+    chevron.userData.baseOpacity = 0.85;
+    chevron.userData.phase = i * 1.7;
+    galaxy.add(chevron);
+    TRANSIT_CHEVRONS.push(chevron);
+
+    // Faint glow under chevron
+    const dotGlow = new Sprite(new SpriteMaterial({
+      map: haloTex, color: tb.color,
+      transparent: true, blending: AdditiveBlending,
+      depthWrite: false, opacity: 0.35,
+    }));
+    dotGlow.scale.set(180, 180, 1);
+    dotGlow.position.copy(progressPt);
+    galaxy.add(dotGlow);
   });
 
-  // ── 13. Sol "You Are Here" Marker ─────────────────────────────
+  // ── 13. Sol "You Are Here" Reticule ────────────────────────────
+  // Four-bracket corner reticule + faint ring, evokes a tactical HUD
+  // marker rather than a flat solid ring.
 
-  const solRing = new Mesh(
-    new RingGeometry(45, 52, 32),
-    new MeshBasicMaterial({
-      color: 0xffffff, side: DoubleSide,
-      transparent: true, opacity: 0.15,
-    }),
-  );
-  solRing.position.copy(SOL_GAL_POS);
-  solRing.rotation.x = -Math.PI / 2;
-  galaxy.add(solRing);
+  const reticule = new Group();
+  reticule.position.copy(SOL_GAL_POS);
+
+  // Outer dashed ring
+  const reticulePts: Vector3[] = [];
+  const RET_R = 60;
+  for (let j = 0; j <= 96; j++) {
+    const a = (j / 96) * Math.PI * 2;
+    reticulePts.push(new Vector3(Math.cos(a) * RET_R, 0, Math.sin(a) * RET_R));
+  }
+  reticule.add(dashedLine(reticulePts, {
+    color: 0xffffff, opacity: 0.35, dash: 8, gap: 6, speed: 5,
+  }));
+
+  // Four bracket marks at cardinal points
+  const BRACKET = 14;
+  const positions: [number, number][] = [[RET_R, 0], [-RET_R, 0], [0, RET_R], [0, -RET_R]];
+  for (const [bx, bz] of positions) {
+    const dirX = bx !== 0 ? Math.sign(bx) : 0;
+    const dirZ = bz !== 0 ? Math.sign(bz) : 0;
+    // Inward-pointing L
+    const bracketPts = [
+      new Vector3(bx + (dirZ !== 0 ? -BRACKET : 0), 0, bz + (dirX !== 0 ? -BRACKET : 0)),
+      new Vector3(bx, 0, bz),
+      new Vector3(bx + (dirZ !== 0 ? BRACKET : 0), 0, bz + (dirX !== 0 ? BRACKET : 0)),
+    ];
+    reticule.add(new Line(
+      new BufferGeometry().setFromPoints(bracketPts),
+      new ShaderMaterial({
+        transparent: true,
+        depthWrite: false,
+        uniforms: { uColor: { value: new Color(0xffffff) }, uOpacity: { value: 0.55 } },
+        vertexShader: 'void main(){gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}',
+        fragmentShader: 'uniform vec3 uColor;uniform float uOpacity;void main(){gl_FragColor=vec4(uColor,uOpacity);}',
+      }),
+    ));
+  }
+  galaxy.add(reticule);
 
   return galaxy;
 }
