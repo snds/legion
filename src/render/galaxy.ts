@@ -36,28 +36,32 @@ import { galacticStarsVertexShader, galacticStarsFragmentShader } from './shader
 // size from luminosity class.
 //
 // Returns: [r, g, b, sizePx]
+// Stellar colors pulled closer to white — real stars on a black sky
+// register as mostly white pinpricks with subtle hue tints rather than
+// the saturated red/blue dots the previous palette gave. Tints below
+// match what Gaia DR3 visualization renders use.
 function sampleStellarPopulation(): [number, number, number, number] {
   const r = Math.random();
-  // M giants — cool red, large bright
-  if (r < 0.05) return [1.0, 0.55 + Math.random() * 0.10, 0.28 + Math.random() * 0.10, 4.5 + Math.random() * 2.0];
-  // K giants — orange, bright
-  if (r < 0.14) return [1.0, 0.75 + Math.random() * 0.10, 0.45 + Math.random() * 0.10, 3.5 + Math.random() * 1.3];
-  // O/B supergiants — hot blue, rare but visually striking
-  if (r < 0.17) return [0.78 + Math.random() * 0.10, 0.85 + Math.random() * 0.10, 1.0, 4.0 + Math.random() * 2.0];
-  // A/F bright main sequence — white
-  if (r < 0.27) return [0.95 + Math.random() * 0.05, 0.95 + Math.random() * 0.05, 1.0, 2.6 + Math.random() * 0.9];
-  // G/K main sequence — yellow-cream (sun-like)
-  if (r < 0.55) return [1.0, 0.93 + Math.random() * 0.04, 0.78 + Math.random() * 0.12, 1.8 + Math.random() * 0.7];
-  // M dwarfs — red dim
-  return [1.0, 0.62 + Math.random() * 0.10, 0.35 + Math.random() * 0.12, 1.1 + Math.random() * 0.5];
+  // M giants — warm pastel
+  if (r < 0.05) return [1.0, 0.85 + Math.random() * 0.07, 0.72 + Math.random() * 0.08, 4.5 + Math.random() * 2.0];
+  // K giants — pale amber
+  if (r < 0.14) return [1.0, 0.92 + Math.random() * 0.05, 0.82 + Math.random() * 0.08, 3.5 + Math.random() * 1.3];
+  // O/B supergiants — pale ice blue
+  if (r < 0.17) return [0.88 + Math.random() * 0.06, 0.93 + Math.random() * 0.05, 1.0, 4.0 + Math.random() * 2.0];
+  // A/F bright main sequence — near-white, slight cool tint
+  if (r < 0.27) return [0.97 + Math.random() * 0.03, 0.98 + Math.random() * 0.02, 1.0, 2.6 + Math.random() * 0.9];
+  // G/K main sequence — near-white with warm tint (sun-like)
+  if (r < 0.55) return [1.0, 0.98 + Math.random() * 0.02, 0.92 + Math.random() * 0.05, 1.8 + Math.random() * 0.7];
+  // M dwarfs — pale warm
+  return [1.0, 0.88 + Math.random() * 0.05, 0.78 + Math.random() * 0.08, 1.1 + Math.random() * 0.5];
 }
 
-// Lighter stellar population for halo / bulge (older, redder, dimmer)
+// Halo / bulge — older, slightly warmer pastel
 function sampleHaloPopulation(): [number, number, number, number] {
   const r = Math.random();
-  if (r < 0.10) return [1.0, 0.70 + Math.random() * 0.10, 0.42 + Math.random() * 0.10, 2.8 + Math.random() * 1.4];
-  if (r < 0.45) return [1.0, 0.88 + Math.random() * 0.05, 0.70 + Math.random() * 0.10, 1.8 + Math.random() * 0.6];
-  return [1.0, 0.65 + Math.random() * 0.10, 0.42 + Math.random() * 0.10, 1.2 + Math.random() * 0.5];
+  if (r < 0.10) return [1.0, 0.90 + Math.random() * 0.05, 0.80 + Math.random() * 0.08, 2.8 + Math.random() * 1.4];
+  if (r < 0.45) return [1.0, 0.96 + Math.random() * 0.03, 0.90 + Math.random() * 0.05, 1.8 + Math.random() * 0.6];
+  return [1.0, 0.88 + Math.random() * 0.05, 0.78 + Math.random() * 0.08, 1.2 + Math.random() * 0.5];
 }
 
 // ── Scale Constants ──────────────────────────────────────────────
@@ -423,7 +427,7 @@ export function createGalaxy(): Group {
 
   const ARMS = 4;
   const ARM_SPREAD = 0.42;
-  const ARM_COUNT = 25000;
+  const ARM_COUNT = 50000;
   const GAL_RADIUS = 15;       // kpc
   // Log-spiral pitch matched to the disc shader's uArmTwist so the
   // particle arms and the procedural arms land in alignment. Pitch
@@ -489,7 +493,7 @@ export function createGalaxy(): Group {
   // ellipsoid at BAR_ANGLE matching the shader's bar geometry), 40% in
   // the spheroidal bulge.
 
-  const BULGE_COUNT = 8000;
+  const BULGE_COUNT = 16000;
   const BAR_LEN = 2.7;     // kpc half-length, matches shader uBarLength*15
   const BAR_WID = 0.7;     // kpc half-width
   const BAR_THICK = 0.35;  // kpc half-thickness
@@ -530,7 +534,7 @@ export function createGalaxy(): Group {
 
   // ── 3. Halo Star Sprinkle (3K) ────────────────────────────────
   // Sparse old population above/below the disc plane.
-  const HALO_COUNT = 3000;
+  const HALO_COUNT = 6000;
   for (let i = 0; i < HALO_COUNT; i++) {
     const r = 1 + Math.random() * 18;
     const theta = Math.random() * Math.PI * 2;
@@ -573,7 +577,7 @@ export function createGalaxy(): Group {
   // volume has real density and variation rather than the broad-disc
   // sample. Colors lean blue-white (young arm stars) with a warm minority.
 
-  const LOCAL_N = 40000;
+  const LOCAL_N = 80000;
   const localPts: number[] = [];
   const localCols: number[] = [];
   const localSizes: number[] = [];
@@ -1270,7 +1274,7 @@ export function createGalaxy(): Group {
 
     // Star sprinkle inside the dwarf galaxy — a few hundred small particles
     // distributed in an irregular blob.
-    const SAT_STARS = 600;
+    const SAT_STARS = 1200;
     const satPts: number[] = [];
     const satCols: number[] = [];
     const satSizes: number[] = [];
@@ -1343,7 +1347,7 @@ export function createGalaxy(): Group {
   // wraps and slight vertical oscillation, sprinkled with ~3000
   // old-population stellar particles (red giant branch dominant).
 
-  const STREAM_N = 3000;
+  const STREAM_N = 6000;
   const streamPts: number[] = [];
   const streamCols: number[] = [];
   const streamSizes: number[] = [];
