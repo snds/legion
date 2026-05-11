@@ -25,6 +25,40 @@ import {
 } from 'three';
 import { getStellarRender } from './planet-colors';
 import { galacticDiscVertexShader, galacticDiscFragmentShader } from './shaders/galactic-disc';
+import { galacticStarsVertexShader, galacticStarsFragmentShader } from './shaders/galactic-stars';
+
+// ── Stellar Population Sampling ──────────────────────────────────
+//
+// Each "star particle" stands for ~10⁶ real stars. To match how a
+// galaxy actually reads visually, sampling is biased toward giants
+// and supergiants (which dominate the integrated light even though
+// dwarfs dominate the count). Color taken from MK Planckian table,
+// size from luminosity class.
+//
+// Returns: [r, g, b, sizePx]
+function sampleStellarPopulation(): [number, number, number, number] {
+  const r = Math.random();
+  // M giants — cool red, large bright
+  if (r < 0.05) return [1.0, 0.55 + Math.random() * 0.10, 0.28 + Math.random() * 0.10, 4.5 + Math.random() * 2.0];
+  // K giants — orange, bright
+  if (r < 0.14) return [1.0, 0.75 + Math.random() * 0.10, 0.45 + Math.random() * 0.10, 3.5 + Math.random() * 1.3];
+  // O/B supergiants — hot blue, rare but visually striking
+  if (r < 0.17) return [0.78 + Math.random() * 0.10, 0.85 + Math.random() * 0.10, 1.0, 4.0 + Math.random() * 2.0];
+  // A/F bright main sequence — white
+  if (r < 0.27) return [0.95 + Math.random() * 0.05, 0.95 + Math.random() * 0.05, 1.0, 2.6 + Math.random() * 0.9];
+  // G/K main sequence — yellow-cream (sun-like)
+  if (r < 0.55) return [1.0, 0.93 + Math.random() * 0.04, 0.78 + Math.random() * 0.12, 1.8 + Math.random() * 0.7];
+  // M dwarfs — red dim
+  return [1.0, 0.62 + Math.random() * 0.10, 0.35 + Math.random() * 0.12, 1.1 + Math.random() * 0.5];
+}
+
+// Lighter stellar population for halo / bulge (older, redder, dimmer)
+function sampleHaloPopulation(): [number, number, number, number] {
+  const r = Math.random();
+  if (r < 0.10) return [1.0, 0.70 + Math.random() * 0.10, 0.42 + Math.random() * 0.10, 2.8 + Math.random() * 1.4];
+  if (r < 0.45) return [1.0, 0.88 + Math.random() * 0.05, 0.70 + Math.random() * 0.10, 1.8 + Math.random() * 0.6];
+  return [1.0, 0.65 + Math.random() * 0.10, 0.42 + Math.random() * 0.10, 1.2 + Math.random() * 0.5];
+}
 
 // ── Scale Constants ──────────────────────────────────────────────
 
@@ -240,8 +274,8 @@ export function updateGalaxyAnimations(t: number): void {
 //     irrelevant.
 
 interface GalaxyLODState {
-  starFieldMat: PointsMaterial | null;
-  localArmMat: PointsMaterial | null;
+  starFieldMat: ShaderMaterial | null;  // custom stars shader
+  localArmMat: ShaderMaterial | null;
   dustMat: PointsMaterial | null;
   discMat: ShaderMaterial | null;       // continuous diffuse-disc shader
   nebulaMats: SpriteMaterial[];
@@ -277,20 +311,23 @@ export function updateGalaxyLOD(camDist: number): void {
     GALAXY_LOD.discMat.uniforms.uOpacity.value = discPresence;
   }
 
-  // Main star field: size grows when close (so the disc has grain), and
-  // opacity multiplies through discPresence so particles fade in WITH
-  // the disc rather than appearing on top of nothing at sector tier.
+  // Main star field uses custom shader — size & opacity via uniforms.
+  // The discPresence ramp drives BOTH a global scale on per-particle
+  // size (so individual stars grow as you fly in) AND a multiplicative
+  // overall presence (so stars fade in along with the disc shader).
   if (GALAXY_LOD.starFieldMat) {
+    const u = GALAXY_LOD.starFieldMat.uniforms;
+    // Stars get bigger when camera is close: scale 1.5× at sector camDist,
+    // back down to 0.8× at galaxy max.
     const sizeT = smoothRamp(camDist, 4500, 13000);
-    GALAXY_LOD.starFieldMat.size = 4.0 - sizeT * 2.0;
-    GALAXY_LOD.starFieldMat.opacity = 0.55 * discPresence;
+    u.uSizeScale.value = (1.5 - sizeT * 0.7) * discPresence;
   }
 
   // Local Orion Spur detail: fades in as you approach disc-immersion.
-  // Off above 11000 (galaxy tier is too far to benefit), peak at 4500.
   if (GALAXY_LOD.localArmMat) {
     const closeFade = 1 - smoothRamp(camDist, 5000, 11000);
-    GALAXY_LOD.localArmMat.opacity = closeFade * 0.85 * discPresence;
+    const u = GALAXY_LOD.localArmMat.uniforms;
+    u.uSizeScale.value = closeFade * 1.4 * discPresence;
   }
 
   // Dust lanes (particle, separate from shader): peak in arm/sector range.
@@ -410,6 +447,7 @@ export function createGalaxy(): Group {
 
   const armPts: number[] = [];
   const armCols: number[] = [];
+  const armSizes: number[] = [];
 
   for (let i = 0; i < ARM_COUNT; i++) {
     const arm = Math.floor(Math.random() * ARMS);
@@ -438,27 +476,11 @@ export function createGalaxy(): Group {
     const y = (height + warpY(r, xk, zk)) * KPC;
     armPts.push(x, y, z);
 
-    // Mostly white/cream with rare warm and rare blue. These are
-    // "individual stars" not "warm dust" — the dust is the shader's job.
-    const stellarRoll = Math.random();
-    let cr: number, cg: number, cb: number;
-    if (stellarRoll < 0.7) {
-      // White / cream — most stars
-      cr = 0.85 + Math.random() * 0.15;
-      cg = 0.82 + Math.random() * 0.13;
-      cb = 0.78 + Math.random() * 0.12;
-    } else if (stellarRoll < 0.9) {
-      // Warm K/M
-      cr = 0.95 + Math.random() * 0.05;
-      cg = 0.65 + Math.random() * 0.15;
-      cb = 0.40 + Math.random() * 0.20;
-    } else {
-      // Hot blue O/B
-      cr = 0.70 + Math.random() * 0.10;
-      cg = 0.80 + Math.random() * 0.10;
-      cb = 1.00;
-    }
+    // Sample stellar population: per-particle color from the Planckian
+    // MK spectrum, per-particle size from luminosity-class distribution.
+    const [cr, cg, cb, sz] = sampleStellarPopulation();
     armCols.push(cr, cg, cb);
+    armSizes.push(sz);
   }
 
   // ── 2. Galactic Bulge + Bar Star Sprinkle (8K) ────────────────
@@ -500,9 +522,10 @@ export function createGalaxy(): Group {
       z = r * Math.sin(phi) * Math.sin(t) * KPC;
     }
     armPts.push(x, y, z);
-    // Bulge/bar stars: old population, warm yellow-orange
-    const b = 0.55 + Math.random() * 0.35;
-    armCols.push(b + 0.18, b + 0.08, b - 0.06);
+    // Bulge/bar stars: old halo-like population
+    const [cr, cg, cb, sz] = sampleHaloPopulation();
+    armCols.push(cr, cg, cb);
+    armSizes.push(sz);
   }
 
   // ── 3. Halo Star Sprinkle (3K) ────────────────────────────────
@@ -516,18 +539,27 @@ export function createGalaxy(): Group {
     const y = r * Math.cos(phi) * KPC * 0.7;
     const z = r * Math.sin(phi) * Math.sin(theta) * KPC;
     armPts.push(x, y, z);
-    const b = 0.20 + Math.random() * 0.10;
-    armCols.push(b * 1.05, b, b * 0.92);
+    // Halo stars are dim and old — boost slightly via population helper
+    // but multiplied down to keep them as background sprinkle.
+    const [cr, cg, cb, sz] = sampleHaloPopulation();
+    armCols.push(cr * 0.35, cg * 0.32, cb * 0.30);
+    armSizes.push(sz * 0.7);
   }
 
   const galGeo = new BufferGeometry();
   galGeo.setAttribute('position', new Float32BufferAttribute(armPts, 3));
   galGeo.setAttribute('color', new Float32BufferAttribute(armCols, 3));
-  const starFieldMat = new PointsMaterial({
-    size: 1.8, vertexColors: true, sizeAttenuation: false,
-    // Lower base opacity so particles read as bright resolved stars
-    // ON TOP of the diffuse shader, not AS the disc itself.
-    transparent: true, opacity: 0.55, depthWrite: false,
+  galGeo.setAttribute('aSize', new Float32BufferAttribute(armSizes, 1));
+  // Custom stars shader: per-particle size + circular soft-falloff sprite.
+  const starFieldMat = new ShaderMaterial({
+    vertexShader: galacticStarsVertexShader,
+    fragmentShader: galacticStarsFragmentShader,
+    uniforms: {
+      uSizeScale:  { value: 1.0 },
+      uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
+    },
+    transparent: true,
+    depthWrite: false,
     blending: AdditiveBlending,
   });
   const starField = new Points(galGeo, starFieldMat);
@@ -544,6 +576,7 @@ export function createGalaxy(): Group {
   const LOCAL_N = 40000;
   const localPts: number[] = [];
   const localCols: number[] = [];
+  const localSizes: number[] = [];
 
   // Orion Spur tangent at Sol — roughly galactic longitude 80°.
   const armDirAngle = Math.PI * 80 / 180;
@@ -569,26 +602,26 @@ export function createGalaxy(): Group {
     const z = (0   + az * along + pz * perp) * KPC;
     localPts.push(x, y, z);
 
-    // Stellar mix: 50% blue-white young, 30% sun-like, 20% warm older
-    const r = Math.random();
-    if (r < 0.5) {
-      // Blue-white young stars (O/B/A class)
-      localCols.push(0.78 + Math.random() * 0.22, 0.85 + Math.random() * 0.15, 1.0);
-    } else if (r < 0.8) {
-      // Sun-like
-      localCols.push(1.0, 0.97 + Math.random() * 0.03, 0.85 + Math.random() * 0.12);
-    } else {
-      // Warm older (K/M)
-      localCols.push(1.0, 0.78 + Math.random() * 0.12, 0.55 + Math.random() * 0.15);
-    }
+    // Orion Spur stellar population — young arm stars, slightly bluer
+    // and more uniform-luminosity than the general disc sample.
+    const [cr, cg, cb, sz] = sampleStellarPopulation();
+    localCols.push(cr, cg, cb);
+    localSizes.push(sz);
   }
 
   const localGeo = new BufferGeometry();
   localGeo.setAttribute('position', new Float32BufferAttribute(localPts, 3));
   localGeo.setAttribute('color', new Float32BufferAttribute(localCols, 3));
-  const localArmMat = new PointsMaterial({
-    size: 3.0, vertexColors: true, sizeAttenuation: false,
-    transparent: true, opacity: 0.0, depthWrite: false,
+  localGeo.setAttribute('aSize', new Float32BufferAttribute(localSizes, 1));
+  const localArmMat = new ShaderMaterial({
+    vertexShader: galacticStarsVertexShader,
+    fragmentShader: galacticStarsFragmentShader,
+    uniforms: {
+      uSizeScale:  { value: 0.0 },  // LOD updater drives this
+      uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
+    },
+    transparent: true,
+    depthWrite: false,
     blending: AdditiveBlending,
   });
   const localArmField = new Points(localGeo, localArmMat);
@@ -1240,6 +1273,7 @@ export function createGalaxy(): Group {
     const SAT_STARS = 600;
     const satPts: number[] = [];
     const satCols: number[] = [];
+    const satSizes: number[] = [];
     for (let i = 0; i < SAT_STARS; i++) {
       let lx = 0, ly = 0, lz = 0;
       for (let attempt = 0; attempt < 6; attempt++) {
@@ -1254,15 +1288,24 @@ export function createGalaxy(): Group {
         pos.y + ly * sat.sizeKpc * KPC * 0.25,
         pos.z + lz * sat.sizeKpc * KPC * 0.55,
       );
-      const c = 0.85 + Math.random() * 0.15;
-      satCols.push(c, c * 0.95, c * 0.85);
+      // Use the same stellar-population sampler for variation.
+      const [cr, cg, cb, sz] = sampleStellarPopulation();
+      satCols.push(cr, cg, cb);
+      satSizes.push(sz * 0.8);  // dwarf-galaxy stars dimmer on average
     }
     const satGeo = new BufferGeometry();
     satGeo.setAttribute('position', new Float32BufferAttribute(satPts, 3));
     satGeo.setAttribute('color', new Float32BufferAttribute(satCols, 3));
-    const satField = new Points(satGeo, new PointsMaterial({
-      size: 2.0, vertexColors: true, sizeAttenuation: false,
-      transparent: true, opacity: 0.65, depthWrite: false,
+    satGeo.setAttribute('aSize', new Float32BufferAttribute(satSizes, 1));
+    const satField = new Points(satGeo, new ShaderMaterial({
+      vertexShader: galacticStarsVertexShader,
+      fragmentShader: galacticStarsFragmentShader,
+      uniforms: {
+        uSizeScale:  { value: 0.8 },
+        uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
+      },
+      transparent: true,
+      depthWrite: false,
       blending: AdditiveBlending,
     }));
     galaxy.add(satField);
@@ -1287,6 +1330,93 @@ export function createGalaxy(): Group {
     lbl.position.set(pos.x, pos.y + sizeWU * 0.9, pos.z);
     galaxy.add(lbl);
   });
+
+  // ── 12d. Sagittarius Dwarf Tidal Stream ────────────────────────
+  //
+  // The Sagittarius dwarf spheroidal (Sgr dSph) has been disrupted by
+  // the Milky Way over the past several Gyr, leaving leading and
+  // trailing tidal streams that wrap completely around the disc.
+  // Gaia DR2/DR3 detections show the streams cover 360°+ of sky and
+  // sit at distances 16–50 kpc from the Sun.
+  //
+  // Modeled here as a parametric path through (x,y,z) space with two
+  // wraps and slight vertical oscillation, sprinkled with ~3000
+  // old-population stellar particles (red giant branch dominant).
+
+  const STREAM_N = 3000;
+  const streamPts: number[] = [];
+  const streamCols: number[] = [];
+  const streamSizes: number[] = [];
+  for (let i = 0; i < STREAM_N; i++) {
+    const t = i / STREAM_N;
+    // Two complete wraps around the galaxy (the real stream wraps
+    // multiple times; two reads cleanly visually).
+    const angle = t * Math.PI * 4 + Math.PI * 0.3;
+    // Radius oscillates between perigalacticon (~16 kpc) and
+    // apogalacticon (~50 kpc); compressed slightly to fit.
+    const r = 22 + 12 * Math.sin(t * Math.PI * 2);
+    // Stream is highly inclined ~80° from galactic plane — passes
+    // above and below as it wraps.
+    const yOsc = 8 * Math.sin(t * Math.PI * 3 + 0.7);
+    // Scatter perpendicular to the path
+    const scatter = 0.6 + Math.random() * 0.4;
+    const xk = r * Math.cos(angle) + (Math.random() - 0.5) * scatter;
+    const zk = r * Math.sin(angle) + (Math.random() - 0.5) * scatter;
+    const yk = yOsc + (Math.random() - 0.5) * scatter * 0.5;
+    streamPts.push(xk * KPC, yk * KPC, zk * KPC);
+    // Stream stars are old population, slightly warmer than disc.
+    const c = 0.7 + Math.random() * 0.2;
+    streamCols.push(c, c * 0.92, c * 0.78);
+    streamSizes.push(1.4 + Math.random() * 0.9);
+  }
+  const streamGeo = new BufferGeometry();
+  streamGeo.setAttribute('position', new Float32BufferAttribute(streamPts, 3));
+  streamGeo.setAttribute('color', new Float32BufferAttribute(streamCols, 3));
+  streamGeo.setAttribute('aSize', new Float32BufferAttribute(streamSizes, 1));
+  const streamField = new Points(streamGeo, new ShaderMaterial({
+    vertexShader: galacticStarsVertexShader,
+    fragmentShader: galacticStarsFragmentShader,
+    uniforms: {
+      uSizeScale:  { value: 0.55 },  // subtle — stream is faint observationally
+      uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
+    },
+    transparent: true,
+    depthWrite: false,
+    blending: AdditiveBlending,
+  }));
+  streamField.name = 'sgr-stream';
+  galaxy.add(streamField);
+
+  // Sgr dSph core — clickable landmark at perigalacticon
+  const sgrCorePos = new Vector3(
+    22 * KPC * Math.cos(Math.PI * 0.3),
+    8 * KPC * Math.sin(0.7),
+    22 * KPC * Math.sin(Math.PI * 0.3),
+  );
+  const sgrCore = new Sprite(new SpriteMaterial({
+    map: nebulaTex, color: 0xffd9b0,
+    transparent: true, blending: AdditiveBlending,
+    depthWrite: false, opacity: 0.55,
+  }));
+  sgrCore.scale.set(700, 500, 1);
+  sgrCore.position.copy(sgrCorePos);
+  galaxy.add(sgrCore);
+  const sgrCoreHit = new Mesh(
+    new SphereGeometry(500, 12, 12),
+    new MeshBasicMaterial({ color: 0xffd9b0, transparent: true, opacity: 0.0001, depthWrite: false }),
+  );
+  sgrCoreHit.position.copy(sgrCorePos);
+  sgrCoreHit.userData = {
+    type: 'phenomenon',
+    name: 'Sagittarius Dwarf Spheroidal',
+    subtype: 'Disrupted Dwarf Galaxy',
+    description: 'Tidal stream wraps the Milky Way disc; remnant core at ~24 kpc',
+  };
+  galaxy.add(sgrCoreHit);
+  const sgrLbl = makeLabelSprite('SGR DSPH', 'rgba(255,255,255,0.55)', 36);
+  sgrLbl.scale.set(420, 105, 1);
+  sgrLbl.position.set(sgrCorePos.x, sgrCorePos.y + 200, sgrCorePos.z);
+  galaxy.add(sgrLbl);
 
   // ── 13. Sol "You Are Here" Reticule ────────────────────────────
   // Four-bracket corner reticule + faint ring, evokes a tactical HUD
