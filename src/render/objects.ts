@@ -118,6 +118,9 @@ let activeSunSystem: SunSystem | null = null;
 export function createStarMesh(color: number, radius: number, name = 'ε ERIDANI', spectralInfo = 'K2V · HOME'): Group {
   const group = new Group();
   group.name = 'star';
+  group.userData.type = 'star';
+  group.userData.name = name;
+  group.userData.spectralType = spectralInfo;
 
   // Procedural sun shader system (surface + glow + corona rays)
   const sunSys = createSunSystem(radius);
@@ -170,6 +173,10 @@ export function createPlanetMesh(
 ): Group {
   const group = new Group();
   group.name = `planet-${name}`;
+  group.userData.type = 'planet';
+  group.userData.name = name;
+  group.userData.hasAtmosphere = hasAtmosphere;
+  group.userData.planetTypeId = planetType;
 
   const segments = VP.get('planetSegments');
   const c = new Color(color);
@@ -546,6 +553,8 @@ export function createMoonMesh(
 ): Group {
   const group = new Group();
   group.name = `moon-${name}`;
+  group.userData.type = 'moon';
+  group.userData.name = name;
 
   const segments = 32;
   const c = new Color(color);
@@ -612,6 +621,9 @@ export function createBobMesh(
 ): Group {
   const group = new Group();
   group.name = `bob-${name}`;
+  group.userData.type = 'bob';
+  group.userData.name = name;
+  group.userData.callsign = callsign;
 
   // Von Neumann probe body — octahedron (angular, industrial feel)
   const bodyGeo = new SphereGeometry(0.035, 4, 3); // low-poly faceted
@@ -666,6 +678,10 @@ export function createSystemMarker(
 ): Group {
   const group = new Group();
   group.name = `system-${name}`;
+  group.userData.type = 'system';
+  group.userData.name = name;
+  group.userData.hasBobs = hasBobs;
+  group.userData.isHome = isHome;
 
   const shape: IconShape = isHome ? 'star' : (hasBobs ? 'diamond' : 'hex');
   const icon = createIcon({
@@ -687,6 +703,9 @@ export function createAlienMarker(
 ): Group {
   const group = new Group();
   group.name = `alien-${name}`;
+  group.userData.type = 'alien';
+  group.userData.name = name;
+  group.userData.influenceRadius = radius;
 
   // Influence sphere
   const geo = new SphereGeometry(radius, 24, 24);

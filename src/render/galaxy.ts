@@ -767,6 +767,116 @@ export function createGalaxy(): Group {
     galaxy.add(dotGlow);
   });
 
+  // ── 12b. Named Galactic Phenomena ─────────────────────────────
+  //
+  // Recognizable nebulae and stellar nurseries placed at approximate
+  // galactic positions. Each gets:
+  //   • a colored additive sprite cluster (the visual)
+  //   • a large invisible hit sphere (clickable + tooltip)
+  //   • a label at galactic scale
+  //   • userData.type = 'phenomenon' for selection/inspector wiring
+  //
+  // Positions are in galactic kpc relative to Sgr A* at origin.
+  // Sol sits at (8.3, 0, 0) kpc. The galaxy group is later offset so
+  // home (ε Eridani, co-located with Sol at this scale) lands at scene
+  // origin; phenomena ride along.
+
+  interface Phenomenon {
+    name: string;
+    kind: 'Nebula' | 'Stellar Nursery' | 'Supernova Remnant' | 'Molecular Cloud';
+    color: number;
+    coreColor: number;
+    galX: number; galY: number; galZ: number;  // kpc relative to Sgr A*
+    scale: number;  // visual size in WU
+  }
+  const PHENOMENA: Phenomenon[] = [
+    {
+      name: 'Orion Nebula', kind: 'Stellar Nursery',
+      color: 0xff5544, coreColor: 0xffaa77,
+      galX: 7.92, galY: -0.12, galZ: -0.19, scale: 400,
+    },
+    {
+      name: 'Eagle Nebula', kind: 'Stellar Nursery',
+      color: 0x3388ff, coreColor: 0x99ccff,
+      galX: 6.3, galY: 0.05, galZ: -1.4, scale: 550,
+    },
+    {
+      name: 'Crab Nebula', kind: 'Supernova Remnant',
+      color: 0x33ccaa, coreColor: 0xaaffee,
+      galX: 6.4, galY: 0.18, galZ: 1.5, scale: 320,
+    },
+    {
+      name: 'Lagoon Nebula', kind: 'Stellar Nursery',
+      color: 0xff4499, coreColor: 0xffaadd,
+      galX: 7.0, galY: -0.08, galZ: -1.2, scale: 480,
+    },
+    {
+      name: 'Carina Nebula', kind: 'Stellar Nursery',
+      color: 0xff8833, coreColor: 0xffd088,
+      galX: 5.6, galY: -0.05, galZ: 2.1, scale: 620,
+    },
+    {
+      name: 'Rosette Nebula', kind: 'Nebula',
+      color: 0xee3366, coreColor: 0xffaacc,
+      galX: 7.5, galY: 0.10, galZ: -1.6, scale: 360,
+    },
+    {
+      name: 'Pipe Nebula', kind: 'Molecular Cloud',
+      color: 0x664488, coreColor: 0xaa88cc,
+      galX: 8.2, galY: -0.02, galZ: 0.13, scale: 280,
+    },
+    {
+      name: 'NGC 6334', kind: 'Stellar Nursery',
+      color: 0xffaa44, coreColor: 0xffddaa,
+      galX: 6.1, galY: -0.05, galZ: -1.7, scale: 500,
+    },
+  ];
+
+  PHENOMENA.forEach(p => {
+    const pos = new Vector3(p.galX * KPC, p.galY * KPC, p.galZ * KPC);
+
+    // Outer diffuse cloud — additive bloom, large
+    const cloud = new Sprite(new SpriteMaterial({
+      map: nebulaTex, color: p.color,
+      transparent: true, blending: AdditiveBlending,
+      depthWrite: false, opacity: 0.55,
+    }));
+    cloud.scale.set(p.scale * 2.4, p.scale * 2.4, 1);
+    cloud.position.copy(pos);
+    galaxy.add(cloud);
+
+    // Inner brighter core — smaller, more saturated
+    const core = new Sprite(new SpriteMaterial({
+      map: glowTex, color: p.coreColor,
+      transparent: true, blending: AdditiveBlending,
+      depthWrite: false, opacity: 0.7,
+    }));
+    core.scale.set(p.scale * 0.6, p.scale * 0.6, 1);
+    core.position.copy(pos);
+    galaxy.add(core);
+
+    // Invisible raycast hit sphere — sized to the visible cloud so the
+    // entire bloom is clickable at galactic scale.
+    const hit = new Mesh(
+      new SphereGeometry(p.scale * 0.9, 12, 12),
+      new MeshBasicMaterial({ color: p.color, transparent: true, opacity: 0.0001, depthWrite: false }),
+    );
+    hit.position.copy(pos);
+    hit.userData = {
+      type: 'phenomenon',
+      name: p.name,
+      subtype: p.kind,
+      description: `${p.kind} — galactic position ${p.galX.toFixed(1)}, ${p.galY.toFixed(2)}, ${p.galZ.toFixed(1)} kpc`,
+    };
+    galaxy.add(hit);
+
+    // Label — fades in at galactic scale, hairline at arm scale
+    const lbl = makeLabelSprite(p.name, 'rgba(255,255,255,0.55)', 36);
+    lbl.scale.set(420, 105, 1);
+    lbl.position.set(pos.x, pos.y + 25, pos.z);
+    galaxy.add(lbl);
+  });
+
   // ── 13. Sol "You Are Here" Reticule ────────────────────────────
   // Four-bracket corner reticule + faint ring, evokes a tactical HUD
   // marker rather than a flat solid ring.

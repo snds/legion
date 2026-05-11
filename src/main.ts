@@ -177,7 +177,7 @@ async function boot(): Promise<void> {
   initDock();
   initHUD();
   Tooltip.init();
-  initRaycast(camera, layers, renderCtx.canvas);
+  initRaycast(camera, layers, renderCtx.canvas, scene);
   Debug.init(renderCtx.renderer);
   initVisualEditor(); // ADMIN VISUAL EDITOR — REMOVE
 
