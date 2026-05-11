@@ -88,8 +88,8 @@ export const planetSurfaceFragmentShader = /* glsl */ `
     // Day side color
     vec3 dayColor = baseColor * dayFactor;
 
-    // Night side — very dark with subtle blue tint
-    vec3 nightColor = baseColor * 0.02 + vec3(0.005, 0.005, 0.015);
+    // Night side — true darkness, no blue lift. Space is black.
+    vec3 nightColor = baseColor * 0.015;
 
     // Night-side storm lightning (atmospheric uninhabited planets only)
     if (uHasAtmosphere && dayFactor < 0.1) {

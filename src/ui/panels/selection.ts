@@ -15,7 +15,7 @@ import type { TooltipData } from '../tooltip';
 const TYPE_ICONS: Record<string, string> = {
   star: '✦', planet: '◍', bob: '◇', station: '⬡', comet: '◗',
   moon: '○', gal_system: '✦', system: '✦', phenomenon: '⊕',
-  alien: '▵', galaxy: '◔',
+  alien: '▵', alien_civ: '▵', bob_transit: '➤', galaxy: '◔',
 };
 
 // ── Buildable Items Per Station Type ─────────────────────────────

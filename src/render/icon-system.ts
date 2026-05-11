@@ -21,10 +21,17 @@ import { MathUtils, type Object3D, type Mesh, type Sprite, type SpriteMaterial }
 
 const SCREEN_PX = 28;       // target icon size in screen pixels (HW2: small & functional)
 const SCREEN_PX_CLOSE = 20; // smaller icons when mesh is fully visible
-const FOV_RAD = MathUtils.degToRad(27.5); // half of 55° camera FOV
-const FOV_FACTOR = 2 * Math.tan(FOV_RAD);
 const ICON_OPACITY = 0.95;  // full contrast for icon-only mode
 const ICON_OPACITY_CLOSE = 0.6; // reduced opacity when mesh is visible
+
+// Dynamic FOV factor — the camera FOV adapts with distance now, so the
+// projection math used to compute world-size-for-N-screen-pixels has to
+// follow. CameraController calls setIconFov() each frame after lerping.
+let FOV_FACTOR = 2 * Math.tan(MathUtils.degToRad(27.5)); // default = old 55° behavior
+
+export function setIconFov(fovDeg: number): void {
+  FOV_FACTOR = 2 * Math.tan(MathUtils.degToRad(fovDeg * 0.5));
+}
 
 // ── Scaling Functions ────────────────────────────────────────────
 

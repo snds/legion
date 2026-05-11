@@ -12,7 +12,9 @@ import { Game, ZOOM_STEPS } from './state';
 // ── Constants ──────────────────────────────────────────────────────
 
 const ORBIT_SPEED = 0.005;        // radians per pixel (monolithic: 0.005)
-const ZOOM_STEP = 0.03;           // zoom per scroll tick
+const ZOOM_STEP = 0.012;          // zoom per scroll tick (finer than monolithic default)
+const ZOOM_STEP_FINE = 0.003;     // Shift+wheel — surgical adjustments
+const ZOOM_STEP_FAST = 0.04;      // Ctrl/Alt+wheel — coarse tier jumps
 const PHI_MIN = 0.15;             // prevent flipping over top
 const PHI_MAX = Math.PI - 0.15;   // prevent flipping under bottom
 const DRAG_THRESHOLD = 4;         // pixels before drag registers
@@ -81,10 +83,14 @@ export class InputManager {
       Game.data.dragButton = -1;
     });
 
-    // Scroll wheel — zoom (0–1 range, ±0.03 per tick)
+    // Scroll wheel — zoom.
+    //   plain wheel  → fine (ZOOM_STEP, ~83 ticks across the full range)
+    //   Shift+wheel  → ultra-fine (ZOOM_STEP_FINE, ~333 ticks) for surgical framing
+    //   Ctrl/Alt+wheel → coarse (ZOOM_STEP_FAST) for fast tier jumps
     this.canvas.addEventListener('wheel', (e) => {
       e.preventDefault();
-      const delta = e.deltaY > 0 ? ZOOM_STEP : -ZOOM_STEP;
+      const step = e.shiftKey ? ZOOM_STEP_FINE : (e.ctrlKey || e.altKey || e.metaKey) ? ZOOM_STEP_FAST : ZOOM_STEP;
+      const delta = e.deltaY > 0 ? step : -step;
       Game.data.targetZoom = Math.max(0, Math.min(1, Game.data.targetZoom + delta));
     }, { passive: false });
 

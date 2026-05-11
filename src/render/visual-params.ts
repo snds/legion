@@ -106,7 +106,7 @@ const DEFAULTS: VisualParams = {
   starLightIntensity: 1.2,
   starLightColor: '#ffeedd',
   ambientIntensity: 0.15,
-  ambientColor: '#0a0810',
+  ambientColor: '#000000',
   toneMappingExposure: 0.85,
 
   // Post-Processing

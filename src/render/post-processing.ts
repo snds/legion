@@ -103,11 +103,13 @@ const FilmGrainShader = {
 const ColorGradingShader = {
   uniforms: {
     tDiffuse: { value: null },
-    uShadowTint: { value: [0.02, 0.04, 0.08] },  // cool blue in darks
-    uHighlightTint: { value: [0.02, 0.01, -0.01] }, // warm shift in brights
-    uBlackPoint: { value: 0.01 },    // lift blacks slightly (prevents pure 0)
-    uContrast: { value: 1.08 },       // subtle S-curve
-    uSaturation: { value: 0.95 },     // very slight desaturation (space feel)
+    // Space is black. No cool/warm tinting on shadows or highlights —
+    // those biases were reading as "blue post-processing" against vacuum.
+    uShadowTint: { value: [0.0, 0.0, 0.0] },
+    uHighlightTint: { value: [0.0, 0.0, 0.0] },
+    uBlackPoint: { value: 0.0 },     // crushed blacks (true vacuum)
+    uContrast: { value: 1.04 },       // very gentle S-curve, no posterization
+    uSaturation: { value: 1.0 },      // neutral — let source colors stand
   },
   vertexShader: /* glsl */ `
     varying vec2 vUv;

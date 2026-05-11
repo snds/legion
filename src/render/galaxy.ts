@@ -465,6 +465,12 @@ export function createGalaxy(): Group {
     new MeshBasicMaterial({ color: 0xffffcc }),
   );
   sgrA.position.set(0, 0, 0);
+  sgrA.userData = {
+    type: 'phenomenon',
+    name: 'Sagittarius A*',
+    subtype: 'Supermassive Black Hole',
+    description: 'Galactic core — 4.3 million solar masses',
+  };
   const sgrGlow = new Sprite(new SpriteMaterial({
     map: glowTex, color: 0xffffaa,
     transparent: true, blending: AdditiveBlending,
@@ -565,9 +571,13 @@ export function createGalaxy(): Group {
     const stellar = getStellarRender(sys.name);
     const isActive = sys.hasBobs;
 
-    // Invisible raycast target (kept so existing click handlers work).
+    // Visible bloom halo sizes the hit target — at galactic camera distances
+    // (~7000–12500 WU) a tiny mesh is unclickable. Sphere radius ≈ half the
+    // visible halo so clicks land anywhere on the glow.
+    const haloScale = isActive ? 360 + sys.bobCount * 30 : 140;
+    const hitRadius = Math.max(40, haloScale * 0.55);
     const marker = new Mesh(
-      new SphereGeometry(isActive ? 18 : 10, 8, 8),
+      new SphereGeometry(hitRadius, 12, 12),
       new MeshBasicMaterial({ color: stellar.core, transparent: true, opacity: 0.0001, depthWrite: false }),
     );
     marker.position.copy(pos);
@@ -575,7 +585,6 @@ export function createGalaxy(): Group {
     galaxy.add(marker);
 
     // Colored bloom halo — larger for active systems so eye is drawn to them.
-    const haloScale = isActive ? 360 + sys.bobCount * 30 : 140;
     const halo = new Sprite(new SpriteMaterial({
       map: haloTex, color: stellar.halo,
       transparent: true, blending: AdditiveBlending,
@@ -666,6 +675,13 @@ export function createGalaxy(): Group {
       }),
     );
     sphere.position.copy(pos);
+    sphere.userData = {
+      type: 'alien_civ',
+      name: ac.name,
+      faction: ac.name,
+      influenceRadius: ac.influenceRadius,
+      color: ac.color,
+    };
     galaxy.add(sphere);
 
     // Dashed boundary — distinct from Bob influence (different dash cadence)
@@ -712,6 +728,22 @@ export function createGalaxy(): Group {
 
     // Chevron token at current progress
     const progressPt = fromPos.clone().lerp(toPos, tb.progress);
+
+    // Invisible hit target so the chevron is clickable at galactic scale
+    const chevHit = new Mesh(
+      new SphereGeometry(120, 8, 8),
+      new MeshBasicMaterial({ color: tb.color, transparent: true, opacity: 0.0001, depthWrite: false }),
+    );
+    chevHit.position.copy(progressPt);
+    chevHit.userData = {
+      type: 'bob_transit',
+      name: tb.name,
+      from: tb.from,
+      to: tb.to,
+      progress: tb.progress,
+    };
+    galaxy.add(chevHit);
+
     const chevron = new Sprite(new SpriteMaterial({
       map: chevronTex, color: tb.color,
       transparent: true, depthWrite: false,
