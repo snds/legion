@@ -106,9 +106,14 @@ function applyDomain(domain: DomainName): void {
     case 'sector':
       // ~10-12 nearby systems within the local arm patch + tactical
       // sensor bubble (volumetric orb) showing the sector boundary.
+      // Galaxy disc is ALSO enabled here — its opacity is ramped from
+      // 0 → 1 across the sector→arm range by updateGalaxyLOD() so the
+      // disc fades into view smoothly as we zoom out, rather than
+      // popping on at the arm tier boundary.
       layers.local.visible = true;
       layers.regional.visible = true;
       if (sectorOrb) sectorOrb.visible = true;
+      if (galaxyArms) galaxyArms.visible = true;
       setBackgroundOpacity(0.5, 0.12);
       break;
 

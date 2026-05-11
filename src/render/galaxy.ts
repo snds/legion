@@ -265,34 +265,47 @@ function smoothRamp(x: number, lo: number, hi: number): number {
 
 /** Call each frame with the current camera distance to tune galaxy LOD. */
 export function updateGalaxyLOD(camDist: number): void {
-  // Particle size on the main starField — closer = larger so the disc
-  // reads as a granular volume, not a flat distant blob.
+  // Top-level "is the galaxy present at this camera distance" curve.
+  // 0 at sector inner edge (~2500 WU) → 1 by the time we're in arm
+  // range (~5500 WU). Everything galactic-scale (disc shader, particles,
+  // dust, nebulae, phenomena) multiplies through this so the transition
+  // from sector → arm is a smooth fade-in instead of a layer flip.
+  const discPresence = smoothRamp(camDist, 2500, 5500);
+
+  // Disc shader presence — directly drives uOpacity.
+  if (GALAXY_LOD.discMat) {
+    GALAXY_LOD.discMat.uniforms.uOpacity.value = discPresence;
+  }
+
+  // Main star field: size grows when close (so the disc has grain), and
+  // opacity multiplies through discPresence so particles fade in WITH
+  // the disc rather than appearing on top of nothing at sector tier.
   if (GALAXY_LOD.starFieldMat) {
-    // 4.0 at camDist ≤ 4500, ramps to 2.0 at camDist ≥ 13000
-    const t = smoothRamp(camDist, 4500, 13000);
-    GALAXY_LOD.starFieldMat.size = 4.0 - t * 2.0;
+    const sizeT = smoothRamp(camDist, 4500, 13000);
+    GALAXY_LOD.starFieldMat.size = 4.0 - sizeT * 2.0;
+    GALAXY_LOD.starFieldMat.opacity = 0.55 * discPresence;
   }
 
   // Local Orion Spur detail: fades in as you approach disc-immersion.
   // Off above 11000 (galaxy tier is too far to benefit), peak at 4500.
   if (GALAXY_LOD.localArmMat) {
-    const presence = 1 - smoothRamp(camDist, 5000, 11000);
-    GALAXY_LOD.localArmMat.opacity = presence * 0.85;
+    const closeFade = 1 - smoothRamp(camDist, 5000, 11000);
+    GALAXY_LOD.localArmMat.opacity = closeFade * 0.85 * discPresence;
   }
 
-  // Dust lanes: very subtle, peak in arm/sector range, gone at galaxy.
+  // Dust lanes (particle, separate from shader): peak in arm/sector range.
   if (GALAXY_LOD.dustMat) {
-    const presence = 1 - smoothRamp(camDist, 6000, 11000);
-    GALAXY_LOD.dustMat.opacity = presence * 0.55;
+    const closeFade = 1 - smoothRamp(camDist, 6000, 11000);
+    GALAXY_LOD.dustMat.opacity = closeFade * 0.55 * discPresence;
   }
 
-  // Nebulae: faint backdrop at galaxy tier, prominent features at arm.
+  // Nebulae: prominent at arm scale, fading at galaxy and at sector.
   if (GALAXY_LOD.nebulaMats.length > 0) {
     const boost = 1 + (1 - smoothRamp(camDist, 6000, 13000)) * 1.8;
     for (const m of GALAXY_LOD.nebulaMats) {
       const base = (m.userData?._baseOpacity as number | undefined) ?? m.opacity;
       if (m.userData) m.userData._baseOpacity = base;
-      m.opacity = Math.min(0.9, base * boost);
+      m.opacity = Math.min(0.9, base * boost * discPresence);
     }
   }
 }
@@ -577,17 +590,22 @@ export function createGalaxy(): Group {
     side: DoubleSide,
     blending: NormalBlending,
     uniforms: {
-      uBulgeColor:   { value: new Color(0xffe2a8) },
-      uArmColor:     { value: new Color(0xd9b894) },
-      uDustColor:    { value: new Color(0x180b08) },
-      uBulgeRadius:  { value: 0.28 },
-      // Looser log-spiral pitch — 8.5 read as concentric rings.
-      // 5.0 gives recognizable Sb-type sweeping arms.
-      uArmTwist:     { value: 5.0 },
-      uArmCount:     { value: 4.0 },
-      uDustStrength: { value: 0.92 },
-      uOpacity:      { value: 1.0 },
-      uTime:         { value: 0 },
+      uBulgeColor:     { value: new Color(0xffe2a8) },
+      uArmColor:       { value: new Color(0xd9b894) },
+      uDustColor:      { value: new Color(0x180b08) },
+      uBulgeRadius:    { value: 0.22 },
+      uArmTwist:       { value: 5.0 },
+      uArmCount:       { value: 4.0 },
+      // Rotate arm pattern so the principal arms emerge from the bar tips.
+      uArmPhaseOffset: { value: Math.PI * 0.25 },
+      // Galactic bar — real Milky Way has a ~5 kpc bar at ~25° from the
+      // Sun–GC line. With disc radius 15 kpc, bar half-length 0.18 ≈ 2.7 kpc.
+      uBarAngle:       { value: Math.PI * 25 / 180 },
+      uBarLength:      { value: 0.20 },
+      uBarWidth:       { value: 0.06 },
+      uDustStrength:   { value: 0.92 },
+      uOpacity:        { value: 1.0 },
+      uTime:           { value: 0 },
     },
   });
   const disc = new Mesh(
@@ -1176,8 +1194,8 @@ export function createSectorOrb(radius = 8000): Group {
     uniforms: {
       uColor:    { value: new Color(0x1c4080) },
       uRimColor: { value: new Color(0x4488ff) },
-      uOpacity:  { value: 0.55 },
-      uRimPower: { value: 2.2 },
+      uOpacity:  { value: 0.22 },     // dropped — was washing out markers inside
+      uRimPower: { value: 2.4 },
     },
     vertexShader: SECTOR_ORB_VERT,
     fragmentShader: SECTOR_ORB_FRAG,
@@ -1194,7 +1212,7 @@ export function createSectorOrb(radius = 8000): Group {
     uniforms: {
       uColor:    { value: new Color(0x2a5cb8) },
       uRimColor: { value: new Color(0x88bbff) },
-      uOpacity:  { value: 0.35 },
+      uOpacity:  { value: 0.18 },
       uRimPower: { value: 3.5 },
     },
     vertexShader: SECTOR_ORB_VERT,

@@ -489,7 +489,7 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol'): WorldExtras {
       sCfg.y * REGIONAL_SCALE * 0.3,
       sCfg.z * REGIONAL_SCALE,
     );
-    marker.scale.setScalar(200);
+    marker.scale.setScalar(450);  // larger so the icons read at sector camDist 3-5k
 
     layers.regional.add(marker);
     registerRenderObject(renderObjectMap, eid, marker);

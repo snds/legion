@@ -154,10 +154,12 @@ export function getCamDist(z: number): number {
   if (z < T_OUTER_SYS) return lerpDist(T_INNER_SYS,   T_OUTER_SYS,  120,    1000);
   if (z < T_HELIO)     return lerpDist(T_OUTER_SYS,   T_HELIO,      1000,   2800);
   if (z < T_SECTOR)    return lerpDist(T_HELIO,       T_SECTOR,     2800,   5500);
-  if (z < T_ARM)       return lerpDist(T_SECTOR,      T_ARM,        5500,   12000);
-  // Galaxy max distance pushed out so the 15-kpc (5000 WU) disc fills
-  // the viewport edge-to-edge at FOV 72° rather than floating small.
-  return lerpDist(T_ARM, 1.0, 12000, 24000);
+  if (z < T_ARM)       return lerpDist(T_SECTOR,      T_ARM,        5500,   9000);
+  // Galaxy max camDist tuned so the 15-kpc (5000 WU) disc fills the
+  // viewport. At camDist 12000, FOV 72° gives disc angular size ~46°
+  // (~65% of viewport vertical), with room around the edges. 24000
+  // was too far — disc looked like a marble.
+  return lerpDist(T_ARM, 1.0, 9000, 12000);
 }
 
 // ── State Shape ──────────────────────────────────────────────────

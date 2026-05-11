@@ -29,6 +29,10 @@ export const galacticDiscFragmentShader = /* glsl */ `
   uniform float uBulgeRadius;  // 0..1 fraction of disc radius
   uniform float uArmTwist;     // spiral tightness (radians per log(r))
   uniform float uArmCount;     // typically 4
+  uniform float uArmPhaseOffset; // rotates the arm pattern (radians)
+  uniform float uBarAngle;     // radians — bar orientation
+  uniform float uBarLength;    // 0..1 — bar half-length as fraction of disc radius
+  uniform float uBarWidth;     // 0..1 — bar half-width
   uniform float uDustStrength; // 0..1
   uniform float uOpacity;
   uniform float uTime;
@@ -71,17 +75,31 @@ export const galacticDiscFragmentShader = /* glsl */ `
     if (r > 1.0) discard;
 
     float theta = atan(p.y, p.x);
-    // Logarithmic-spiral phase: arms are loci where theta - k*log(r) = const.
-    // log() of a very small r blows up; clamp to keep the center calm.
+    // Logarithmic-spiral phase. uArmPhaseOffset lets us rotate the
+    // arm pattern so the principal arms emerge from the bar ends
+    // (matches real Sb/SBb galaxies).
     float lr = log(max(r, 0.02));
-    float armPhase = theta - lr * uArmTwist;
+    float armPhase = theta - lr * uArmTwist + uArmPhaseOffset;
 
     // Arm density profile — pow() narrows the arms vs the gaps.
     float armBand = 0.5 + 0.5 * cos(armPhase * uArmCount);
-    float arms = pow(armBand, 1.7);  // softer power = arms read at more radii
+    float arms = pow(armBand, 1.7);
+    // Asymmetric arm strength — real Milky Way has two principal arms
+    // (Sagittarius/Perseus) brighter than the other two (Norma/Scutum).
+    float principal = 0.5 + 0.5 * cos(armPhase * 2.0);
+    arms *= 0.55 + 0.45 * principal;
 
     // Bulge: smooth Gaussian falloff anchored at the center.
     float bulge = exp(-pow(r / uBulgeRadius, 2.0) * 2.5);
+
+    // Central bar — bright elongated ellipse oriented at uBarAngle.
+    // Real Milky Way has a ~5 kpc bar at ~25° relative to Sun-GC line.
+    float cba = cos(uBarAngle), sba = sin(uBarAngle);
+    vec2 barCoord = vec2(cba * p.x + sba * p.y, -sba * p.x + cba * p.y);
+    float bar = exp(
+      -pow(barCoord.x / uBarLength, 2.0) * 1.6
+      -pow(barCoord.y / uBarWidth,  2.0) * 6.0
+    );
 
     // Overall radial disc envelope — slower falloff so outer arms keep presence.
     float discEnv = exp(-r * 1.6) * (1.0 - smoothstep(0.88, 1.0, r));
@@ -110,7 +128,8 @@ export const galacticDiscFragmentShader = /* glsl */ `
     vec3 armTint = mix(uArmColor * 0.5, uArmColor * 1.15, arms);
     vec3 baseDisc = armTint * (discEnv + arms * 0.9) * (0.7 + cloud * 0.6) * 2.2;
     vec3 bulgeContribution = uBulgeColor * bulge * 2.4;
-    vec3 color = baseDisc + bulgeContribution;
+    vec3 barContribution = uBulgeColor * bar * 1.7;  // bar reads warm like bulge
+    vec3 color = baseDisc + bulgeContribution + barContribution;
 
     // Dust occlusion — multiplicative darkening toward uDustColor.
     color = mix(color, color * uDustColor, dust * uDustStrength);
@@ -118,7 +137,7 @@ export const galacticDiscFragmentShader = /* glsl */ `
     // Alpha = how much of this disc is present here. Heavier weighting on
     // discEnv + arms + bulge so the diffuse layer reads as the dominant
     // visual rather than a faint tint behind the additive particle field.
-    float coverage = discEnv * (0.65 + arms * 0.9) + bulge * 1.4;
+    float coverage = discEnv * (0.65 + arms * 0.9) + bulge * 1.4 + bar * 1.1;
     coverage *= (0.5 + cloud * 0.7);
     coverage += dust * 0.55;
     coverage = clamp(coverage, 0.0, 1.0);
