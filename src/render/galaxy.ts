@@ -26,6 +26,7 @@ import {
 import { getStellarRender } from './planet-colors';
 import { galacticDiscVertexShader, galacticDiscFragmentShader } from './shaders/galactic-disc';
 import { galacticStarsVertexShader, galacticStarsFragmentShader } from './shaders/galactic-stars';
+import { galacticDustVertexShader, galacticDustFragmentShader } from './shaders/galactic-dust';
 
 // ── Stellar Population Sampling ──────────────────────────────────
 //
@@ -281,7 +282,8 @@ interface GalaxyLODState {
   starFieldMat: ShaderMaterial | null;
   localArmMat: ShaderMaterial | null;
   dustMat: PointsMaterial | null;
-  discMats: ShaderMaterial[];           // stacked-layer disc shader (5 layers)
+  discMats: ShaderMaterial[];           // stacked disc star layers
+  dustLayerMats: ShaderMaterial[];      // interleaved volumetric dust layers
   nebulaMats: SpriteMaterial[];
 }
 
@@ -290,6 +292,7 @@ const GALAXY_LOD: GalaxyLODState = {
   localArmMat: null,
   dustMat: null,
   discMats: [],
+  dustLayerMats: [],
   nebulaMats: [],
 };
 
@@ -314,6 +317,10 @@ export function updateGalaxyLOD(camDist: number): void {
   // stacked-thickness disc (each layer has its own ShaderMaterial
   // with a baked-in uLayerOpacity Gaussian weight).
   for (const m of GALAXY_LOD.discMats) {
+    m.uniforms.uOpacity.value = discPresence;
+  }
+  // Volumetric dust layers fade in along with the disc.
+  for (const m of GALAXY_LOD.dustLayerMats) {
     m.uniforms.uOpacity.value = discPresence;
   }
 
@@ -409,6 +416,7 @@ export function createGalaxy(): Group {
   GALAXY_LOD.localArmMat = null;
   GALAXY_LOD.dustMat = null;
   GALAXY_LOD.discMats.length = 0;
+  GALAXY_LOD.dustLayerMats.length = 0;
   GALAXY_LOD.nebulaMats.length = 0;
 
   const galaxy = new Group();
@@ -726,7 +734,11 @@ export function createGalaxy(): Group {
         uBarAngle:       { value: Math.PI * 25 / 180 },
         uBarLength:      { value: 0.20 },
         uBarWidth:       { value: 0.06 },
-        uDustStrength:   { value: 0.92 },
+        // Inline disc dust attenuated — volumetric dust comes from the
+        // dedicated interleaved dust layers below, which actually occlude
+        // light from behind. This residual is just enough to keep the
+        // disc's own emission slightly modulated by its dust pattern.
+        uDustStrength:   { value: 0.30 },
         uOpacity:        { value: 1.0 },
         uLayerOpacity:   { value: layer.op },
         uLayerSeed:      { value: layer.seed },
@@ -740,13 +752,74 @@ export function createGalaxy(): Group {
     const discMesh = new Mesh(discGeo, mat);
     discMesh.rotation.x = -Math.PI / 2;
     discMesh.position.y = layer.y * KPC;
-    // Stable sort: bottom layer drawn first, top last. Painter's
-    // algorithm composites correctly when viewed from above; when
-    // viewed from below the order reverses naturally because three.js
-    // also depth-sorts within same renderOrder for transparents.
-    discMesh.renderOrder = 2 + idx * 0.01;
+    // Stable sort: bottom layer drawn first, top last. Dust layers
+    // get interleaved render orders so the painter's algorithm
+    // composites star-then-dust-then-star.
+    discMesh.renderOrder = 2 + idx * 0.02;
     galaxy.add(discMesh);
     GALAXY_LOD.discMats.push(mat);
+  });
+
+  // ── 3b'. Volumetric Dust Layers (interleaved between disc layers) ──
+  //
+  // Real galaxies show dust as a continuous absorbing veil that
+  // silhouettes stars behind it (NGC 891, M31, M51). The inline dust
+  // in the disc shader can only dim its own layer's emission. These
+  // dedicated dust planes use NormalBlending with a near-black color
+  // so they ACTUALLY OCCLUDE stellar light from disc layers below
+  // them in render order — the classic edge-on dust band.
+  //
+  // Eight dust layers interleaved with the nine star layers:
+  //     star y=-0.24  renderOrder 2.00
+  //     dust y=-0.21  renderOrder 2.01
+  //     star y=-0.18  renderOrder 2.02
+  //     dust y=-0.15  renderOrder 2.03
+  //     ... etc
+  //
+  // Per-layer dust opacity peaks in the disc midplane (y=±0.03) and
+  // falls off toward the slab edges — where most galactic dust lives.
+
+  const DUST_LAYERS: Array<{ y: number; op: number; seed: number; rot: number }> = [
+    { y: -0.21, op: 0.12, seed: 0.5,  rot: -0.075 },
+    { y: -0.15, op: 0.22, seed: 2.6,  rot: -0.05  },
+    { y: -0.09, op: 0.32, seed: 4.3,  rot: -0.03  },
+    { y: -0.03, op: 0.42, seed: 5.9,  rot: -0.01  },
+    { y:  0.03, op: 0.42, seed: 7.6,  rot:  0.01  },
+    { y:  0.09, op: 0.32, seed: 9.3,  rot:  0.03  },
+    { y:  0.15, op: 0.22, seed: 11.0, rot:  0.05  },
+    { y:  0.21, op: 0.12, seed: 12.7, rot:  0.075 },
+  ];
+  DUST_LAYERS.forEach((layer, idx) => {
+    const mat = new ShaderMaterial({
+      vertexShader: galacticDustVertexShader,
+      fragmentShader: galacticDustFragmentShader,
+      transparent: true,
+      depthWrite: false,
+      side: DoubleSide,
+      blending: NormalBlending,
+      uniforms: {
+        uDustColor:      { value: new Color(0x0a0604) },  // near-black brown for true occlusion
+        uArmTwist:       { value: 5.0 },
+        uArmCount:       { value: 4.0 },
+        uArmPhaseOffset: { value: Math.PI * 0.25 },
+        uLayerArmShift:  { value: layer.rot },
+        uLayerSeed:      { value: layer.seed },
+        uDustStrength:   { value: 1.0 },
+        uOpacity:        { value: 1.0 },
+        uLayerOpacity:   { value: layer.op },
+        uWarpAmplitude:  { value: 333 },
+        uWarpInnerR:     { value: 0.5 },
+        uWarpAngle:      { value: Math.PI * 0.7 },
+      },
+    });
+    const dustMesh = new Mesh(discGeo, mat);
+    dustMesh.rotation.x = -Math.PI / 2;
+    dustMesh.position.y = layer.y * KPC;
+    // Interleave: idx*0.02 + 0.01 puts dust planes BETWEEN star planes
+    // in render order. Star at 2.00, dust at 2.01, star at 2.02, etc.
+    dustMesh.renderOrder = 2 + idx * 0.02 + 0.01;
+    galaxy.add(dustMesh);
+    GALAXY_LOD.dustLayerMats.push(mat);
   });
 
   // ── 4. Core Glow ─────────────────────────────────────────────
