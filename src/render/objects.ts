@@ -692,7 +692,10 @@ export function createSystemMarker(
     color: numToHex(color),
     label: name.toUpperCase(),
     sublabel: isHome ? 'HOME SYSTEM' : (hasBobs ? 'BOB PRESENCE' : 'UNEXPLORED'),
-    glowColor: isHome ? numToHex(color) : undefined,
+    // Every marker gets a colored glow — readable against the warm
+    // galaxy disc backdrop now that the disc is visible at sector tier.
+    glowColor: numToHex(color),
+    outlineWidth: isHome ? 4 : 3,
   });
   group.add(icon);
 

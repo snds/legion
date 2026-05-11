@@ -128,7 +128,9 @@ export const galacticDiscFragmentShader = /* glsl */ `
     vec3 armTint = mix(uArmColor * 0.5, uArmColor * 1.15, arms);
     vec3 baseDisc = armTint * (discEnv + arms * 0.9) * (0.7 + cloud * 0.6) * 2.2;
     vec3 bulgeContribution = uBulgeColor * bulge * 2.4;
-    vec3 barContribution = uBulgeColor * bar * 1.7;  // bar reads warm like bulge
+    // Bar reads warm like the bulge but slightly more saturated.
+    // Punch it up so the bar is a clear visual feature, not a subtle hint.
+    vec3 barContribution = uBulgeColor * bar * 2.6;
     vec3 color = baseDisc + bulgeContribution + barContribution;
 
     // Dust occlusion — multiplicative darkening toward uDustColor.
@@ -137,7 +139,7 @@ export const galacticDiscFragmentShader = /* glsl */ `
     // Alpha = how much of this disc is present here. Heavier weighting on
     // discEnv + arms + bulge so the diffuse layer reads as the dominant
     // visual rather than a faint tint behind the additive particle field.
-    float coverage = discEnv * (0.65 + arms * 0.9) + bulge * 1.4 + bar * 1.1;
+    float coverage = discEnv * (0.65 + arms * 0.9) + bulge * 1.4 + bar * 1.7;
     coverage *= (0.5 + cloud * 0.7);
     coverage += dust * 0.55;
     coverage = clamp(coverage, 0.0, 1.0);

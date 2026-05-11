@@ -385,9 +385,17 @@ export function createGalaxy(): Group {
   // Counts massively reduced from the original 158K → ~38K total.
 
   const ARMS = 4;
-  const ARM_SPREAD = 0.5;
-  const ARM_COUNT = 25000;     // was 120000
+  const ARM_SPREAD = 0.42;
+  const ARM_COUNT = 25000;
   const GAL_RADIUS = 15;       // kpc
+  // Log-spiral pitch matched to the disc shader's uArmTwist so the
+  // particle arms and the procedural arms land in alignment. Pitch
+  // tan⁻¹(1/ARM_TWIST) ≈ 13.4° — Milky Way is observed at ~12–14°.
+  const ARM_TWIST = 4.2;
+  // Bar orientation in galactic plane. Real Milky Way bar is ~25–30°
+  // from the Sun→GC line. Particle arms emerge from the bar tips.
+  const BAR_ANGLE = Math.PI * 25 / 180;
+  const ARM_PHASE_OFFSET = BAR_ANGLE;
 
   const armPts: number[] = [];
   const armCols: number[] = [];
@@ -395,13 +403,13 @@ export function createGalaxy(): Group {
   for (let i = 0; i < ARM_COUNT; i++) {
     const arm = Math.floor(Math.random() * ARMS);
     const armAngle = (Math.PI * 2 / ARMS) * arm;
-    const r = 0.3 + Math.random() * GAL_RADIUS;
-    // Tighter log-spiral pitch: previously r*0.55 read as concentric
-    // rings rather than arms. Closer to a real Sb/Sbc galaxy now.
-    const spiralTwist = Math.log(r + 0.5) * 1.6;
-    const spread = ARM_SPREAD * (1 + r * 0.04);
-    const theta = armAngle + spiralTwist + (Math.random() - 0.5) * spread;
-    const diskHeight = 0.12 + r * 0.01;
+    // Arms start at the bar tip radius (~2.7 kpc) — gas/young stars
+    // mostly live in the disc beyond that, not inside the bar.
+    const r = 2.7 + Math.random() * (GAL_RADIUS - 2.7);
+    const spiralTwist = Math.log(r / 2.7) * ARM_TWIST;
+    const spread = ARM_SPREAD * (1 + r * 0.03);
+    const theta = armAngle + spiralTwist + ARM_PHASE_OFFSET + (Math.random() - 0.5) * spread;
+    const diskHeight = 0.08 + r * 0.005;   // thin-disc realistic — 0.08-0.16 kpc
     const height = (Math.random() - 0.5) * diskHeight * 2;
 
     const x = r * Math.cos(theta) * KPC;
@@ -432,22 +440,48 @@ export function createGalaxy(): Group {
     armCols.push(cr, cg, cb);
   }
 
-  // ── 2. Galactic Bulge Star Sprinkle (6K) ─────────────────────
-  // The bulge GLOW comes from the disc shader; these particles add
-  // the texture of resolvable individual stars over the warm core.
+  // ── 2. Galactic Bulge + Bar Star Sprinkle (8K) ────────────────
+  // The shader provides the bulge GLOW and bar feature; these particles
+  // add resolved-star texture. 60% land in the bar region (elongated
+  // ellipsoid at BAR_ANGLE matching the shader's bar geometry), 40% in
+  // the spheroidal bulge.
 
-  const BULGE_COUNT = 6000;
+  const BULGE_COUNT = 8000;
+  const BAR_LEN = 2.7;     // kpc half-length, matches shader uBarLength*15
+  const BAR_WID = 0.7;     // kpc half-width
+  const BAR_THICK = 0.35;  // kpc half-thickness
+  const cBar = Math.cos(BAR_ANGLE);
+  const sBar = Math.sin(BAR_ANGLE);
   for (let i = 0; i < BULGE_COUNT; i++) {
-    const r = Math.pow(Math.random(), 0.65) * 2.5;
-    const theta = Math.random() * Math.PI * 2;
-    const phi = Math.acos(2 * Math.random() - 1);
-    const x = r * Math.sin(phi) * Math.cos(theta) * KPC;
-    const y = r * Math.cos(phi) * KPC * 0.4;
-    const z = r * Math.sin(phi) * Math.sin(theta) * KPC;
+    let x: number, y: number, z: number;
+    if (Math.random() < 0.6) {
+      // Bar — rejection-sample inside unit ellipsoid then scale and rotate
+      // into the galactic plane at BAR_ANGLE.
+      let lx = 0, ly = 0, lz = 0;
+      for (let attempt = 0; attempt < 8; attempt++) {
+        lx = Math.random() * 2 - 1;
+        ly = Math.random() * 2 - 1;
+        lz = Math.random() * 2 - 1;
+        if (lx * lx + ly * ly + lz * lz <= 1) break;
+      }
+      const along = lx * BAR_LEN;
+      const perp = lz * BAR_WID;
+      x = (cBar * along - sBar * perp) * KPC;
+      z = (sBar * along + cBar * perp) * KPC;
+      y = ly * BAR_THICK * KPC;
+    } else {
+      // Spheroidal bulge — oblate
+      const r = Math.pow(Math.random(), 0.65) * 2.2;
+      const t = Math.random() * Math.PI * 2;
+      const phi = Math.acos(2 * Math.random() - 1);
+      x = r * Math.sin(phi) * Math.cos(t) * KPC;
+      y = r * Math.cos(phi) * KPC * 0.35;
+      z = r * Math.sin(phi) * Math.sin(t) * KPC;
+    }
     armPts.push(x, y, z);
-    // Bulge stars: warmer, older
+    // Bulge/bar stars: old population, warm yellow-orange
     const b = 0.55 + Math.random() * 0.35;
-    armCols.push(b + 0.15, b + 0.08, b - 0.04);
+    armCols.push(b + 0.18, b + 0.08, b - 0.06);
   }
 
   // ── 3. Halo Star Sprinkle (3K) ────────────────────────────────
@@ -552,10 +586,12 @@ export function createGalaxy(): Group {
   for (let i = 0; i < DUST_N; i++) {
     const arm = Math.floor(Math.random() * ARMS);
     const armAngle = (Math.PI * 2 / ARMS) * arm;
-    const r = 2.5 + Math.random() * 11;
-    const spiralTwist = r * 0.55;
-    const radialOffset = 0.08 + Math.random() * 0.12;
-    const theta = armAngle + spiralTwist - radialOffset;
+    const r = 2.7 + Math.random() * (GAL_RADIUS - 2.7);
+    // Match the arm log-spiral pitch — dust lanes ride the inner edge
+    // of each arm (radialOffset shifts them slightly off the arm centerline).
+    const spiralTwist = Math.log(r / 2.7) * ARM_TWIST;
+    const radialOffset = 0.08 + Math.random() * 0.10;
+    const theta = armAngle + spiralTwist + ARM_PHASE_OFFSET - radialOffset;
     const x = r * Math.cos(theta) * KPC;
     const z = r * Math.sin(theta) * KPC;
     const y = (Math.random() - 0.5) * 0.04 * KPC;
@@ -651,9 +687,10 @@ export function createGalaxy(): Group {
   for (let i = 0; i < NEBULA_COUNT; i++) {
     const arm = Math.floor(Math.random() * ARMS);
     const armAngle = (Math.PI * 2 / ARMS) * arm;
-    const r = 2 + Math.random() * 13;
-    const spiralTwist = r * 0.55;
-    const theta = armAngle + spiralTwist + (Math.random() - 0.5) * 0.6;
+    const r = 2.7 + Math.random() * (GAL_RADIUS - 2.7);
+    // Nebulae are star-forming regions concentrated in the arms.
+    const spiralTwist = Math.log(r / 2.7) * ARM_TWIST;
+    const theta = armAngle + spiralTwist + ARM_PHASE_OFFSET + (Math.random() - 0.5) * 0.5;
     const x = r * Math.cos(theta) * KPC;
     const z = r * Math.sin(theta) * KPC;
     const y = (Math.random() - 0.5) * 0.3 * KPC;
