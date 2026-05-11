@@ -214,6 +214,86 @@ export function updateGalaxyAnimations(t: number): void {
   }
 }
 
+// ── Galaxy LOD State + Updater ───────────────────────────────────
+//
+// Tied to camera distance, the galaxy layer crossfades between
+// presentations so every zoom tier has meaningful structure:
+//
+//   camDist >  12000  (galaxy tier)
+//     Main starField dominant. Nebula sprites faint backdrops.
+//     Local detail and dust lanes invisible (would only add noise
+//     at this scale).
+//
+//   camDist 6000..12000  (arm tier)
+//     Local Orion Spur detail layer fades in from 0 → 0.85.
+//     Dust lanes fade in from 0 → 0.55.
+//     Nebulae open from background → recognizable features.
+//     Main starField particle size grows so the disc has volume.
+//
+//   camDist 3000..6000  (sector tier)
+//     Local detail at full, dust at full, nebulae fully visible.
+//     starField at max size — you're inside the disc.
+//
+//   camDist < 3000  (heliopause and inward)
+//     Galactic layer hidden by visibility.ts, all these materials
+//     irrelevant.
+
+interface GalaxyLODState {
+  starFieldMat: PointsMaterial | null;
+  localArmMat: PointsMaterial | null;
+  dustMat: PointsMaterial | null;
+  nebulaMats: SpriteMaterial[];
+}
+
+const GALAXY_LOD: GalaxyLODState = {
+  starFieldMat: null,
+  localArmMat: null,
+  dustMat: null,
+  nebulaMats: [],
+};
+
+// 0..1 ramp helper
+function smoothRamp(x: number, lo: number, hi: number): number {
+  if (x <= lo) return 0;
+  if (x >= hi) return 1;
+  const t = (x - lo) / (hi - lo);
+  return t * t * (3 - 2 * t);
+}
+
+/** Call each frame with the current camera distance to tune galaxy LOD. */
+export function updateGalaxyLOD(camDist: number): void {
+  // Particle size on the main starField — closer = larger so the disc
+  // reads as a granular volume, not a flat distant blob.
+  if (GALAXY_LOD.starFieldMat) {
+    // 4.0 at camDist ≤ 4500, ramps to 2.0 at camDist ≥ 13000
+    const t = smoothRamp(camDist, 4500, 13000);
+    GALAXY_LOD.starFieldMat.size = 4.0 - t * 2.0;
+  }
+
+  // Local Orion Spur detail: fades in as you approach disc-immersion.
+  // Off above 11000 (galaxy tier is too far to benefit), peak at 4500.
+  if (GALAXY_LOD.localArmMat) {
+    const presence = 1 - smoothRamp(camDist, 5000, 11000);
+    GALAXY_LOD.localArmMat.opacity = presence * 0.85;
+  }
+
+  // Dust lanes: very subtle, peak in arm/sector range, gone at galaxy.
+  if (GALAXY_LOD.dustMat) {
+    const presence = 1 - smoothRamp(camDist, 6000, 11000);
+    GALAXY_LOD.dustMat.opacity = presence * 0.55;
+  }
+
+  // Nebulae: faint backdrop at galaxy tier, prominent features at arm.
+  if (GALAXY_LOD.nebulaMats.length > 0) {
+    const boost = 1 + (1 - smoothRamp(camDist, 6000, 13000)) * 1.8;
+    for (const m of GALAXY_LOD.nebulaMats) {
+      const base = (m.userData?._baseOpacity as number | undefined) ?? m.opacity;
+      if (m.userData) m.userData._baseOpacity = base;
+      m.opacity = Math.min(0.9, base * boost);
+    }
+  }
+}
+
 // ── Galaxy Data ──────────────────────────────────────────────────
 
 interface GalSystem {
@@ -266,6 +346,10 @@ export function createGalaxy(): Group {
   // Reset per-frame trackers (createGalaxy may be called more than once under HMR)
   DASHED_MATERIALS.length = 0;
   TRANSIT_CHEVRONS.length = 0;
+  GALAXY_LOD.starFieldMat = null;
+  GALAXY_LOD.localArmMat = null;
+  GALAXY_LOD.dustMat = null;
+  GALAXY_LOD.nebulaMats.length = 0;
 
   const galaxy = new Group();
   galaxy.name = 'galaxy';
@@ -359,11 +443,106 @@ export function createGalaxy(): Group {
   const galGeo = new BufferGeometry();
   galGeo.setAttribute('position', new Float32BufferAttribute(armPts, 3));
   galGeo.setAttribute('color', new Float32BufferAttribute(armCols, 3));
-  const starField = new Points(galGeo, new PointsMaterial({
+  const starFieldMat = new PointsMaterial({
     size: 2.0, vertexColors: true, sizeAttenuation: false,
     transparent: true, opacity: 0.9, depthWrite: false,
-  }));
+  });
+  const starField = new Points(galGeo, starFieldMat);
   galaxy.add(starField);
+  GALAXY_LOD.starFieldMat = starFieldMat;
+
+  // ── 3c. Orion Spur Local Detail (40K) ─────────────────────────
+  // Higher-density particle cloud concentrated around home, oriented
+  // along the local arm tangent. Fades in across the ARM tier so that
+  // when the camera is immersed in the disc, the immediate surrounding
+  // volume has real density and variation rather than the broad-disc
+  // sample. Colors lean blue-white (young arm stars) with a warm minority.
+
+  const LOCAL_N = 40000;
+  const localPts: number[] = [];
+  const localCols: number[] = [];
+
+  // Orion Spur tangent at Sol — roughly galactic longitude 80°.
+  const armDirAngle = Math.PI * 80 / 180;
+  const ax = Math.cos(armDirAngle), az = Math.sin(armDirAngle);
+  const px = -az, pz = ax;  // perpendicular in disc plane
+
+  const SPUR_LEN = 3.0;     // kpc along arm
+  const SPUR_WIDTH = 0.7;   // kpc perpendicular
+  const SPUR_HEIGHT = 0.18; // kpc above/below disc
+
+  for (let i = 0; i < LOCAL_N; i++) {
+    // Gaussian-ish along arm via sum of uniforms (cheap CLT)
+    const u = ((Math.random() + Math.random() + Math.random()) / 3 - 0.5) * 2;
+    const v = ((Math.random() + Math.random()) / 2 - 0.5) * 2;
+    const w = (Math.random() - 0.5) * 2;
+    const along = u * SPUR_LEN;
+    const perp = v * SPUR_WIDTH * (1 - Math.abs(u) * 0.25);
+    const up = w * SPUR_HEIGHT * (1 - Math.abs(u) * 0.3);
+
+    // Position is relative to Sol's galactic coords (8.3, 0, 0) kpc.
+    const x = (8.3 + ax * along + px * perp) * KPC;
+    const y = up * KPC;
+    const z = (0   + az * along + pz * perp) * KPC;
+    localPts.push(x, y, z);
+
+    // Stellar mix: 50% blue-white young, 30% sun-like, 20% warm older
+    const r = Math.random();
+    if (r < 0.5) {
+      // Blue-white young stars (O/B/A class)
+      localCols.push(0.78 + Math.random() * 0.22, 0.85 + Math.random() * 0.15, 1.0);
+    } else if (r < 0.8) {
+      // Sun-like
+      localCols.push(1.0, 0.97 + Math.random() * 0.03, 0.85 + Math.random() * 0.12);
+    } else {
+      // Warm older (K/M)
+      localCols.push(1.0, 0.78 + Math.random() * 0.12, 0.55 + Math.random() * 0.15);
+    }
+  }
+
+  const localGeo = new BufferGeometry();
+  localGeo.setAttribute('position', new Float32BufferAttribute(localPts, 3));
+  localGeo.setAttribute('color', new Float32BufferAttribute(localCols, 3));
+  const localArmMat = new PointsMaterial({
+    size: 3.0, vertexColors: true, sizeAttenuation: false,
+    transparent: true, opacity: 0.0, depthWrite: false,
+    blending: AdditiveBlending,
+  });
+  const localArmField = new Points(localGeo, localArmMat);
+  localArmField.name = 'orion-spur-detail';
+  galaxy.add(localArmField);
+  GALAXY_LOD.localArmMat = localArmMat;
+
+  // ── 3d. Dust Lane Strands (8K) ────────────────────────────────
+  // Sparse, slightly cooler particles tracing the inner edges of the
+  // spiral arms — reads as fine filaments of dust against the brighter
+  // arm background. Adds the granular "depth" of a real disc when you
+  // fly inside it.
+
+  const DUST_N = 8000;
+  const dustPts: number[] = [];
+  for (let i = 0; i < DUST_N; i++) {
+    const arm = Math.floor(Math.random() * ARMS);
+    const armAngle = (Math.PI * 2 / ARMS) * arm;
+    const r = 2.5 + Math.random() * 11;
+    const spiralTwist = r * 0.55;
+    const radialOffset = 0.08 + Math.random() * 0.12;
+    const theta = armAngle + spiralTwist - radialOffset;
+    const x = r * Math.cos(theta) * KPC;
+    const z = r * Math.sin(theta) * KPC;
+    const y = (Math.random() - 0.5) * 0.04 * KPC;
+    dustPts.push(x, y, z);
+  }
+  const dustGeo = new BufferGeometry();
+  dustGeo.setAttribute('position', new Float32BufferAttribute(dustPts, 3));
+  const dustMat = new PointsMaterial({
+    color: 0x3a1a14, size: 2.5, sizeAttenuation: false,
+    transparent: true, opacity: 0.0, depthWrite: false,
+  });
+  const dustField = new Points(dustGeo, dustMat);
+  dustField.name = 'dust-lanes';
+  galaxy.add(dustField);
+  GALAXY_LOD.dustMat = dustMat;
 
   // ── 3b. Galactic Plane Backdrop ───────────────────────────────
   // Wide, very faint warm disc sitting on the galactic plane.
@@ -448,15 +627,17 @@ export function createGalaxy(): Group {
       | (Math.floor(nebG * 255) << 8)
       | Math.floor(nebB * 255);
 
-    const nebula = new Sprite(new SpriteMaterial({
+    const nebMat = new SpriteMaterial({
       map: nebulaTex, color: nebColor,
       transparent: true, blending: AdditiveBlending,
       depthWrite: false, opacity: 0.18 + Math.random() * 0.18,
-    }));
+    });
+    const nebula = new Sprite(nebMat);
     const size = 400 + Math.random() * 900;
     nebula.scale.set(size, size, 1);
     nebula.position.set(x, y, z);
     galaxy.add(nebula);
+    GALAXY_LOD.nebulaMats.push(nebMat);
   }
 
   // ── 6. Sagittarius A* ─────────────────────────────────────────

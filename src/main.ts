@@ -66,7 +66,7 @@ import {
   createEclipticGrid,
   STATION_DATA, COMET_DATA, type StationConfig,
 } from './render/scene-objects';
-import { createGalaxy, getGalaxyOffset, updateGalaxyAnimations, createSectorOrb } from './render/galaxy';
+import { createGalaxy, getGalaxyOffset, updateGalaxyAnimations, updateGalaxyLOD, createSectorOrb } from './render/galaxy';
 import { createPostProcessing, type PostProcessingContext } from './render/post-processing';
 import { createLensFlare, type LensFlareSystem } from './render/lens-flare';
 import { Debug } from './debug/debug-overlay';
@@ -341,6 +341,10 @@ async function boot(): Promise<void> {
 
     // 9d. Galaxy animations (dashed lines, chevron pulses)
     updateGalaxyAnimations(elapsedTime);
+
+    // 9e. Galaxy LOD — fades local-arm detail / dust / nebula presence
+    // by current camera distance so each zoom tier has the right density.
+    updateGalaxyLOD(Game.data.camDist);
 
     // 10. Render (post-processing pipeline)
     postCtx.render(elapsedTime);
