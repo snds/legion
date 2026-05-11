@@ -56,6 +56,8 @@ export const galacticDiscFragmentShader = /* glsl */ `
   uniform float uDustStrength; // 0..1
   uniform float uOpacity;
   uniform float uLayerOpacity; // per-layer Gaussian-Y weight
+  uniform float uLayerSeed;    // per-layer noise offset — different "weather" per slab plane
+  uniform float uLayerArmShift; // per-layer arm rotation in radians (breaks perfect arm-stack alignment)
   uniform float uTime;
 
   varying vec2 vUv;
@@ -100,7 +102,10 @@ export const galacticDiscFragmentShader = /* glsl */ `
     // arm pattern so the principal arms emerge from the bar ends
     // (matches real Sb/SBb galaxies).
     float lr = log(max(r, 0.02));
-    float armPhase = theta - lr * uArmTwist + uArmPhaseOffset;
+    // uLayerArmShift rotates each disc layer's arms by a small angle so
+    // a stack of layers doesn't read as concentric rings of identical
+    // spirals — each layer's pattern is slightly off-axis.
+    float armPhase = theta - lr * uArmTwist + uArmPhaseOffset + uLayerArmShift;
 
     // Arm density profile — variable sharpness with radius so arms
     // feather into the inter-arm regions at the outer disc (matching
@@ -152,10 +157,12 @@ export const galacticDiscFragmentShader = /* glsl */ `
 
     // Sampled cloud noise, rotated by log(r) so the noise field
     // swirls with the spiral — keeps the grain feeling continuous
-    // with the arm structure rather than fighting it.
+    // with the arm structure rather than fighting it. uLayerSeed
+    // offsets the noise sample per-layer so stacked discs don't
+    // share the same cloud pattern.
     float swirl = -lr * 1.4;
     mat2 rot = mat2(cos(swirl), -sin(swirl), sin(swirl), cos(swirl));
-    vec2 sUV = rot * (p * 6.0);
+    vec2 sUV = rot * (p * 6.0) + vec2(uLayerSeed * 0.7, uLayerSeed * 1.13);
     float cloud = fbm(sUV);
     cloud = mix(0.5, cloud, 0.95);
 
@@ -164,9 +171,9 @@ export const galacticDiscFragmentShader = /* glsl */ `
     // produces dust lanes (Cassini/Gaia/Hubble observations of M51,
     // M83, NGC 1300 all show this morphology). Modulated by two FBM
     // octaves at different frequencies for patchy, non-uniform lanes.
-    vec2 dustUV = rot * (p * 14.0) + vec2(armPhase * 1.8, 0.0);
+    vec2 dustUV = rot * (p * 14.0) + vec2(armPhase * 1.8 + uLayerSeed * 0.9, uLayerSeed * 0.4);
     float dustNoise = fbm(dustUV);
-    float dustFine = fbm(p * 36.0);             // high-freq breakup
+    float dustFine = fbm(p * 36.0 + vec2(uLayerSeed * 1.7, 0.0));             // high-freq breakup
     float armEdge = pow(arms, 0.8) * (0.55 + 0.45 * cos(armPhase * uArmCount - 0.6));
     float dust = smoothstep(0.45, 0.78, dustNoise * armEdge);
     // Break the dust into patchy filaments rather than continuous bands.

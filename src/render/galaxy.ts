@@ -690,12 +690,21 @@ export function createGalaxy(): Group {
   //
   // 0.36 kpc total half-thickness matches the Milky Way's thin-disc
   // scale height (~0.3 kpc observed by Gaia).
-  const DISC_LAYERS: Array<{ y: number; op: number }> = [
-    { y: -0.36, op: 0.15 },
-    { y: -0.18, op: 0.45 },
-    { y:  0.00, op: 1.00 },
-    { y:  0.18, op: 0.45 },
-    { y:  0.36, op: 0.15 },
+  // 9 layers within ±0.24 kpc total half-thickness, more tightly stacked
+  // than before so the stack reads as continuous slab. Each layer gets
+  // its own random noise seed AND a small arm-rotation offset, so the
+  // pattern shifts between adjacent layers — preventing the "5 concentric
+  // identical spirals" look that read as discrete planes.
+  const DISC_LAYERS: Array<{ y: number; op: number; seed: number; rot: number }> = [
+    { y: -0.24, op: 0.06, seed: 0.0,  rot: -0.09 },
+    { y: -0.18, op: 0.14, seed: 1.7,  rot: -0.06 },
+    { y: -0.12, op: 0.28, seed: 3.4,  rot: -0.04 },
+    { y: -0.06, op: 0.55, seed: 5.1,  rot: -0.02 },
+    { y:  0.00, op: 1.00, seed: 6.8,  rot:  0.00 },
+    { y:  0.06, op: 0.55, seed: 8.5,  rot:  0.02 },
+    { y:  0.12, op: 0.28, seed: 10.2, rot:  0.04 },
+    { y:  0.18, op: 0.14, seed: 11.9, rot:  0.06 },
+    { y:  0.24, op: 0.06, seed: 13.6, rot:  0.09 },
   ];
   const discGeo = new CircleGeometry(15 * KPC, 192);
   DISC_LAYERS.forEach((layer, idx) => {
@@ -720,6 +729,8 @@ export function createGalaxy(): Group {
         uDustStrength:   { value: 0.92 },
         uOpacity:        { value: 1.0 },
         uLayerOpacity:   { value: layer.op },
+        uLayerSeed:      { value: layer.seed },
+        uLayerArmShift:  { value: layer.rot },
         uTime:           { value: 0 },
         uWarpAmplitude:  { value: 333 },
         uWarpInnerR:     { value: 0.5 },
