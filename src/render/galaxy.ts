@@ -278,10 +278,10 @@ export function updateGalaxyAnimations(t: number): void {
 //     irrelevant.
 
 interface GalaxyLODState {
-  starFieldMat: ShaderMaterial | null;  // custom stars shader
+  starFieldMat: ShaderMaterial | null;
   localArmMat: ShaderMaterial | null;
   dustMat: PointsMaterial | null;
-  discMat: ShaderMaterial | null;       // continuous diffuse-disc shader
+  discMats: ShaderMaterial[];           // stacked-layer disc shader (5 layers)
   nebulaMats: SpriteMaterial[];
 }
 
@@ -289,7 +289,7 @@ const GALAXY_LOD: GalaxyLODState = {
   starFieldMat: null,
   localArmMat: null,
   dustMat: null,
-  discMat: null,
+  discMats: [],
   nebulaMats: [],
 };
 
@@ -310,9 +310,11 @@ export function updateGalaxyLOD(camDist: number): void {
   // from sector → arm is a smooth fade-in instead of a layer flip.
   const discPresence = smoothRamp(camDist, 2500, 5500);
 
-  // Disc shader presence — directly drives uOpacity.
-  if (GALAXY_LOD.discMat) {
-    GALAXY_LOD.discMat.uniforms.uOpacity.value = discPresence;
+  // Disc shader presence — drives uOpacity on every layer of the
+  // stacked-thickness disc (each layer has its own ShaderMaterial
+  // with a baked-in uLayerOpacity Gaussian weight).
+  for (const m of GALAXY_LOD.discMats) {
+    m.uniforms.uOpacity.value = discPresence;
   }
 
   // Main star field uses custom shader — size & opacity via uniforms.
@@ -406,7 +408,7 @@ export function createGalaxy(): Group {
   GALAXY_LOD.starFieldMat = null;
   GALAXY_LOD.localArmMat = null;
   GALAXY_LOD.dustMat = null;
-  GALAXY_LOD.discMat = null;
+  GALAXY_LOD.discMats.length = 0;
   GALAXY_LOD.nebulaMats.length = 0;
 
   const galaxy = new Group();
@@ -669,59 +671,72 @@ export function createGalaxy(): Group {
   galaxy.add(dustField);
   GALAXY_LOD.dustMat = dustMat;
 
-  // ── 3b. Procedural Galactic Disc (continuous diffuse) ─────────
-  // Replaces the previous radial-gradient backdrop. Custom shader
-  // (galactic-disc.ts) renders the disc as a warm sepia volume with
-  // logarithmic-spiral structure, FBM cloud variation, and DARK dust
-  // lanes that occlude the brightness (NormalBlending so dust can
-  // actually subtract, not just add light).
+  // ── 3b. Procedural Galactic Disc — STACKED-LAYER VOLUME ───────
   //
-  // ESA Gaia visualization reference: pale gold inner disc, brown
-  // dust filaments tracing the inner edge of each arm, soft yellow
-  // Gaussian bulge dominating the center.
-  const discMat = new ShaderMaterial({
-    vertexShader: galacticDiscVertexShader,
-    fragmentShader: galacticDiscFragmentShader,
-    transparent: true,
-    depthWrite: false,
-    side: DoubleSide,
-    blending: NormalBlending,
-    uniforms: {
-      uBulgeColor:     { value: new Color(0xffe2a8) },
-      uArmColor:       { value: new Color(0xd9b894) },
-      uDustColor:      { value: new Color(0x180b08) },
-      uBulgeRadius:    { value: 0.22 },
-      uArmTwist:       { value: 5.0 },
-      uArmCount:       { value: 4.0 },
-      // Rotate arm pattern so the principal arms emerge from the bar tips.
-      uArmPhaseOffset: { value: Math.PI * 0.25 },
-      // Galactic bar — real Milky Way has a ~5 kpc bar at ~25° from the
-      // Sun–GC line. With disc radius 15 kpc, bar half-length 0.18 ≈ 2.7 kpc.
-      uBarAngle:       { value: Math.PI * 25 / 180 },
-      uBarLength:      { value: 0.20 },
-      uBarWidth:       { value: 0.06 },
-      uDustStrength:   { value: 0.92 },
-      uOpacity:        { value: 1.0 },
-      uTime:           { value: 0 },
-      // Galactic warp — disc bends out of plane past 7.5 kpc. Reaches
-      // ~1 kpc amplitude (333 WU) at the disc edge, sinusoidal in θ
-      // with line-of-nodes oriented around the galactic-anti-center.
-      uWarpAmplitude:  { value: 333 },           // WU at r=1 (15 kpc)
-      uWarpInnerR:     { value: 0.5 },           // 7.5 kpc onset
-      uWarpAngle:      { value: Math.PI * 0.7 }, // line of nodes
-    },
+  // Five copies of the procedural disc shader, vertically offset
+  // ±0.36 kpc with Gaussian-falloff per-layer opacity:
+  //
+  //     y = +0.36 kpc   opacity 0.15
+  //     y = +0.18 kpc   opacity 0.45
+  //     y =  0.00 kpc   opacity 1.00   (main disc, brightest)
+  //     y = -0.18 kpc   opacity 0.45
+  //     y = -0.36 kpc   opacity 0.15
+  //
+  // Face-on (galaxy tier): the layers superimpose and read as a
+  // single bright disc. Edge-on (or near-in-plane at arm tier): the
+  // stack has visible thickness — looking through ±0.36 kpc of
+  // stratified Gaussian-weighted disc material gives a real thin-disc
+  // slab appearance instead of vanishing edge-on.
+  //
+  // 0.36 kpc total half-thickness matches the Milky Way's thin-disc
+  // scale height (~0.3 kpc observed by Gaia).
+  const DISC_LAYERS: Array<{ y: number; op: number }> = [
+    { y: -0.36, op: 0.15 },
+    { y: -0.18, op: 0.45 },
+    { y:  0.00, op: 1.00 },
+    { y:  0.18, op: 0.45 },
+    { y:  0.36, op: 0.15 },
+  ];
+  const discGeo = new CircleGeometry(15 * KPC, 192);
+  DISC_LAYERS.forEach((layer, idx) => {
+    const mat = new ShaderMaterial({
+      vertexShader: galacticDiscVertexShader,
+      fragmentShader: galacticDiscFragmentShader,
+      transparent: true,
+      depthWrite: false,
+      side: DoubleSide,
+      blending: NormalBlending,
+      uniforms: {
+        uBulgeColor:     { value: new Color(0xffe2a8) },
+        uArmColor:       { value: new Color(0xd9b894) },
+        uDustColor:      { value: new Color(0x180b08) },
+        uBulgeRadius:    { value: 0.22 },
+        uArmTwist:       { value: 5.0 },
+        uArmCount:       { value: 4.0 },
+        uArmPhaseOffset: { value: Math.PI * 0.25 },
+        uBarAngle:       { value: Math.PI * 25 / 180 },
+        uBarLength:      { value: 0.20 },
+        uBarWidth:       { value: 0.06 },
+        uDustStrength:   { value: 0.92 },
+        uOpacity:        { value: 1.0 },
+        uLayerOpacity:   { value: layer.op },
+        uTime:           { value: 0 },
+        uWarpAmplitude:  { value: 333 },
+        uWarpInnerR:     { value: 0.5 },
+        uWarpAngle:      { value: Math.PI * 0.7 },
+      },
+    });
+    const discMesh = new Mesh(discGeo, mat);
+    discMesh.rotation.x = -Math.PI / 2;
+    discMesh.position.y = layer.y * KPC;
+    // Stable sort: bottom layer drawn first, top last. Painter's
+    // algorithm composites correctly when viewed from above; when
+    // viewed from below the order reverses naturally because three.js
+    // also depth-sorts within same renderOrder for transparents.
+    discMesh.renderOrder = 2 + idx * 0.01;
+    galaxy.add(discMesh);
+    GALAXY_LOD.discMats.push(mat);
   });
-  const disc = new Mesh(
-    new CircleGeometry(15 * KPC, 256),
-    discMat,
-  );
-  disc.rotation.x = -Math.PI / 2;
-  // Render disc AFTER the additive particle field so the shader's
-  // continuous diffuse layer is the dominant visual, with bright
-  // particles still glowing through where they overlap.
-  disc.renderOrder = 2;
-  galaxy.add(disc);
-  GALAXY_LOD.discMat = discMat;
 
   // ── 4. Core Glow ─────────────────────────────────────────────
 

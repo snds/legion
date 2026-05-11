@@ -55,6 +55,7 @@ export const galacticDiscFragmentShader = /* glsl */ `
   uniform float uBarWidth;     // 0..1 — bar half-width
   uniform float uDustStrength; // 0..1
   uniform float uOpacity;
+  uniform float uLayerOpacity; // per-layer Gaussian-Y weight
   uniform float uTime;
 
   varying vec2 vUv;
@@ -194,6 +195,6 @@ export const galacticDiscFragmentShader = /* glsl */ `
     coverage += dust * 0.55;
     coverage = clamp(coverage, 0.0, 1.0);
 
-    gl_FragColor = vec4(color, coverage * uOpacity);
+    gl_FragColor = vec4(color, coverage * uOpacity * uLayerOpacity);
   }
 `;
