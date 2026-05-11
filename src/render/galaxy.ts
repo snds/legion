@@ -336,11 +336,14 @@ export function updateGalaxyLOD(camDist: number): void {
     u.uSizeScale.value = (1.5 - sizeT * 0.7) * discPresence;
   }
 
-  // Local Orion Spur detail: fades in as you approach disc-immersion.
+  // Local Orion Spur detail: SECTOR-tier feature only. Peaks at sector
+  // camDist 3000–4500, falls off by mid-arm (6500 WU) so it doesn't
+  // appear as a bright stellar cloud streaking through the galaxy view
+  // at arm/galaxy tiers where you're meant to see the whole disc.
   if (GALAXY_LOD.localArmMat) {
-    const closeFade = 1 - smoothRamp(camDist, 5000, 11000);
+    const closeFade = 1 - smoothRamp(camDist, 4500, 6500);
     const u = GALAXY_LOD.localArmMat.uniforms;
-    u.uSizeScale.value = closeFade * 1.4 * discPresence;
+    u.uSizeScale.value = closeFade * 1.2 * discPresence;
   }
 
   // Dust lanes (particle, separate from shader): peak in arm/sector range.
@@ -587,7 +590,11 @@ export function createGalaxy(): Group {
   // volume has real density and variation rather than the broad-disc
   // sample. Colors lean blue-white (young arm stars) with a warm minority.
 
-  const LOCAL_N = 80000;
+  // Local-arm detail layer is a SECTOR-tier feature only — it represents
+  // the player's immediate stellar neighborhood and should be visually
+  // subtle, not the dominant element at arm tier. Was 80000 which read
+  // as a bright streak across the disc at arm tier.
+  const LOCAL_N = 18000;
   const localPts: number[] = [];
   const localCols: number[] = [];
   const localSizes: number[] = [];
