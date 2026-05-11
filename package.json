@@ -1,0 +1,29 @@
+{
+  "name": "legion-bobiverse",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Bobiverse: Replication Protocol — Production game prototype",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "bitecs": "^0.3.40",
+    "colyseus.js": "^0.16.22",
+    "dexie": "^4.0.10",
+    "fflate": "^0.8.2",
+    "howler": "^2.2.4",
+    "mistreevous": "^4.3.1",
+    "ngraph.graph": "^20.0.1",
+    "ngraph.path": "^1.5.0",
+    "three": "^0.171.0",
+    "tone": "^15.4.3",
+    "yuka": "^0.7.8"
+  },
+  "devDependencies": {
+    "@types/three": "^0.171.0",
+    "typescript": "^5.9.3",
+    "vite": "^6.4.1"
+  }
+}

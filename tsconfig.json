@@ -1,0 +1,28 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "types": ["vite/client"],
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "baseUrl": ".",
+    "paths": {
+      "@core/*": ["src/core/*"],
+      "@render/*": ["src/render/*"],
+      "@simulation/*": ["src/simulation/*"],
+      "@persistence/*": ["src/persistence/*"],
+      "@audio/*": ["src/audio/*"],
+      "@network/*": ["src/network/*"],
+      "@ui/*": ["src/ui/*"],
+      "@data/*": ["src/data/*"]
+    }
+  },
+  "include": ["src/**/*.ts"]
+}

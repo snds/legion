@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Legion — Bobiverse: Replication Protocol</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Share+Tech&family=Inter:wght@300;400;500;600;700&family=Space+Grotesk:wght@300;400;500;600;700&family=IBM+Plex+Sans:wght@300;400;500;600;700&family=Exo+2:wght@300;400;500;600;700&family=Outfit:wght@300;400;500;600;700&family=Rajdhani:wght@300;400;500;600;700&family=Source+Sans+3:wght@300;400;500;600;700&family=Titillium+Web:wght@300;400;600;700&family=Orbitron:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+
+<!-- Three.js canvas mounts here -->
+<div id="game-container"></div>
+
+<!-- Dot grid scanline overlay -->
+<div id="dot-grid"></div>
+
+<!-- Hover tooltip (positioned by JS near cursor) -->
+<div id="hover-tip"></div>
+
+<!-- Destination selection crosshair -->
+<div id="dest-mode-indicator">
+  <div class="dest-crosshair"></div>
+  <div id="dest-label">SELECT DESTINATION</div>
+</div>
+
+<!-- ═══════════════════ HUD ═══════════════════ -->
+<div id="hud" role="region" aria-label="Heads-up display">
+
+  <!-- Left dock — tool icons -->
+  <div id="left-dock" role="toolbar" aria-label="Tools">
+    <div class="dock-icon" data-panel="detail" role="button" tabindex="0" aria-label="Detail panel (I)">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
+      <span class="ui-tip"><kbd>I</kbd> DETAIL</span>
+    </div>
+    <div class="dock-icon" data-panel="roster" role="button" tabindex="0" aria-label="Bob roster (B)">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
+      <span class="ui-tip"><kbd>B</kbd> BOBS</span>
+    </div>
+    <div class="dock-icon" data-panel="notifications" role="button" tabindex="0" aria-label="Alerts (N)">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6v-5c0-3.07-1.63-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.64 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>
+      <span class="dock-badge" id="notif-badge" aria-live="polite"></span>
+      <span class="ui-tip"><kbd>N</kbd> ALERTS</span>
+    </div>
+  </div>
+
+  <!-- Settings dock — bottom-left -->
+  <div id="settings-dock">
+    <div class="dock-icon" data-panel="settings" role="button" tabindex="0" aria-label="Settings (,)">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 00.12-.61l-1.92-3.32a.49.49 0 00-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 00-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96a.49.49 0 00-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58a.49.49 0 00-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6A3.6 3.6 0 1115.6 12 3.6 3.6 0 0112 15.6z"/></svg>
+      <span class="ui-tip"><kbd>,</kbd> CONFIG</span>
+    </div>
+  </div>
+
+  <!-- Panel containers (populated by JS) -->
+  <div id="panel-area" role="complementary" aria-label="Information panel"></div>
+  <div id="inspector-card" role="complementary" aria-label="Inspector"></div>
+  <div id="production-panel" role="complementary" aria-label="Production"></div>
+  <canvas id="connection-canvas"></canvas>
+
+  <!-- Top bar — domain label, time display, fleet status -->
+  <div id="top-bar" role="status" aria-label="System status">
+    <div id="domain-label" aria-live="polite">SYSTEM</div>
+    <div id="time-display" aria-label="Time controls">
+      <div id="time-compression" aria-live="polite">DAY/S</div>
+      <div id="game-clock" aria-live="off">DAY 001 — YEAR 2347</div>
+    </div>
+    <div id="system-status" aria-label="Fleet status">
+      <div id="bob-count">BOBS: 4</div>
+      <div id="fleet-count">SHIPS: 12</div>
+    </div>
+  </div>
+
+  <!-- Notification toast stack -->
+  <div id="notif-stack" role="log" aria-label="Notifications" aria-live="polite"></div>
+
+  <!-- Bottom bar — stepped zoom + time controls -->
+  <div id="bottom-bar" role="toolbar" aria-label="Zoom and time controls">
+    <div class="step-bar">
+      <span class="step-bar-label" id="zoom-label">ZOOM</span>
+      <div class="step-track" id="zoom-track" role="group" aria-labelledby="zoom-label"></div>
+    </div>
+    <div class="separator" aria-hidden="true"></div>
+    <div class="step-bar">
+      <span class="step-bar-label" id="time-label">TIME</span>
+      <button class="step-pause" id="pause-btn" aria-label="Pause (P)">
+        ⏸<span class="ui-tip"><kbd>P</kbd> PAUSE</span>
+      </button>
+      <div class="step-track" id="time-track" role="group" aria-labelledby="time-label"></div>
+    </div>
+  </div>
+
+  <!-- Pause overlay -->
+  <div id="pause-overlay" role="alert" aria-live="assertive">
+    <div id="pause-text">PAUSED</div>
+    <div id="pause-reason"></div>
+  </div>
+
+</div><!-- /hud -->
+
+<script type="module" src="/src/main.ts"></script>
+</body>
+</html>
