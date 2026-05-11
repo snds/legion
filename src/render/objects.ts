@@ -735,12 +735,20 @@ export function createOrbitLine(sma: number, ecc: number): Line2 {
   geo.setPositions(positions);
 
   const mat = new LineMaterial({
-    color: 0x666666,
-    linewidth: 1,         // 1 screen pixel
+    color: 0x88a0b8,        // cooler blue-grey reads better against black
+    linewidth: 1,
     transparent: true,
-    opacity: 0.03,
+    opacity: 0.16,          // up from 0.03 — orbits should register, not vanish
+    dashed: true,           // predicted-path vocabulary
+    dashSize: 6,
+    gapSize: 4,
+    dashScale: 1,
+    depthWrite: false,
     resolution: new Vector2(window.innerWidth, window.innerHeight),
   });
+  // LineMaterial requires defines.USE_DASH to actually dash
+  mat.defines = { ...(mat.defines ?? {}), USE_DASH: '' };
+  mat.needsUpdate = true;
 
   trackedOrbitMaterials.push(mat);
 

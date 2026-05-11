@@ -17,7 +17,7 @@
 
 import {
   Group, Mesh, Points, Line, Sprite,
-  SphereGeometry, RingGeometry, BufferGeometry,
+  SphereGeometry, RingGeometry, CircleGeometry, BufferGeometry,
   MeshBasicMaterial, PointsMaterial, SpriteMaterial, ShaderMaterial,
   Float32BufferAttribute, Vector3, DoubleSide, AdditiveBlending,
   CanvasTexture, Color,
@@ -363,6 +363,43 @@ export function createGalaxy(): Group {
     transparent: true, opacity: 0.9, depthWrite: false,
   }));
   galaxy.add(starField);
+
+  // ── 3b. Galactic Plane Backdrop ───────────────────────────────
+  // Wide, very faint warm disc sitting on the galactic plane.
+  // Carries orientation when the camera is too close to register
+  // the spiral structure but too far to see individual systems.
+  // Hairline radial gradient — bright at center, fades to zero by 14 kpc.
+  const planeTex = (() => {
+    const cv = document.createElement('canvas');
+    cv.width = 512; cv.height = 512;
+    const ctx = cv.getContext('2d')!;
+    const grad = ctx.createRadialGradient(256, 256, 0, 256, 256, 256);
+    grad.addColorStop(0.0, 'rgba(255,230,200,0.55)');
+    grad.addColorStop(0.15, 'rgba(255,220,180,0.30)');
+    grad.addColorStop(0.40, 'rgba(220,170,150,0.10)');
+    grad.addColorStop(0.75, 'rgba(120,80,140,0.03)');
+    grad.addColorStop(1.0, 'rgba(0,0,0,0)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, 512, 512);
+    return new CanvasTexture(cv);
+  })();
+  // CircleGeometry (not RingGeometry) — UVs map radially across the disc,
+  // so the texture's center→edge gradient lines up with the geometry.
+  const planeBackdrop = new Mesh(
+    new CircleGeometry(14 * KPC, 96),
+    new MeshBasicMaterial({
+      map: planeTex,
+      transparent: true,
+      blending: AdditiveBlending,
+      depthWrite: false,
+      side: DoubleSide,
+      opacity: 0.85,
+    }),
+  );
+  planeBackdrop.rotation.x = -Math.PI / 2;
+  // Slight negative y so it sits cleanly under the disc particles
+  planeBackdrop.position.y = -10;
+  galaxy.add(planeBackdrop);
 
   // ── 4. Core Glow ─────────────────────────────────────────────
 
