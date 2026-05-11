@@ -20,10 +20,11 @@ import {
   SphereGeometry, RingGeometry, CircleGeometry, BufferGeometry,
   MeshBasicMaterial, PointsMaterial, SpriteMaterial, ShaderMaterial,
   LineBasicMaterial,
-  Float32BufferAttribute, Vector3, DoubleSide, AdditiveBlending,
+  Float32BufferAttribute, Vector3, DoubleSide, AdditiveBlending, NormalBlending,
   CanvasTexture, Color,
 } from 'three';
 import { getStellarRender } from './planet-colors';
+import { galacticDiscVertexShader, galacticDiscFragmentShader } from './shaders/galactic-disc';
 
 // ── Scale Constants ──────────────────────────────────────────────
 
@@ -242,6 +243,7 @@ interface GalaxyLODState {
   starFieldMat: PointsMaterial | null;
   localArmMat: PointsMaterial | null;
   dustMat: PointsMaterial | null;
+  discMat: ShaderMaterial | null;       // continuous diffuse-disc shader
   nebulaMats: SpriteMaterial[];
 }
 
@@ -249,6 +251,7 @@ const GALAXY_LOD: GalaxyLODState = {
   starFieldMat: null,
   localArmMat: null,
   dustMat: null,
+  discMat: null,
   nebulaMats: [],
 };
 
@@ -349,6 +352,7 @@ export function createGalaxy(): Group {
   GALAXY_LOD.starFieldMat = null;
   GALAXY_LOD.localArmMat = null;
   GALAXY_LOD.dustMat = null;
+  GALAXY_LOD.discMat = null;
   GALAXY_LOD.nebulaMats.length = 0;
 
   const galaxy = new Group();
@@ -360,12 +364,17 @@ export function createGalaxy(): Group {
   const haloTex = makeStarHaloTexture();
   const chevronTex = makeChevronTexture();
 
-  // ── 1. Spiral Arm Particles (120K) ────────────────────────────
+  // ── 1. Foreground Stellar Sprinkle ────────────────────────────
+  // With the procedural disc shader providing the continuous diffuse
+  // structure, the particle field is no longer the dominant visual.
+  // It now plays the role of "individual resolvable stars" sitting on
+  // top of the diffuse background — sparse, small, mostly white pinpricks.
+  // Counts massively reduced from the original 158K → ~38K total.
 
   const ARMS = 4;
   const ARM_SPREAD = 0.5;
-  const ARM_COUNT = 120000;
-  const GAL_RADIUS = 15; // kpc
+  const ARM_COUNT = 25000;     // was 120000
+  const GAL_RADIUS = 15;       // kpc
 
   const armPts: number[] = [];
   const armCols: number[] = [];
@@ -385,21 +394,34 @@ export function createGalaxy(): Group {
     const z = r * Math.sin(theta) * KPC;
     armPts.push(x, y, z);
 
-    const dist = Math.sqrt(x * x + z * z);
-    const maxR = GAL_RADIUS * KPC;
-    const radialFade = dist / maxR;
-    const brightness = Math.max(0.08, 0.65 - radialFade * 0.55);
-    const warmth = Math.max(0, 0.4 - radialFade * 0.5);
-    armCols.push(
-      brightness + warmth * 0.35,
-      brightness + warmth * 0.12,
-      brightness - warmth * 0.05,
-    );
+    // Mostly white/cream with rare warm and rare blue. These are
+    // "individual stars" not "warm dust" — the dust is the shader's job.
+    const stellarRoll = Math.random();
+    let cr: number, cg: number, cb: number;
+    if (stellarRoll < 0.7) {
+      // White / cream — most stars
+      cr = 0.85 + Math.random() * 0.15;
+      cg = 0.82 + Math.random() * 0.13;
+      cb = 0.78 + Math.random() * 0.12;
+    } else if (stellarRoll < 0.9) {
+      // Warm K/M
+      cr = 0.95 + Math.random() * 0.05;
+      cg = 0.65 + Math.random() * 0.15;
+      cb = 0.40 + Math.random() * 0.20;
+    } else {
+      // Hot blue O/B
+      cr = 0.70 + Math.random() * 0.10;
+      cg = 0.80 + Math.random() * 0.10;
+      cb = 1.00;
+    }
+    armCols.push(cr, cg, cb);
   }
 
-  // ── 2. Galactic Bulge (20K) ───────────────────────────────────
+  // ── 2. Galactic Bulge Star Sprinkle (6K) ─────────────────────
+  // The bulge GLOW comes from the disc shader; these particles add
+  // the texture of resolvable individual stars over the warm core.
 
-  const BULGE_COUNT = 20000;
+  const BULGE_COUNT = 6000;
   for (let i = 0; i < BULGE_COUNT; i++) {
     const r = Math.pow(Math.random(), 0.65) * 2.5;
     const theta = Math.random() * Math.PI * 2;
@@ -408,26 +430,14 @@ export function createGalaxy(): Group {
     const y = r * Math.cos(phi) * KPC * 0.4;
     const z = r * Math.sin(phi) * Math.sin(theta) * KPC;
     armPts.push(x, y, z);
-    const b = 0.45 + Math.random() * 0.45;
-    armCols.push(b + 0.25, b + 0.1, b);
+    // Bulge stars: warmer, older
+    const b = 0.55 + Math.random() * 0.35;
+    armCols.push(b + 0.15, b + 0.08, b - 0.04);
   }
 
-  // ── 2b. Bright Inner Disk (10K) ──────────────────────────────
-  const INNER_DISK = 10000;
-  for (let i = 0; i < INNER_DISK; i++) {
-    const r = 2 + Math.random() * 4;
-    const theta = Math.random() * Math.PI * 2;
-    const height = (Math.random() - 0.5) * 0.08;
-    const x = r * Math.cos(theta) * KPC;
-    const y = height * KPC;
-    const z = r * Math.sin(theta) * KPC;
-    armPts.push(x, y, z);
-    const b = 0.5 + Math.random() * 0.4;
-    armCols.push(b + 0.2, b + 0.05, b - 0.08);
-  }
-
-  // ── 3. Halo Particles (8K) ────────────────────────────────────
-  const HALO_COUNT = 8000;
+  // ── 3. Halo Star Sprinkle (3K) ────────────────────────────────
+  // Sparse old population above/below the disc plane.
+  const HALO_COUNT = 3000;
   for (let i = 0; i < HALO_COUNT; i++) {
     const r = 1 + Math.random() * 18;
     const theta = Math.random() * Math.PI * 2;
@@ -436,8 +446,8 @@ export function createGalaxy(): Group {
     const y = r * Math.cos(phi) * KPC * 0.7;
     const z = r * Math.sin(phi) * Math.sin(theta) * KPC;
     armPts.push(x, y, z);
-    const b = 0.06 + Math.random() * 0.08;
-    armCols.push(b, b * 1.1, b * 1.2);
+    const b = 0.20 + Math.random() * 0.10;
+    armCols.push(b * 1.05, b, b * 0.92);
   }
 
   const galGeo = new BufferGeometry();
@@ -544,42 +554,43 @@ export function createGalaxy(): Group {
   galaxy.add(dustField);
   GALAXY_LOD.dustMat = dustMat;
 
-  // ── 3b. Galactic Plane Backdrop ───────────────────────────────
-  // Wide, very faint warm disc sitting on the galactic plane.
-  // Carries orientation when the camera is too close to register
-  // the spiral structure but too far to see individual systems.
-  // Hairline radial gradient — bright at center, fades to zero by 14 kpc.
-  const planeTex = (() => {
-    const cv = document.createElement('canvas');
-    cv.width = 512; cv.height = 512;
-    const ctx = cv.getContext('2d')!;
-    const grad = ctx.createRadialGradient(256, 256, 0, 256, 256, 256);
-    grad.addColorStop(0.0, 'rgba(255,230,200,0.55)');
-    grad.addColorStop(0.15, 'rgba(255,220,180,0.30)');
-    grad.addColorStop(0.40, 'rgba(220,170,150,0.10)');
-    grad.addColorStop(0.75, 'rgba(120,80,140,0.03)');
-    grad.addColorStop(1.0, 'rgba(0,0,0,0)');
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, 512, 512);
-    return new CanvasTexture(cv);
-  })();
-  // CircleGeometry (not RingGeometry) — UVs map radially across the disc,
-  // so the texture's center→edge gradient lines up with the geometry.
-  const planeBackdrop = new Mesh(
-    new CircleGeometry(14 * KPC, 96),
-    new MeshBasicMaterial({
-      map: planeTex,
-      transparent: true,
-      blending: AdditiveBlending,
-      depthWrite: false,
-      side: DoubleSide,
-      opacity: 0.85,
-    }),
+  // ── 3b. Procedural Galactic Disc (continuous diffuse) ─────────
+  // Replaces the previous radial-gradient backdrop. Custom shader
+  // (galactic-disc.ts) renders the disc as a warm sepia volume with
+  // logarithmic-spiral structure, FBM cloud variation, and DARK dust
+  // lanes that occlude the brightness (NormalBlending so dust can
+  // actually subtract, not just add light).
+  //
+  // ESA Gaia visualization reference: pale gold inner disc, brown
+  // dust filaments tracing the inner edge of each arm, soft yellow
+  // Gaussian bulge dominating the center.
+  const discMat = new ShaderMaterial({
+    vertexShader: galacticDiscVertexShader,
+    fragmentShader: galacticDiscFragmentShader,
+    transparent: true,
+    depthWrite: false,
+    side: DoubleSide,
+    blending: NormalBlending,
+    uniforms: {
+      uBulgeColor:   { value: new Color(0xfff0c8) },  // warm yellow-white
+      uArmColor:     { value: new Color(0xc9a988) },  // pale sepia
+      uDustColor:    { value: new Color(0x2a1612) },  // brown-black silhouette
+      uBulgeRadius:  { value: 0.22 },                 // bulge as fraction of disc radius
+      uArmTwist:     { value: 4.2 },                  // log-spiral tightness
+      uArmCount:     { value: 4.0 },
+      uDustStrength: { value: 0.85 },
+      uOpacity:      { value: 1.0 },
+      uTime:         { value: 0 },
+    },
+  });
+  const disc = new Mesh(
+    new CircleGeometry(15 * KPC, 256),
+    discMat,
   );
-  planeBackdrop.rotation.x = -Math.PI / 2;
-  // Slight negative y so it sits cleanly under the disc particles
-  planeBackdrop.position.y = -10;
-  galaxy.add(planeBackdrop);
+  disc.rotation.x = -Math.PI / 2;
+  disc.renderOrder = -1;   // render under particles & nebulae
+  galaxy.add(disc);
+  GALAXY_LOD.discMat = discMat;
 
   // ── 4. Core Glow ─────────────────────────────────────────────
 
