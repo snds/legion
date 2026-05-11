@@ -134,10 +134,10 @@ export function getZoomDomain(z: number): DomainName {
  *   orbit         6   →  25    parent + first moon(s) + stations/ships
  *   inner-system  25  →  120   star + inner rocky planets, full orbits
  *   outer-system  120 → 1000   outer planets, comets, Oort cloud
- *   heliopause    1000→ 6000   system bubble + 2-3 nearest neighbors
- *   sector        6000→ 12000  local-arm patch, ~10-12 navigable neighbors
- *   arm           12000→24000  full Orion Spur extents
- *   galaxy        24000→48000  full Milky Way disc
+ *   heliopause    1000→ 2800   system bubble + 2-3 nearest neighbors
+ *   sector        2800→ 5500   local-arm patch with sensor-bubble visual
+ *   arm           5500→ 9500   immersed inside the Orion Spur particles
+ *   galaxy        9500→ 16000  full Milky Way disc edge-to-edge in viewport
  *
  * Each segment is linear in z; the curve is C0-continuous at every
  * breakpoint, which keeps the zoom feel smooth across tier boundaries.
@@ -152,10 +152,10 @@ export function getCamDist(z: number): number {
   if (z < T_ORBIT)     return lerpDist(T_LOW_ORBIT,   T_ORBIT,      6.0,    25);
   if (z < T_INNER_SYS) return lerpDist(T_ORBIT,       T_INNER_SYS,  25,     120);
   if (z < T_OUTER_SYS) return lerpDist(T_INNER_SYS,   T_OUTER_SYS,  120,    1000);
-  if (z < T_HELIO)     return lerpDist(T_OUTER_SYS,   T_HELIO,      1000,   6000);
-  if (z < T_SECTOR)    return lerpDist(T_HELIO,       T_SECTOR,     6000,   12000);
-  if (z < T_ARM)       return lerpDist(T_SECTOR,      T_ARM,        12000,  24000);
-  return lerpDist(T_ARM, 1.0, 24000, 48000);
+  if (z < T_HELIO)     return lerpDist(T_OUTER_SYS,   T_HELIO,      1000,   2800);
+  if (z < T_SECTOR)    return lerpDist(T_HELIO,       T_SECTOR,     2800,   5500);
+  if (z < T_ARM)       return lerpDist(T_SECTOR,      T_ARM,        5500,   9500);
+  return lerpDist(T_ARM, 1.0, 9500, 16000);
 }
 
 // ── State Shape ──────────────────────────────────────────────────

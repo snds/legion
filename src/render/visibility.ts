@@ -14,6 +14,7 @@ import { Events } from '../core/events';
 import { Notifications } from '../ui/notifications';
 import type { LayerGroups } from './scene';
 import type { Group, Points, PointsMaterial } from 'three';
+import { getGalaxyOffset } from './galaxy';
 import {
   meshFull_iconOn, meshFading, iconOnly, hideIcons,
 } from './icon-system';
@@ -27,6 +28,7 @@ interface VisibilityTargets {
   eclipticGrid: Group | null;
   oortCloud: Group | null;
   galaxyArms: Group | null;
+  sectorOrb: Group | null;
 }
 
 let targets: VisibilityTargets | null = null;
@@ -36,7 +38,7 @@ let lastDomain: DomainName | null = null;
 
 function applyDomain(domain: DomainName): void {
   if (!targets) return;
-  const { layers, eclipticGrid, oortCloud, galaxyArms } = targets;
+  const { layers, eclipticGrid, oortCloud, galaxyArms, sectorOrb } = targets;
 
   // Defaults: everything off, then selectively enable
   layers.local.visible = false;
@@ -45,6 +47,7 @@ function applyDomain(domain: DomainName): void {
   if (eclipticGrid) eclipticGrid.visible = false;
   if (oortCloud) oortCloud.visible = false;
   if (galaxyArms) galaxyArms.visible = false;
+  if (sectorOrb) sectorOrb.visible = false;
 
   // Background always visible but opacity changes per tier
   layers.background.visible = true;
@@ -91,26 +94,36 @@ function applyDomain(domain: DomainName): void {
       break;
 
     case 'sector':
-      // ~10-12 nearby systems within the local arm patch. Local fades
-      // to nothing here; regional is the primary readable layer.
+      // ~10-12 nearby systems within the local arm patch + tactical
+      // sensor bubble (volumetric orb) showing the sector boundary.
       layers.local.visible = true;
       layers.regional.visible = true;
+      if (sectorOrb) sectorOrb.visible = true;
       setBackgroundOpacity(0.5, 0.12);
       break;
 
     case 'arm':
-      // Orion Spur extents. Regional + galactic both visible (crossover).
+      // Immersed inside the Orion Spur — galactic particles dominate
+      // the field of view, regional system markers float as nav targets.
+      // Camera distance now sits within the disc particle volume.
       layers.regional.visible = true;
       layers.galactic.visible = true;
       if (galaxyArms) galaxyArms.visible = true;
-      setBackgroundOpacity(0.15, 0.04);
+      setBackgroundOpacity(0.20, 0.06);
       break;
 
     case 'galaxy':
-      // Full Milky Way disc — only the galactic particle field remains.
+      // Full Milky Way disc. Recenter focus on Sgr A* so the disc fits
+      // the viewport symmetrically; the user can still scroll back to
+      // approach the home system. (focus-on event clears any active
+      // object tracking — explicit position wins.)
       layers.galactic.visible = true;
       if (galaxyArms) galaxyArms.visible = true;
       setBackgroundOpacity(0.08, 0.02);
+      {
+        const sgr = getGalaxyOffset();
+        Events.emit('camera:focus-on', { x: sgr.x, y: sgr.y, z: sgr.z });
+      }
       break;
   }
 }
@@ -156,8 +169,9 @@ export function initVisibility(
   eclipticGrid: Group | null,
   oortCloud: Group | null,
   galaxyArms: Group | null,
+  sectorOrb: Group | null = null,
 ): void {
-  targets = { layers, eclipticGrid, oortCloud, galaxyArms };
+  targets = { layers, eclipticGrid, oortCloud, galaxyArms, sectorOrb };
   lastDomain = null;
 
   // Wire overlay toggle notification

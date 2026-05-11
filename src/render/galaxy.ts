@@ -19,6 +19,7 @@ import {
   Group, Mesh, Points, Line, Sprite,
   SphereGeometry, RingGeometry, CircleGeometry, BufferGeometry,
   MeshBasicMaterial, PointsMaterial, SpriteMaterial, ShaderMaterial,
+  LineBasicMaterial,
   Float32BufferAttribute, Vector3, DoubleSide, AdditiveBlending,
   CanvasTexture, Color,
 } from 'three';
@@ -810,6 +811,105 @@ export function createGalaxy(): Group {
   galaxy.add(reticule);
 
   return galaxy;
+}
+
+// ── Sector Volumetric Orb (Homeworld-style sensor bubble) ────────
+//
+// Translucent sphere centered on the home system showing the player's
+// known navigable "sector." Fresnel-rimmed inner volume + cardinal
+// latitude/longitude wireframes for spatial reference. Visible only
+// at the sector zoom tier.
+//
+// Default radius (8000 WU on the regional scale) covers roughly the
+// nearest 10-12 navigable systems out of STAR_SYSTEMS.
+
+const SECTOR_ORB_VERT = /* glsl */ `
+  varying vec3 vNormal;
+  varying vec3 vView;
+  void main() {
+    vNormal = normalize(normalMatrix * normal);
+    vec4 mv = modelViewMatrix * vec4(position, 1.0);
+    vView = normalize(-mv.xyz);
+    gl_Position = projectionMatrix * mv;
+  }
+`;
+
+const SECTOR_ORB_FRAG = /* glsl */ `
+  uniform vec3 uColor;
+  uniform vec3 uRimColor;
+  uniform float uOpacity;
+  uniform float uRimPower;
+  varying vec3 vNormal;
+  varying vec3 vView;
+  void main() {
+    float ndv = abs(dot(normalize(vNormal), normalize(vView)));
+    float rim = pow(1.0 - ndv, uRimPower);
+    vec3 color = mix(uColor, uRimColor, rim);
+    float alpha = (rim * 0.85 + 0.05) * uOpacity;
+    gl_FragColor = vec4(color, alpha);
+  }
+`;
+
+export function createSectorOrb(radius = 8000): Group {
+  const orb = new Group();
+  orb.name = 'sector-orb';
+
+  // Inner volumetric shell — fresnel-rimmed, additive, faint everywhere
+  // and slightly more present at the silhouette/limb.
+  const innerMat = new ShaderMaterial({
+    transparent: true,
+    side: DoubleSide,
+    blending: AdditiveBlending,
+    depthWrite: false,
+    uniforms: {
+      uColor:    { value: new Color(0x1c4080) },
+      uRimColor: { value: new Color(0x4488ff) },
+      uOpacity:  { value: 0.55 },
+      uRimPower: { value: 2.2 },
+    },
+    vertexShader: SECTOR_ORB_VERT,
+    fragmentShader: SECTOR_ORB_FRAG,
+  });
+  orb.add(new Mesh(new SphereGeometry(radius, 64, 32), innerMat));
+
+  // Outer thin shell — slightly larger, only the limb is visible, sells
+  // the "sensor boundary" edge.
+  const outerMat = new ShaderMaterial({
+    transparent: true,
+    side: DoubleSide,
+    blending: AdditiveBlending,
+    depthWrite: false,
+    uniforms: {
+      uColor:    { value: new Color(0x2a5cb8) },
+      uRimColor: { value: new Color(0x88bbff) },
+      uOpacity:  { value: 0.35 },
+      uRimPower: { value: 3.5 },
+    },
+    vertexShader: SECTOR_ORB_VERT,
+    fragmentShader: SECTOR_ORB_FRAG,
+  });
+  orb.add(new Mesh(new SphereGeometry(radius * 1.015, 64, 32), outerMat));
+
+  // Wireframe cardinals — equator + two perpendicular meridians.
+  // Cheap visual anchors so the orb reads as a measured volume.
+  const lineMat = new LineBasicMaterial({
+    color: 0x5588dd, transparent: true, opacity: 0.35, depthWrite: false,
+  });
+  const SEG = 128;
+  const equator: Vector3[] = [];
+  const merX: Vector3[] = [];
+  const merZ: Vector3[] = [];
+  for (let i = 0; i <= SEG; i++) {
+    const a = (i / SEG) * Math.PI * 2;
+    equator.push(new Vector3(Math.cos(a) * radius, 0, Math.sin(a) * radius));
+    merX.push(new Vector3(Math.cos(a) * radius, Math.sin(a) * radius, 0));
+    merZ.push(new Vector3(0, Math.sin(a) * radius, Math.cos(a) * radius));
+  }
+  orb.add(new Line(new BufferGeometry().setFromPoints(equator), lineMat));
+  orb.add(new Line(new BufferGeometry().setFromPoints(merX), lineMat));
+  orb.add(new Line(new BufferGeometry().setFromPoints(merZ), lineMat));
+
+  return orb;
 }
 
 // ── Offset Helper ────────────────────────────────────────────────

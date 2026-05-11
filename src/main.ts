@@ -66,7 +66,7 @@ import {
   createEclipticGrid,
   STATION_DATA, COMET_DATA, type StationConfig,
 } from './render/scene-objects';
-import { createGalaxy, getGalaxyOffset, updateGalaxyAnimations } from './render/galaxy';
+import { createGalaxy, getGalaxyOffset, updateGalaxyAnimations, createSectorOrb } from './render/galaxy';
 import { createPostProcessing, type PostProcessingContext } from './render/post-processing';
 import { createLensFlare, type LensFlareSystem } from './render/lens-flare';
 import { Debug } from './debug/debug-overlay';
@@ -229,6 +229,7 @@ async function boot(): Promise<void> {
     worldExtras.eclipticGrid,
     worldExtras.oortCloud,
     worldExtras.galaxyArms,
+    worldExtras.sectorOrb,
   );
 
   // ── 9. Star Graph ──
@@ -359,6 +360,7 @@ interface WorldExtras {
   eclipticGrid: import('three').Group;
   oortCloud: import('three').Group;
   galaxyArms: import('three').Group;
+  sectorOrb: import('three').Group;
   bobEids: number[];
 }
 
@@ -504,7 +506,13 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol'): WorldExtras {
   galaxyGroup.position.copy(getGalaxyOffset());
   scene.add(galaxyGroup);
 
-  return { eclipticGrid, oortCloud, galaxyArms: galaxyGroup, bobEids };
+  // ── Sector orb (Homeworld-style sensor bubble, visible at sector tier) ──
+  // Sits at the home origin in scene space; visibility system shows/hides
+  // it per zoom domain.
+  const sectorOrb = createSectorOrb(8000);
+  scene.add(sectorOrb);
+
+  return { eclipticGrid, oortCloud, galaxyArms: galaxyGroup, sectorOrb, bobEids };
 }
 
 // ── Start ────────────────────────────────────────────────────────
