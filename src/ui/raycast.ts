@@ -112,8 +112,11 @@ export function initRaycast(
 
     const hit = getHit(e.clientX, e.clientY);
     if (hit) {
-      // Select entity and open panel
-      Game.selectEntity(0, hit.data as unknown as Record<string, unknown>);
+      // Pull the real ECS eid out of userData (set by registerRenderObject).
+      // Non-ECS objects (stations, galactic markers, alien civs, transit
+      // chevrons, Sgr A*) have no eid — fall through to 0 as placeholder.
+      const eid = (hit.data as Record<string, unknown>).eid as number | undefined ?? 0;
+      Game.selectEntity(eid, hit.data as unknown as Record<string, unknown>);
       SelectionPanels.open(hit.data);
     } else {
       // Click on empty space — deselect
@@ -123,15 +126,17 @@ export function initRaycast(
   });
 
   // ── Double-Click → Focus Camera on Object ──
+  // Snap the camera onto the hit object AND lock the camera into "tracking"
+  // mode so it follows the object on subsequent frames (works for both
+  // moving ECS bodies — planets, bobs in flight — and static markers).
   canvas.addEventListener('dblclick', (e: MouseEvent) => {
     const hit = getHit(e.clientX, e.clientY);
     if (hit) {
-      // Get the world position of the hit object
       hit.object.getWorldPosition(worldPos);
-      // Emit focus event so camera controller picks it up
       Events.emit('camera:focus-on', { x: worldPos.x, y: worldPos.y, z: worldPos.z });
-      // Also select it
-      Game.selectEntity(0, hit.data as unknown as Record<string, unknown>);
+      Events.emit('camera:focus-object', { obj: hit.object });
+      const eid = (hit.data as Record<string, unknown>).eid as number | undefined ?? 0;
+      Game.selectEntity(eid, hit.data as unknown as Record<string, unknown>);
       SelectionPanels.open(hit.data);
     }
   });

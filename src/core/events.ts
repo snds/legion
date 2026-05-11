@@ -34,6 +34,7 @@ export interface EventMap {
   'camera:zoom-changed':    { level: number; domain: string; distance: number };
   'camera:focus-changed':   { targetEid: number | null };
   'camera:focus-on':        { x: number; y: number; z: number };
+  'camera:focus-object':    { obj: import('three').Object3D };
   'camera:focus-bob':       Record<string, never>;
 
   // Selection events

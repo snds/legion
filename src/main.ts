@@ -154,9 +154,15 @@ async function boot(): Promise<void> {
   const input = new InputManager(renderCtx.canvas);
 
   // ── 4b. Camera Events ──
-  // Double-click focus: raycast emits 'camera:focus-on', camera controller picks it up
+  // Single-shot focus to a world position (clears any active tracking)
   Events.on('camera:focus-on', (pos: { x: number; y: number; z: number }) => {
     camCtrl.focusOn(pos.x, pos.y, pos.z);
+  });
+  // Lock camera to follow an Object3D — used by dblclick handler so the
+  // camera tracks moving planets, bobs in flight, etc. Works for static
+  // objects too (galactic markers, stations) — just keeps focus centered.
+  Events.on('camera:focus-object', (data: { obj: import('three').Object3D }) => {
+    camCtrl.trackObject(data.obj);
   });
 
   // ── 5. UI Systems ──
@@ -245,7 +251,6 @@ async function boot(): Promise<void> {
 
   // ── Game Loop ──
   const starOrigin = new Vector3(0, 0, 0); // Star is always at origin
-  const _trackPos = new Vector3(); // reused for per-frame tracking
   let lastTime = performance.now();
   let elapsedTime = 0;
 
@@ -294,15 +299,9 @@ async function boot(): Promise<void> {
     // 5. Steering
     updateSteering(dt, tc);
 
-    // 5b. Track selected entity — continuously update camFocusTarget
-    // from the selected object's world position (monolithic behavior)
-    if (Game.data.selectedEntity !== null) {
-      const mesh = renderObjectMap.get(Game.data.selectedEntity);
-      if (mesh) {
-        mesh.getWorldPosition(_trackPos);
-        Game.data.camFocusTarget = { x: _trackPos.x, y: _trackPos.y, z: _trackPos.z };
-      }
-    }
+    // 5b. (Removed — camera now tracks via CameraController.trackedObject
+    //      driven by 'camera:focus-object'. Single-click selection no
+    //      longer hijacks the camera; only double-click triggers focus.)
 
     // 6. Camera
     camCtrl.update(dt);

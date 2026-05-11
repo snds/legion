@@ -10,7 +10,7 @@
 // Just flat lerps every frame — smooth and predictable.
 // ═══════════════════════════════════════════════════════════════════
 
-import { PerspectiveCamera } from 'three';
+import { PerspectiveCamera, Vector3, type Object3D } from 'three';
 import { Game, getCamDist } from './state';
 import { Events } from './events';
 import { setIconFov } from '../render/icon-system';
@@ -60,31 +60,59 @@ export class CameraController {
   private focus = { x: 0, y: 0, z: 0 };
 
   // ── Tracking State ──
-  private trackingEid: number | null = null;
+  // When set, the update loop reads this object's world position each
+  // frame and feeds it into camFocusTarget. Lets the camera follow
+  // moving objects (planets, bobs in flight) or stay locked on static
+  // objects (stations, galactic markers) regardless of scene-graph
+  // transforms above them.
+  private trackedObject: Object3D | null = null;
+  private readonly _trackPos = new Vector3();
 
   constructor(cam: PerspectiveCamera) {
     this.cam = cam;
 
-    // Listen for entity selection to enable tracking
-    Events.on('select:entity', (data: { eid: number; type: number }) => {
-      this.trackingEid = data.eid;
-    });
-
+    // Stop tracking on deselect / Escape so the camera doesn't keep
+    // chasing the previous focus after the user dismisses it.
     Events.on('select:clear', () => {
-      this.trackingEid = null;
+      this.trackedObject = null;
     });
   }
 
   /**
    * Set camFocusTarget directly — no transition animation.
    * The per-frame lerp (0.05) provides all the smoothing needed.
+   * Clears any active object tracking — explicit position wins.
    */
   focusOn(x: number, y: number, z: number): void {
+    this.trackedObject = null;
     Game.data.camFocusTarget = { x, y, z };
+  }
+
+  /**
+   * Lock the camera onto an Object3D — its world position becomes the
+   * focus target every frame. Use for "double-click to follow object."
+   * Pass null to release.
+   */
+  trackObject(obj: Object3D | null): void {
+    this.trackedObject = obj;
+    if (obj) {
+      // Seed the focus target immediately so the first frame doesn't
+      // lurch from wherever the camera previously was.
+      obj.getWorldPosition(this._trackPos);
+      Game.data.camFocusTarget = { x: this._trackPos.x, y: this._trackPos.y, z: this._trackPos.z };
+    }
   }
 
   update(_dt: number): void {
     const data = Game.data;
+
+    // ── Tracking ──
+    // If the camera is locked onto an object, refresh focus target from
+    // its current world position before the focus lerp runs.
+    if (this.trackedObject) {
+      this.trackedObject.getWorldPosition(this._trackPos);
+      data.camFocusTarget = { x: this._trackPos.x, y: this._trackPos.y, z: this._trackPos.z };
+    }
 
     // ── Orbit Angle Interpolation (lerp 0.1) ──
     this.theta += (data.targetTheta - this.theta) * ORBIT_LERP;
