@@ -64,7 +64,12 @@ export function createLensFlare(postCtx: PostProcessingContext): LensFlareSystem
 
     // Only active in local/solar system view
     const domain = Game.data.zoomDomain;
-    if (domain !== 'surface' && domain !== 'system' && domain !== 'heliopause') {
+    // Lens flare reads at any tier where the local star is a real body in
+    // the scene. At sector+ the star becomes an icon and a flare is meaningless.
+    const isStarVisible =
+      domain === 'surface' || domain === 'low-orbit' || domain === 'orbit' ||
+      domain === 'inner-system' || domain === 'outer-system' || domain === 'heliopause';
+    if (!isStarVisible) {
       currentIntensity = 0;
       (pass.material as ShaderMaterial).uniforms.uIntensity.value = 0;
       return;

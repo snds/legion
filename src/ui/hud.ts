@@ -26,12 +26,15 @@ let lastDomain: DomainName | null = null;
 // ── Formatting ───────────────────────────────────────────────────
 
 const DOMAIN_LABELS: Record<DomainName, string> = {
-  surface: 'SURFACE',
-  system: 'SYSTEM',
-  heliopause: 'HELIOPAUSE',
-  sector: 'SECTOR',
-  arm: 'ARM',
-  galaxy: 'GALAXY',
+  'surface':       'SURFACE',
+  'low-orbit':     'LOW ORBIT',
+  'orbit':         'ORBIT',
+  'inner-system':  'INNER SYSTEM',
+  'outer-system':  'OUTER SYSTEM',
+  'heliopause':    'HELIOPAUSE',
+  'sector':        'SECTOR',
+  'arm':           'ARM',
+  'galaxy':        'GALAXY',
 };
 
 /**
@@ -88,7 +91,10 @@ function getDomainStatus(domain: DomainName): DomainStatus {
     case 'sector':
       return { bobLabel: `BOBS: ${totalBobs}`, fleetLabel: '1 KNOWN' };
     case 'heliopause':
-    case 'system':
+    case 'outer-system':
+    case 'inner-system':
+    case 'orbit':
+    case 'low-orbit':
     case 'surface':
     default:
       return { bobLabel: `BOBS: ${localBobs}`, fleetLabel: 'ε ERI SYSTEM' };

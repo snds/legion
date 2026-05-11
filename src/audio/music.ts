@@ -208,19 +208,24 @@ class MusicEngine {
 
   private subscribeToEvents(): void {
     Events.on('camera:zoom-changed', ({ domain }) => {
+      // Map the nine zoom tiers onto the four music zones. Coarse mapping
+      // keeps musical transitions clean even with finer camera control.
       switch (domain) {
-        case 'GALACTIC':
-        case 'REGIONAL':
+        case 'galaxy':
+        case 'arm':
           this.setZoomLayer(ZoomLayer.Galaxy);
           break;
-        case 'DEEP':
-        case 'SYSTEM':
+        case 'sector':
+        case 'heliopause':
           this.setZoomLayer(ZoomLayer.System);
           break;
-        case 'ORBITAL':
+        case 'outer-system':
+        case 'inner-system':
+        case 'orbit':
           this.setZoomLayer(ZoomLayer.Planet);
           break;
-        case 'SURFACE':
+        case 'low-orbit':
+        case 'surface':
           this.setZoomLayer(ZoomLayer.Surface);
           break;
       }

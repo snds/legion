@@ -18,13 +18,28 @@ export interface ZoomStep {
   val: number;       // position on 0–1 scale
 }
 
+// Nine named zoom tiers — refined from the prototype's six.
+// The middle four ('low-orbit', 'orbit', 'inner-system', 'outer-system')
+// split the old monolithic 'system' tier so the player can frame:
+//   surface       — top-down high-altitude over a single planet
+//   low-orbit     — satellite POV, atmosphere visible between camera and surface
+//   orbit         — out past the first natural satellite; ship/station workspace
+//   inner-system  — star + primary rocky planets, their full orbits
+//   outer-system  — outer planets, comets, Oort cloud
+//   heliopause    — system bubble + the 2-3 nearest navigable systems
+//   sector        — local-arm patch, ~10-12 navigable neighbors
+//   arm           — full extent of the Orion Spur / local galactic arm
+//   galaxy        — the whole Milky Way at the bounds of the image
 export const ZOOM_STEPS: ZoomStep[] = [
-  { label: 'SURFACE',    val: 0.03 },
-  { label: 'SYSTEM',     val: 0.15 },
-  { label: 'HELIOPAUSE', val: 0.33 },
-  { label: 'SECTOR',     val: 0.52 },
-  { label: 'ARM',        val: 0.75 },
-  { label: 'GALAXY',     val: 0.95 },
+  { label: 'SURFACE',       val: 0.03  },
+  { label: 'LOW ORBIT',     val: 0.085 },
+  { label: 'ORBIT',         val: 0.155 },
+  { label: 'INNER SYSTEM',  val: 0.260 },
+  { label: 'OUTER SYSTEM',  val: 0.390 },
+  { label: 'HELIOPAUSE',    val: 0.530 },
+  { label: 'SECTOR',        val: 0.670 },
+  { label: 'ARM',           val: 0.810 },
+  { label: 'GALAXY',        val: 0.940 },
 ];
 
 // ── Time Speed Definitions ───────────────────────────────────────
@@ -62,7 +77,10 @@ export const GALACTIC_TIME_SPEEDS: TimeSpeed[] = [
 
 /** Returns the active time speed table based on current zoom domain. */
 export function getActiveTimeSpeeds(): TimeSpeed[] {
-  return Game.data.zoomDomain === 'galaxy' ? GALACTIC_TIME_SPEEDS : LOCAL_TIME_SPEEDS;
+  const d = Game.data.zoomDomain;
+  // Wide-area views (arm, galaxy) unlock the full galactic compression table
+  // so the player can fast-forward through interstellar transits.
+  return (d === 'galaxy' || d === 'arm') ? GALACTIC_TIME_SPEEDS : LOCAL_TIME_SPEEDS;
 }
 
 // Legacy alias — some modules still import TIME_SPEEDS directly
@@ -71,28 +89,73 @@ export const TIME_SPEEDS = GALACTIC_TIME_SPEEDS;
 // ── Domain Detection ─────────────────────────────────────────────
 // Derives domain name from zoom level (0–1).
 
-export type DomainName = 'surface' | 'system' | 'heliopause' | 'sector' | 'arm' | 'galaxy';
+export type DomainName =
+  | 'surface'
+  | 'low-orbit'
+  | 'orbit'
+  | 'inner-system'
+  | 'outer-system'
+  | 'heliopause'
+  | 'sector'
+  | 'arm'
+  | 'galaxy';
+
+// Tier breakpoints on the 0..1 zoom axis. Picked so each named tier
+// occupies a comfortable slice of the wheel and the hotkey snaps in
+// ZOOM_STEPS land roughly in the middle of each tier.
+const T_SURFACE   = 0.06;
+const T_LOW_ORBIT = 0.11;
+const T_ORBIT     = 0.21;
+const T_INNER_SYS = 0.32;
+const T_OUTER_SYS = 0.46;
+const T_HELIO     = 0.60;
+const T_SECTOR    = 0.74;
+const T_ARM       = 0.88;
 
 export function getZoomDomain(z: number): DomainName {
-  if (z < 0.08) return 'surface';
-  if (z < 0.22) return 'system';
-  if (z < 0.40) return 'heliopause';
-  if (z < 0.60) return 'sector';
-  if (z < 0.82) return 'arm';
+  if (z < T_SURFACE)   return 'surface';
+  if (z < T_LOW_ORBIT) return 'low-orbit';
+  if (z < T_ORBIT)     return 'orbit';
+  if (z < T_INNER_SYS) return 'inner-system';
+  if (z < T_OUTER_SYS) return 'outer-system';
+  if (z < T_HELIO)     return 'heliopause';
+  if (z < T_SECTOR)    return 'sector';
+  if (z < T_ARM)       return 'arm';
   return 'galaxy';
 }
 
 /**
- * Piecewise camera distance curve.
- * Each tier has its own distance range for natural zoom feel.
+ * Piecewise camera distance curve in world units.
+ * Distances are chosen so an Earth-analog planet (radius ~0.3 WU,
+ * first moon at ~1.9 WU) sits naturally framed in each tier with FOV 32–72.
+ *
+ *   surface       0.6 →  2.5   high-altitude top-down on a planet
+ *   low-orbit     2.5 →  6     satellite altitude, clouds in foreground
+ *   orbit         6   →  25    parent + first moon(s) + stations/ships
+ *   inner-system  25  →  120   star + inner rocky planets, full orbits
+ *   outer-system  120 → 1000   outer planets, comets, Oort cloud
+ *   heliopause    1000→ 6000   system bubble + 2-3 nearest neighbors
+ *   sector        6000→ 12000  local-arm patch, ~10-12 navigable neighbors
+ *   arm           12000→24000  full Orion Spur extents
+ *   galaxy        24000→48000  full Milky Way disc
+ *
+ * Each segment is linear in z; the curve is C0-continuous at every
+ * breakpoint, which keeps the zoom feel smooth across tier boundaries.
  */
 export function getCamDist(z: number): number {
-  if (z < 0.08) return 5 + z * 150;             // surface: 5–17
-  if (z < 0.22) return 17 + (z - 0.08) * 2800;  // system: 17–409
-  if (z < 0.40) return 409 + (z - 0.22) * 5500;  // heliopause: 409–1399
-  if (z < 0.60) return 1399 + (z - 0.40) * 9000;  // sector: 1399–3199
-  if (z < 0.82) return 3199 + (z - 0.60) * 18000; // arm: 3199–7159
-  return 7159 + (z - 0.82) * 30000;               // galaxy: 7159–12559
+  // Helper: linear interp between (z0,d0)→(z1,d1)
+  const lerpDist = (z0: number, z1: number, d0: number, d1: number): number =>
+    d0 + (z - z0) / (z1 - z0) * (d1 - d0);
+
+  if (z < T_SURFACE)   return lerpDist(0,             T_SURFACE,    0.6,    2.5);
+  if (z < T_LOW_ORBIT) return lerpDist(T_SURFACE,     T_LOW_ORBIT,  2.5,    6.0);
+  if (z < T_ORBIT)     return lerpDist(T_LOW_ORBIT,   T_ORBIT,      6.0,    25);
+  if (z < T_INNER_SYS) return lerpDist(T_ORBIT,       T_INNER_SYS,  25,     120);
+  if (z < T_OUTER_SYS) return lerpDist(T_INNER_SYS,   T_OUTER_SYS,  120,    1000);
+  if (z < T_HELIO)     return lerpDist(T_OUTER_SYS,   T_HELIO,      1000,   6000);
+  if (z < T_SECTOR)    return lerpDist(T_HELIO,       T_SECTOR,     6000,   12000);
+  if (z < T_ARM)       return lerpDist(T_SECTOR,      T_ARM,        12000,  24000);
+  return lerpDist(T_ARM, 1.0, 24000, 48000);
 }
 
 // ── State Shape ──────────────────────────────────────────────────
@@ -139,10 +202,10 @@ class GameState {
     paused: false,
     _lastSpeed: 4,
 
-    zoomLevel: 0.25,
-    targetZoom: 0.25,
-    camDist: getCamDist(0.25),
-    zoomDomain: 'system',
+    zoomLevel: 0.26,
+    targetZoom: 0.26,
+    camDist: getCamDist(0.26),
+    zoomDomain: 'inner-system',
     camFocusTarget: null,
 
     selectedEntity: null,
@@ -215,9 +278,10 @@ class GameState {
       const prevDomain = this.data.zoomDomain;
       this.data.zoomDomain = domain;
 
-      // Clamp time speed when switching between galactic and non-galactic
-      const wasGalactic = prevDomain === 'galaxy';
-      const isGalactic = domain === 'galaxy';
+      // Clamp time speed when switching between galactic and non-galactic.
+      // "Galactic" now includes arm view (matches getActiveTimeSpeeds).
+      const wasGalactic = prevDomain === 'galaxy' || prevDomain === 'arm';
+      const isGalactic = domain === 'galaxy' || domain === 'arm';
       if (wasGalactic !== isGalactic) {
         this.clampSpeedForDomain();
       }

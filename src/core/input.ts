@@ -139,13 +139,18 @@ export class InputManager {
         });
         break;
 
-      // Direct zoom tier hotkeys
+      // Direct zoom tier hotkeys — 1..9 map to the 9 named tiers:
+      // 1 SURFACE · 2 LOW ORBIT · 3 ORBIT · 4 INNER SYSTEM · 5 OUTER SYSTEM
+      // 6 HELIOPAUSE · 7 SECTOR · 8 ARM · 9 GALAXY
       case '1': Game.data.targetZoom = ZOOM_STEPS[0].val; break;
       case '2': Game.data.targetZoom = ZOOM_STEPS[1].val; break;
       case '3': Game.data.targetZoom = ZOOM_STEPS[2].val; break;
       case '4': Game.data.targetZoom = ZOOM_STEPS[3].val; break;
       case '5': Game.data.targetZoom = ZOOM_STEPS[4].val; break;
       case '6': Game.data.targetZoom = ZOOM_STEPS[5].val; break;
+      case '7': Game.data.targetZoom = ZOOM_STEPS[6].val; break;
+      case '8': Game.data.targetZoom = ZOOM_STEPS[7].val; break;
+      case '9': Game.data.targetZoom = ZOOM_STEPS[8].val; break;
     }
   }
 

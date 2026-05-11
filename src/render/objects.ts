@@ -398,7 +398,9 @@ export function updatePlanetShaders(
 
   // At surface/system zoom, determine which planet (if any) the camera is focused on.
   // The focused planet stays visible; all others get angular-size culling.
-  const isCloseZoom = zoomDomain === 'surface' || zoomDomain === 'system';
+  const isCloseZoom =
+    zoomDomain === 'surface' || zoomDomain === 'low-orbit' ||
+    zoomDomain === 'orbit' || zoomDomain === 'inner-system';
   let focusedEntry: PlanetMaterialEntry | null = null;
   if (focusTarget && cameraPosition && isCloseZoom) {
     let bestDistSq = Infinity;

@@ -51,42 +51,65 @@ function applyDomain(domain: DomainName): void {
 
   switch (domain) {
     case 'surface':
+    case 'low-orbit':
+      // Planet-scale views: local layer only, no overlays/grids.
+      // Background starfield stays full so the sky reads correctly.
       layers.local.visible = true;
       setBackgroundOpacity(0.85, 0.25);
       break;
 
-    case 'system':
+    case 'orbit':
+      // Out past the first moon — show local objects (stations, ships,
+      // moons) but no ecliptic grid yet (it's distracting at this scale).
+      layers.local.visible = true;
+      setBackgroundOpacity(0.85, 0.25);
+      break;
+
+    case 'inner-system':
+      // Star + inner planets + their full orbital paths. Ecliptic grid
+      // is meaningful here for orientation across multiple orbits.
       layers.local.visible = true;
       if (eclipticGrid) eclipticGrid.visible = true;
       setBackgroundOpacity(0.85, 0.25);
+      break;
+
+    case 'outer-system':
+      // Everything in the system — primary planets, comets, Oort cloud.
+      layers.local.visible = true;
+      if (eclipticGrid) eclipticGrid.visible = true;
+      if (oortCloud) oortCloud.visible = true;
+      setBackgroundOpacity(0.85, 0.20);
       break;
 
     case 'heliopause':
+      // System bubble + the 2-3 nearest navigable neighbors. Both local
+      // and regional shown; per-marker proximity ramping handled below.
       layers.local.visible = true;
-      if (eclipticGrid) eclipticGrid.visible = true;
+      layers.regional.visible = true;
       if (oortCloud) oortCloud.visible = true;
-      setBackgroundOpacity(0.85, 0.25);
+      setBackgroundOpacity(0.7, 0.18);
       break;
 
     case 'sector':
+      // ~10-12 nearby systems within the local arm patch. Local fades
+      // to nothing here; regional is the primary readable layer.
       layers.local.visible = true;
       layers.regional.visible = true;
-      if (oortCloud) oortCloud.visible = true;
-      setBackgroundOpacity(0.6, 0.15);
+      setBackgroundOpacity(0.5, 0.12);
       break;
 
     case 'arm':
+      // Orion Spur extents. Regional + galactic both visible (crossover).
       layers.regional.visible = true;
       layers.galactic.visible = true;
       if (galaxyArms) galaxyArms.visible = true;
-      // Dim background stars so galaxy particles dominate
       setBackgroundOpacity(0.15, 0.04);
       break;
 
     case 'galaxy':
+      // Full Milky Way disc — only the galactic particle field remains.
       layers.galactic.visible = true;
       if (galaxyArms) galaxyArms.visible = true;
-      // Very dim — galaxy provides all the visual density now
       setBackgroundOpacity(0.08, 0.02);
       break;
   }
@@ -114,11 +137,15 @@ function applyOverlay(overlayOn: boolean, domain: DomainName): void {
   if (!targets) return;
   const { eclipticGrid } = targets;
 
-  // Overlay only meaningful at system and heliopause tiers
-  const isRelevant = domain === 'system' || domain === 'heliopause';
+  // Overlay (G key) is meaningful at the orbit / inner-system / outer-system
+  // / heliopause tiers — anywhere the player is reasoning about orbital paths.
+  const isRelevant =
+    domain === 'orbit' || domain === 'inner-system' ||
+    domain === 'outer-system' || domain === 'heliopause';
 
   if (eclipticGrid && isRelevant) {
-    eclipticGrid.visible = overlayOn || domain === 'heliopause';
+    // outer-system always shows grid; others rely on G toggle
+    eclipticGrid.visible = overlayOn || domain === 'outer-system' || domain === 'inner-system';
   }
 }
 
@@ -177,26 +204,35 @@ function updateIconStates(domain: DomainName): void {
 
     switch (domain) {
       case 'surface':
-      case 'system':
-        // Mesh at full opacity + icons as subtle overlays
+      case 'low-orbit':
+      case 'orbit':
+      case 'inner-system':
+        // Close-in tiers — mesh at full opacity, icons as subtle overlays.
         meshFull_iconOn(child, camDist);
         break;
 
+      case 'outer-system': {
+        // Slight mesh fade across the outer-system tier so distant bodies
+        // start handing off to icons. Range matches getCamDist (120..1000).
+        const fadeAmt = Math.max(0, Math.min(1, (camDist - 120) / 880));
+        meshFading(child, camDist, fadeAmt * 0.5); // half-fade only
+        break;
+      }
+
       case 'heliopause': {
-        // Mesh fades out as camera pulls back (0 at near edge, 1 at far edge)
-        // Heliopause range: camDist 409–1399
-        const fadeAmt = Math.max(0, (camDist - 409) / 990);
+        // Mesh fades out as camera pulls back. Range: camDist 1000..6000.
+        const fadeAmt = Math.max(0, Math.min(1, (camDist - 1000) / 5000));
         meshFading(child, camDist, fadeAmt);
         break;
       }
 
       case 'sector':
-        // Mesh gone, icon only
+        // Mesh gone, icon only.
         iconOnly(child, camDist);
         break;
 
       default:
-        // arm/galaxy — local layer is hidden, but in case it's visible
+        // arm / galaxy — local layer is hidden anyway; belt-and-suspenders.
         hideIcons(child);
         break;
     }

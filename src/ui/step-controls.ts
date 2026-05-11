@@ -177,8 +177,9 @@ export function initStepControls(): void {
   // Rebuild time track when zoom domain changes (galactic ↔ non-galactic)
   let lastDomain = Game.data.zoomDomain;
   Events.on('camera:zoom-changed', ({ domain }) => {
-    const wasGalactic = lastDomain === 'galaxy';
-    const isGalactic = (domain as string) === 'galaxy';
+    // Galactic time-table is active at arm AND galaxy tiers (matches getActiveTimeSpeeds).
+    const wasGalactic = lastDomain === 'galaxy' || lastDomain === 'arm';
+    const isGalactic = (domain as string) === 'galaxy' || (domain as string) === 'arm';
     if (wasGalactic !== isGalactic) {
       rebuildTimeTrack();
     }
