@@ -17,16 +17,15 @@
 
 import {
   Group, Mesh, Points, Line, Sprite,
-  SphereGeometry, RingGeometry, CircleGeometry, BufferGeometry,
+  SphereGeometry, RingGeometry, CircleGeometry, BoxGeometry, BufferGeometry,
   MeshBasicMaterial, PointsMaterial, SpriteMaterial, ShaderMaterial,
   LineBasicMaterial,
-  Float32BufferAttribute, Vector3, DoubleSide, AdditiveBlending, NormalBlending,
+  Float32BufferAttribute, Vector3, DoubleSide, BackSide, AdditiveBlending, NormalBlending,
   CanvasTexture, Color,
 } from 'three';
 import { getStellarRender } from './planet-colors';
-import { galacticDiscVertexShader, galacticDiscFragmentShader } from './shaders/galactic-disc';
 import { galacticStarsVertexShader, galacticStarsFragmentShader } from './shaders/galactic-stars';
-import { galacticDustVertexShader, galacticDustFragmentShader } from './shaders/galactic-dust';
+import { galacticDiscVolumeVertexShader, galacticDiscVolumeFragmentShader } from './shaders/galactic-disc-volume';
 
 // ── Stellar Population Sampling ──────────────────────────────────
 //
@@ -718,148 +717,85 @@ export function createGalaxy(): Group {
   galaxy.add(dustField);
   GALAXY_LOD.dustMat = dustMat;
 
-  // ── 3b. Procedural Galactic Disc — STACKED-LAYER VOLUME ───────
+  // ── 3b. Volumetric Galactic Disc — Single Ray-Marched Box ─────
   //
-  // Five copies of the procedural disc shader, vertically offset
-  // ±0.36 kpc with Gaussian-falloff per-layer opacity:
+  // Replaces the previous 9-disc + 8-dust stacked-plane assembly with
+  // ONE BoxGeometry + raymarch fragment shader. The fragment marches
+  // 24 steps from the camera-side AABB face through the box, sampling
+  // disc emission and dust extinction at each step, with Beer-Lambert
+  // compositing. Looks correct from any angle (including edge-on);
+  // dust silhouettes light from behind in true 3D; one draw call.
   //
-  //     y = +0.36 kpc   opacity 0.15
-  //     y = +0.18 kpc   opacity 0.45
-  //     y =  0.00 kpc   opacity 1.00   (main disc, brightest)
-  //     y = -0.18 kpc   opacity 0.45
-  //     y = -0.36 kpc   opacity 0.15
-  //
-  // Face-on (galaxy tier): the layers superimpose and read as a
-  // single bright disc. Edge-on (or near-in-plane at arm tier): the
-  // stack has visible thickness — looking through ±0.36 kpc of
-  // stratified Gaussian-weighted disc material gives a real thin-disc
-  // slab appearance instead of vanishing edge-on.
-  //
-  // 0.36 kpc total half-thickness matches the Milky Way's thin-disc
-  // scale height (~0.3 kpc observed by Gaia).
-  // 9 layers within ±0.24 kpc total half-thickness, more tightly stacked
-  // than before so the stack reads as continuous slab. Each layer gets
-  // its own random noise seed AND a small arm-rotation offset, so the
-  // pattern shifts between adjacent layers — preventing the "5 concentric
-  // identical spirals" look that read as discrete planes.
-  const DISC_LAYERS: Array<{ y: number; op: number; seed: number; rot: number }> = [
-    { y: -0.24, op: 0.06, seed: 0.0,  rot: -0.09 },
-    { y: -0.18, op: 0.14, seed: 1.7,  rot: -0.06 },
-    { y: -0.12, op: 0.28, seed: 3.4,  rot: -0.04 },
-    { y: -0.06, op: 0.55, seed: 5.1,  rot: -0.02 },
-    { y:  0.00, op: 1.00, seed: 6.8,  rot:  0.00 },
-    { y:  0.06, op: 0.55, seed: 8.5,  rot:  0.02 },
-    { y:  0.12, op: 0.28, seed: 10.2, rot:  0.04 },
-    { y:  0.18, op: 0.14, seed: 11.9, rot:  0.06 },
-    { y:  0.24, op: 0.06, seed: 13.6, rot:  0.09 },
-  ];
-  const discGeo = new CircleGeometry(15 * KPC, 192);
-  DISC_LAYERS.forEach((layer, idx) => {
-    const mat = new ShaderMaterial({
-      vertexShader: galacticDiscVertexShader,
-      fragmentShader: galacticDiscFragmentShader,
-      transparent: true,
-      depthWrite: false,
-      side: DoubleSide,
-      blending: NormalBlending,
-      uniforms: {
-        uBulgeColor:     { value: new Color(0xffe2a8) },
-        uArmColor:       { value: new Color(0xd9b894) },
-        uDustColor:      { value: new Color(0x180b08) },
-        uBulgeRadius:    { value: 0.22 },
-        uArmTwist:       { value: 5.0 },
-        uArmCount:       { value: 4.0 },
-        uArmPhaseOffset: { value: Math.PI * 0.25 },
-        uBarAngle:       { value: Math.PI * 25 / 180 },
-        uBarLength:      { value: 0.20 },
-        uBarWidth:       { value: 0.06 },
-        // Inline disc dust attenuated — volumetric dust comes from the
-        // dedicated interleaved dust layers below, which actually occlude
-        // light from behind. This residual is just enough to keep the
-        // disc's own emission slightly modulated by its dust pattern.
-        uDustStrength:   { value: 0.30 },
-        uOpacity:        { value: 1.0 },
-        uLayerOpacity:   { value: layer.op },
-        uLayerSeed:      { value: layer.seed },
-        uLayerArmShift:  { value: layer.rot },
-        uTime:           { value: 0 },
-        uWarpAmplitude:  { value: 333 },
-        uWarpInnerR:     { value: 0.5 },
-        uWarpAngle:      { value: Math.PI * 0.7 },
-      },
-    });
-    const discMesh = new Mesh(discGeo, mat);
-    discMesh.rotation.x = -Math.PI / 2;
-    discMesh.position.y = layer.y * KPC;
-    // Stable sort: bottom layer drawn first, top last. Dust layers
-    // get interleaved render orders so the painter's algorithm
-    // composites star-then-dust-then-star.
-    discMesh.renderOrder = 2 + idx * 0.02;
-    galaxy.add(discMesh);
-    GALAXY_LOD.discMats.push(mat);
+  // Box dimensions: 30 kpc wide × 1.0 kpc tall × 30 kpc deep. The Y
+  // span is wider than the disc's vertical scale-height (uDiscThickness
+  // ~0.3 kpc) to accommodate the galactic warp displacement at the
+  // disc edge (~1 kpc) without clipping the volume.
+
+  const DISC_RADIUS_WU = 15 * KPC;   // 5000 WU
+  // Y half-extent ~1.2 kpc — wide enough for ±1 kpc warp + dust thickness,
+  // narrow enough that march steps land within the disc material rather
+  // than skipping over empty space above/below.
+  const DISC_Y_HALF_WU = 400;
+
+  // The galaxy group is positioned at getGalaxyOffset() in scene space
+  // (so Sgr A* lands at Sgr's galactic coords = the group's local origin,
+  // and home/ε-Eridani lands at scene origin). The box mesh sits at
+  // group-local (0,0,0), so its world center equals the group's world
+  // position. uBoxMin/uBoxMax must be in world coords for the shader's
+  // ray-AABB intersection to align with the camera in world space.
+  const galaxyWorldCenter = getGalaxyOffset();
+  const boxMin = galaxyWorldCenter.clone().add(new Vector3(-DISC_RADIUS_WU, -DISC_Y_HALF_WU, -DISC_RADIUS_WU));
+  const boxMax = galaxyWorldCenter.clone().add(new Vector3( DISC_RADIUS_WU,  DISC_Y_HALF_WU,  DISC_RADIUS_WU));
+
+  const discVolumeMat = new ShaderMaterial({
+    vertexShader: galacticDiscVolumeVertexShader,
+    fragmentShader: galacticDiscVolumeFragmentShader,
+    transparent: true,
+    depthWrite: false,
+    // BackSide ensures something always renders even when the camera is
+    // INSIDE the box (at arm tier the camera enters the disc volume).
+    // The shader does ray-AABB intersection so it correctly clips to
+    // the volume regardless of which face the rasterizer hit.
+    side: BackSide,
+    blending: NormalBlending,
+    uniforms: {
+      uBoxMin:         { value: boxMin },
+      uBoxMax:         { value: boxMax },
+      uDiscRadius:     { value: DISC_RADIUS_WU },
+      uDiscThickness:  { value: 150 },           // 0.45 kpc — slightly wider than
+                                                  // observed scale height (~0.3 kpc)
+                                                  // so the raymarch hits material
+                                                  // on enough samples to integrate
+      uBulgeColor:     { value: new Color(0xffe2a8) },
+      uArmColor:       { value: new Color(0xd9b894) },
+      uDustColor:      { value: new Color(0x1a0a08) },
+      uBulgeRadius:    { value: 0.22 },
+      uArmTwist:       { value: 5.0 },
+      uArmCount:       { value: 4.0 },
+      uArmPhaseOffset: { value: Math.PI * 0.25 },
+      uBarAngle:       { value: Math.PI * 25 / 180 },
+      uBarLength:      { value: 0.20 },
+      uBarWidth:       { value: 0.06 },
+      uDustStrength:   { value: 1.0 },
+      uExtinction:     { value: 0.012 },         // Beer-Lambert coefficient (1/WU).
+                                                  // Tuned so a typical 30-step march
+                                                  // through dense midplane accumulates
+                                                  // ~0.7 alpha — disc reads as visible
+                                                  // diffuse mass without saturating.
+      uOpacity:        { value: 1.0 },
+      uWarpAmplitude:  { value: 333 },           // 1 kpc warp at r=1
+      uWarpInnerR:     { value: 0.5 },
+      uWarpAngle:      { value: Math.PI * 0.7 },
+    },
   });
 
-  // ── 3b'. Volumetric Dust Layers (interleaved between disc layers) ──
-  //
-  // Real galaxies show dust as a continuous absorbing veil that
-  // silhouettes stars behind it (NGC 891, M31, M51). The inline dust
-  // in the disc shader can only dim its own layer's emission. These
-  // dedicated dust planes use NormalBlending with a near-black color
-  // so they ACTUALLY OCCLUDE stellar light from disc layers below
-  // them in render order — the classic edge-on dust band.
-  //
-  // Eight dust layers interleaved with the nine star layers:
-  //     star y=-0.24  renderOrder 2.00
-  //     dust y=-0.21  renderOrder 2.01
-  //     star y=-0.18  renderOrder 2.02
-  //     dust y=-0.15  renderOrder 2.03
-  //     ... etc
-  //
-  // Per-layer dust opacity peaks in the disc midplane (y=±0.03) and
-  // falls off toward the slab edges — where most galactic dust lives.
-
-  const DUST_LAYERS: Array<{ y: number; op: number; seed: number; rot: number }> = [
-    { y: -0.21, op: 0.12, seed: 0.5,  rot: -0.075 },
-    { y: -0.15, op: 0.22, seed: 2.6,  rot: -0.05  },
-    { y: -0.09, op: 0.32, seed: 4.3,  rot: -0.03  },
-    { y: -0.03, op: 0.42, seed: 5.9,  rot: -0.01  },
-    { y:  0.03, op: 0.42, seed: 7.6,  rot:  0.01  },
-    { y:  0.09, op: 0.32, seed: 9.3,  rot:  0.03  },
-    { y:  0.15, op: 0.22, seed: 11.0, rot:  0.05  },
-    { y:  0.21, op: 0.12, seed: 12.7, rot:  0.075 },
-  ];
-  DUST_LAYERS.forEach((layer, idx) => {
-    const mat = new ShaderMaterial({
-      vertexShader: galacticDustVertexShader,
-      fragmentShader: galacticDustFragmentShader,
-      transparent: true,
-      depthWrite: false,
-      side: DoubleSide,
-      blending: NormalBlending,
-      uniforms: {
-        uDustColor:      { value: new Color(0x0a0604) },  // near-black brown for true occlusion
-        uArmTwist:       { value: 5.0 },
-        uArmCount:       { value: 4.0 },
-        uArmPhaseOffset: { value: Math.PI * 0.25 },
-        uLayerArmShift:  { value: layer.rot },
-        uLayerSeed:      { value: layer.seed },
-        uDustStrength:   { value: 1.0 },
-        uOpacity:        { value: 1.0 },
-        uLayerOpacity:   { value: layer.op },
-        uWarpAmplitude:  { value: 333 },
-        uWarpInnerR:     { value: 0.5 },
-        uWarpAngle:      { value: Math.PI * 0.7 },
-      },
-    });
-    const dustMesh = new Mesh(discGeo, mat);
-    dustMesh.rotation.x = -Math.PI / 2;
-    dustMesh.position.y = layer.y * KPC;
-    // Interleave: idx*0.02 + 0.01 puts dust planes BETWEEN star planes
-    // in render order. Star at 2.00, dust at 2.01, star at 2.02, etc.
-    dustMesh.renderOrder = 2 + idx * 0.02 + 0.01;
-    galaxy.add(dustMesh);
-    GALAXY_LOD.dustLayerMats.push(mat);
-  });
+  const discVolume = new Mesh(
+    new BoxGeometry(2 * DISC_RADIUS_WU, 2 * DISC_Y_HALF_WU, 2 * DISC_RADIUS_WU),
+    discVolumeMat,
+  );
+  discVolume.renderOrder = 2;
+  galaxy.add(discVolume);
+  GALAXY_LOD.discMats.push(discVolumeMat);
 
   // ── 4. Core Glow ─────────────────────────────────────────────
 
