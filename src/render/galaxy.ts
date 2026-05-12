@@ -296,6 +296,41 @@ const GALAXY_LOD: GalaxyLODState = {
   nebulaMats: [],
 };
 
+// Shared world-space camera velocity vector. Every star material's
+// uCamVelocity uniform points at THIS Vector3 — updating it via
+// .copy() each frame propagates to all star shaders in one assignment.
+const STAR_CAM_VELOCITY = new Vector3();
+// Tracked star materials whose uStreakStrength gets driven each frame.
+const STREAK_MATS: ShaderMaterial[] = [];
+
+/** Common uniforms for any galactic-stars ShaderMaterial. Each material
+ *  gets its own uSizeScale (driven by per-layer LOD) but all share the
+ *  same camera-velocity vector by reference. */
+function makeStarUniforms(initialSize = 1.0) {
+  return {
+    uSizeScale:      { value: initialSize },
+    uPixelRatio:     { value: Math.min(window.devicePixelRatio, 2) },
+    uCamVelocity:    { value: STAR_CAM_VELOCITY },
+    uStreakStrength: { value: 0.0 },
+    uMaxStretch:     { value: 0.4 },
+  };
+}
+
+/** Push the camera velocity into the shared vector + drive the streak
+ *  strength on every tracked star material. Called per-frame from main.ts. */
+export function updateStarStreaks(camVelocity: Vector3): void {
+  STAR_CAM_VELOCITY.copy(camVelocity);
+  // Threshold gate: completely off below ~6000 WU/s (well above any
+  // normal navigation/orbit speed). Ramps in across 6000→25000 WU/s,
+  // which is the velocity range of an active flight-path traversal.
+  // User constraint: streaks should be subtle/minor at all times.
+  const speed = camVelocity.length();
+  const strength = Math.min(1.0, Math.max(0.0, (speed - 6000) / 19000));
+  for (const m of STREAK_MATS) {
+    m.uniforms.uStreakStrength.value = strength;
+  }
+}
+
 // 0..1 ramp helper
 function smoothRamp(x: number, lo: number, hi: number): number {
   if (x <= lo) return 0;
@@ -414,6 +449,7 @@ const TRANSIT_CHEVRONS: Sprite[] = [];
 export function createGalaxy(): Group {
   // Reset per-frame trackers (createGalaxy may be called more than once under HMR)
   DASHED_MATERIALS.length = 0;
+  STREAK_MATS.length = 0;
   TRANSIT_CHEVRONS.length = 0;
   GALAXY_LOD.starFieldMat = null;
   GALAXY_LOD.localArmMat = null;
@@ -571,10 +607,7 @@ export function createGalaxy(): Group {
   const starFieldMat = new ShaderMaterial({
     vertexShader: galacticStarsVertexShader,
     fragmentShader: galacticStarsFragmentShader,
-    uniforms: {
-      uSizeScale:  { value: 1.0 },
-      uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
-    },
+    uniforms: makeStarUniforms(1.0),
     transparent: true,
     depthWrite: false,
     blending: AdditiveBlending,
@@ -582,6 +615,7 @@ export function createGalaxy(): Group {
   const starField = new Points(galGeo, starFieldMat);
   galaxy.add(starField);
   GALAXY_LOD.starFieldMat = starFieldMat;
+  STREAK_MATS.push(starFieldMat);
 
   // ── 3c. Orion Spur Local Detail (40K) ─────────────────────────
   // Higher-density particle cloud concentrated around home, oriented
@@ -637,14 +671,12 @@ export function createGalaxy(): Group {
   const localArmMat = new ShaderMaterial({
     vertexShader: galacticStarsVertexShader,
     fragmentShader: galacticStarsFragmentShader,
-    uniforms: {
-      uSizeScale:  { value: 0.0 },  // LOD updater drives this
-      uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
-    },
+    uniforms: makeStarUniforms(0.0),  // size driven by LOD updater
     transparent: true,
     depthWrite: false,
     blending: AdditiveBlending,
   });
+  STREAK_MATS.push(localArmMat);
   const localArmField = new Points(localGeo, localArmMat);
   localArmField.name = 'orion-spur-detail';
   galaxy.add(localArmField);
@@ -1407,18 +1439,17 @@ export function createGalaxy(): Group {
     satGeo.setAttribute('position', new Float32BufferAttribute(satPts, 3));
     satGeo.setAttribute('color', new Float32BufferAttribute(satCols, 3));
     satGeo.setAttribute('aSize', new Float32BufferAttribute(satSizes, 1));
-    const satField = new Points(satGeo, new ShaderMaterial({
+    const satMat = new ShaderMaterial({
       vertexShader: galacticStarsVertexShader,
       fragmentShader: galacticStarsFragmentShader,
-      uniforms: {
-        uSizeScale:  { value: 0.8 },
-        uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
-      },
+      uniforms: makeStarUniforms(0.8),
       transparent: true,
       depthWrite: false,
       blending: AdditiveBlending,
-    }));
+    });
+    const satField = new Points(satGeo, satMat);
     galaxy.add(satField);
+    STREAK_MATS.push(satMat);
 
     // Invisible raycast hit target — clickable as a galactic landmark.
     const hit = new Mesh(
@@ -1483,17 +1514,16 @@ export function createGalaxy(): Group {
   streamGeo.setAttribute('position', new Float32BufferAttribute(streamPts, 3));
   streamGeo.setAttribute('color', new Float32BufferAttribute(streamCols, 3));
   streamGeo.setAttribute('aSize', new Float32BufferAttribute(streamSizes, 1));
-  const streamField = new Points(streamGeo, new ShaderMaterial({
+  const streamMat = new ShaderMaterial({
     vertexShader: galacticStarsVertexShader,
     fragmentShader: galacticStarsFragmentShader,
-    uniforms: {
-      uSizeScale:  { value: 0.55 },  // subtle — stream is faint observationally
-      uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
-    },
+    uniforms: makeStarUniforms(0.55),
     transparent: true,
     depthWrite: false,
     blending: AdditiveBlending,
-  }));
+  });
+  const streamField = new Points(streamGeo, streamMat);
+  STREAK_MATS.push(streamMat);
   streamField.name = 'sgr-stream';
   galaxy.add(streamField);
 

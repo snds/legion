@@ -275,15 +275,25 @@ export function initRaycast(
     if (!hit) return;
 
     hit.object.getWorldPosition(worldPos);
-    Events.emit('camera:focus-on', { x: worldPos.x, y: worldPos.y, z: worldPos.z });
-    Events.emit('camera:focus-object', { obj: hit.object });
     const eid = (hit.data as Record<string, unknown>).eid as number | undefined ?? 0;
     Game.selectEntity(eid, hit.data as unknown as Record<string, unknown>);
     SelectionPanels.open(hit.data);
 
     if (e.shiftKey) {
+      // Shift+dblclick → cinematic FLY to the object. Bezier-eased
+      // trajectory (arcs over the disc plane), looks at target throughout,
+      // hands back to orbit mode at the appropriate tier camDist on
+      // arrival. Star streaks engage automatically during the high-
+      // velocity middle of the flight via uStreakStrength gating.
       const target = warpZoomForType(hit.data.type as string);
-      if (target !== null) Game.data.targetZoom = target;
+      Events.emit('camera:fly-to', {
+        x: worldPos.x, y: worldPos.y, z: worldPos.z,
+        targetZoomLevel: target,
+      });
+    } else {
+      // Plain dblclick → focus at current zoom + track object.
+      Events.emit('camera:focus-on', { x: worldPos.x, y: worldPos.y, z: worldPos.z });
+      Events.emit('camera:focus-object', { obj: hit.object });
     }
   });
 }

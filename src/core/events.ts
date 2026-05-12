@@ -36,6 +36,7 @@ export interface EventMap {
   'camera:focus-on':        { x: number; y: number; z: number };
   'camera:focus-object':    { obj: import('three').Object3D };
   'camera:focus-bob':       Record<string, never>;
+  'camera:fly-to':          { x: number; y: number; z: number; targetZoomLevel: number | null };
 
   // Selection events
   'select:entity':          { eid: number; type: number };

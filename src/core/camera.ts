@@ -93,6 +93,136 @@ export class CameraController {
   // means "use absolute camDist"; >1 multiplies close-tier distances.
   private focusScale = 1.0;
 
+  // World-space velocity tracking — frame-by-frame derivative of camera
+  // position. Consumers (star streak shader, motion-blur effects) read this
+  // each frame to compute per-feature visual response to camera motion.
+  private readonly _velocity = new Vector3();
+  private readonly _lastCamPos = new Vector3();
+  private _velocityValid = false;
+
+  /** World-space camera velocity in units per second, updated each frame. */
+  get velocity(): Vector3 { return this._velocity; }
+
+  // ── Flight-Path State ────────────────────────────────────────────
+  // When set, the camera is mid-flight: position and look-at are
+  // driven by a Bezier-eased trajectory rather than orbit/focus math.
+  // On arrival, hands back to orbit mode with the new focus + a
+  // tier-appropriate zoom level.
+  private flightState: {
+    startTime: number;
+    duration: number;          // seconds
+    startPos: Vector3;
+    endPos: Vector3;
+    controlPoint: Vector3;     // single Bezier control point
+    startLook: Vector3;        // what camera was looking at when flight began
+    endLook: Vector3;          // destination focus point (target body)
+    endZoomLevel: number;      // target zoom-curve position after landing
+  } | null = null;
+  private readonly _flightTmp = new Vector3();
+  private readonly _flightTmp2 = new Vector3();
+
+  /** True while a flight is in progress — main code can avoid issuing
+   *  conflicting orbit/zoom changes during the cinematic. */
+  get flying(): boolean { return this.flightState !== null; }
+
+  /**
+   * Cinematic flight from current camera state to a new orbital position
+   * around `targetPos`. The camera translates along a single-control-point
+   * Bezier arc with ease-in-out cubic timing, looking at the target
+   * throughout the traversal. On arrival, hands back to orbit mode.
+   *
+   * The arc rises above the galactic plane (worldUp = +Y) so transitions
+   * between disc-immersed views feel like a fly-OVER rather than a tunnel.
+   */
+  flyTo(targetPos: Vector3, opts: {
+    /** Final orbital distance from target. Defaults to current camDist. */
+    targetCamDist?: number;
+    /** Target zoomLevel for orbit mode after landing. Defaults to current. */
+    targetZoomLevel?: number;
+    /** Animation duration in seconds. Auto-derives from distance if omitted. */
+    duration?: number;
+  } = {}): void {
+    const startPos = this.cam.position.clone();
+    const targetCamDist = opts.targetCamDist ?? Game.data.camDist;
+    const targetZoomLevel = opts.targetZoomLevel ?? Game.data.targetZoom;
+
+    // End position: orbital position around target preserving the camera's
+    // current angular orientation (theta/phi). This avoids unexpected
+    // azimuthal swings on arrival — the camera lands looking from the same
+    // general direction it was already pointing.
+    const sinPhi = Math.sin(this.phi);
+    const cosPhi = Math.cos(this.phi);
+    const sinTheta = Math.sin(this.theta);
+    const cosTheta = Math.cos(this.theta);
+    const endPos = new Vector3(
+      targetPos.x + targetCamDist * sinPhi * cosTheta,
+      targetPos.y + targetCamDist * cosPhi,
+      targetPos.z + targetCamDist * sinPhi * sinTheta,
+    );
+
+    // Control point: midpoint of start/end, lifted along +Y by 30% of the
+    // travel distance so the arc rises over the disc plane during flight.
+    const travelDist = startPos.distanceTo(endPos);
+    const controlPoint = new Vector3()
+      .addVectors(startPos, endPos).multiplyScalar(0.5);
+    controlPoint.y += travelDist * 0.30;
+
+    // Duration: bounded by distance / nominal-speed. 8000 WU/s feels right
+    // at galactic scale; shorter local hops still get a minimum 0.6s so the
+    // motion reads as deliberate rather than snap.
+    const duration = opts.duration ?? Math.min(5.0, Math.max(0.6, travelDist / 8000));
+
+    this.flightState = {
+      startTime: performance.now() / 1000,
+      duration,
+      startPos,
+      endPos,
+      controlPoint,
+      startLook: new Vector3(this.focus.x, this.focus.y, this.focus.z),
+      endLook: targetPos.clone(),
+      endZoomLevel: targetZoomLevel,
+    };
+
+    // Set the orbit-mode focus target immediately so when the flight ends
+    // and hands back to orbit math, the focus is already where we want.
+    Game.data.camFocusTarget = { x: targetPos.x, y: targetPos.y, z: targetPos.z };
+    // Drop any active object tracking during flight (the destination is
+    // a position, not an object; if the user wants to lock on, they can
+    // dblclick after landing).
+    this.trackedObject = null;
+    this.focusScale = 1.0;
+  }
+
+  /** Abort flight immediately, leaving the camera in its current state.
+   *  Used when user-initiated input (drag/zoom) should preempt the flight. */
+  cancelFlight(): void {
+    if (this.flightState) {
+      // Hand off to orbit mode at current position
+      this._snapOrbitStateToCurrentPos();
+      this.flightState = null;
+    }
+  }
+
+  /** Compute theta/phi/focus that would reproduce the current camera
+   *  position via the orbital math. Called on flight completion and
+   *  flight cancellation to seamlessly continue in orbit mode. */
+  private _snapOrbitStateToCurrentPos(): void {
+    const fx = Game.data.camFocusTarget?.x ?? 0;
+    const fy = Game.data.camFocusTarget?.y ?? 0;
+    const fz = Game.data.camFocusTarget?.z ?? 0;
+    const dx = this.cam.position.x - fx;
+    const dy = this.cam.position.y - fy;
+    const dz = this.cam.position.z - fz;
+    const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    const phi = Math.acos(Math.max(-1, Math.min(1, dy / dist)));
+    const theta = Math.atan2(dz, dx);
+    this.theta = theta;
+    this.phi = phi;
+    this.focus.x = fx; this.focus.y = fy; this.focus.z = fz;
+    Game.data.targetTheta = theta;
+    Game.data.targetPhi = phi;
+  }
+
   constructor(cam: PerspectiveCamera) {
     this.cam = cam;
 
@@ -134,8 +264,64 @@ export class CameraController {
     }
   }
 
-  update(_dt: number): void {
+  update(dt: number): void {
     const data = Game.data;
+
+    // ── Flight Mode ──
+    // When mid-flight, override orbit-mode math with Bezier-eased
+    // trajectory. Camera translates along the arc, looks at the target,
+    // and on arrival hands back to orbit mode.
+    if (this.flightState) {
+      const fs = this.flightState;
+      const nowSec = performance.now() / 1000;
+      const tRaw = Math.min(1, (nowSec - fs.startTime) / fs.duration);
+      // Ease-in-out cubic — gentle acceleration + deceleration at endpoints,
+      // cruise speed in the middle. Matches the "settled moments" rhythm
+      // observed in the ESA reference fly-throughs.
+      const t = tRaw < 0.5 ? 4 * tRaw * tRaw * tRaw
+                           : 1 - Math.pow(-2 * tRaw + 2, 3) / 2;
+
+      // Quadratic Bezier: B(t) = (1-t)²·P0 + 2(1-t)t·P1 + t²·P2
+      const it = 1 - t;
+      this.cam.position.set(
+        it * it * fs.startPos.x + 2 * it * t * fs.controlPoint.x + t * t * fs.endPos.x,
+        it * it * fs.startPos.y + 2 * it * t * fs.controlPoint.y + t * t * fs.endPos.y,
+        it * it * fs.startPos.z + 2 * it * t * fs.controlPoint.z + t * t * fs.endPos.z,
+      );
+
+      // Look target eases from start-focus → end-focus along the same curve.
+      this._flightTmp.copy(fs.startLook).lerp(fs.endLook, t);
+      this.cam.lookAt(this._flightTmp);
+
+      // Frustum stays in sync with the new camDist range; we approximate
+      // dist as camera→target so near/far don't clip mid-flight.
+      const distToTarget = this.cam.position.distanceTo(this._flightTmp);
+      this.cam.near = Math.max(0.01, distToTarget * 0.001);
+      this.cam.far = Math.max(1000, distToTarget * 100);
+      const targetFov = fovForDistance(distToTarget);
+      this.cam.fov += (targetFov - this.cam.fov) * FOV_LERP;
+      setIconFov(this.cam.fov);
+      this.cam.updateProjectionMatrix();
+
+      // Update velocity tracking even during flight (drives star streaks).
+      if (this._velocityValid && dt > 0 && dt < 0.5) {
+        this._velocity.subVectors(this.cam.position, this._lastCamPos).divideScalar(dt);
+      } else {
+        this._velocity.set(0, 0, 0);
+      }
+      this._lastCamPos.copy(this.cam.position);
+      this._velocityValid = true;
+
+      // Arrival: set orbital state to match landing position, hand off.
+      if (tRaw >= 1) {
+        data.targetZoom = fs.endZoomLevel;
+        data.zoomLevel = fs.endZoomLevel;
+        this._snapOrbitStateToCurrentPos();
+        this.flightState = null;
+      }
+      Game.updateZoomDomain();
+      return;
+    }
 
     // ── Tracking ──
     // If the camera is locked onto an object, refresh focus target from
@@ -192,6 +378,18 @@ export class CameraController {
     setIconFov(this.cam.fov);
 
     this.cam.updateProjectionMatrix();
+
+    // Compute world-space camera velocity. Skipped on the very first
+    // frame (no previous position yet) and on any frame where dt is
+    // implausibly large (debug pause, tab-resume) — that would produce
+    // a near-zero "velocity" and falsely suppress streaks.
+    if (this._velocityValid && dt > 0 && dt < 0.5) {
+      this._velocity.subVectors(this.cam.position, this._lastCamPos).divideScalar(dt);
+    } else {
+      this._velocity.set(0, 0, 0);
+    }
+    this._lastCamPos.copy(this.cam.position);
+    this._velocityValid = true;
 
     // Update zoom domain
     Game.updateZoomDomain();

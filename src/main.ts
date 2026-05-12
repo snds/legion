@@ -66,7 +66,7 @@ import {
   createEclipticGrid,
   STATION_DATA, COMET_DATA, type StationConfig,
 } from './render/scene-objects';
-import { createGalaxy, getGalaxyOffset, updateGalaxyAnimations, updateGalaxyLOD, createSectorOrb } from './render/galaxy';
+import { createGalaxy, getGalaxyOffset, updateGalaxyAnimations, updateGalaxyLOD, updateStarStreaks, createSectorOrb } from './render/galaxy';
 import { createPostProcessing, type PostProcessingContext } from './render/post-processing';
 import { createLensFlare, type LensFlareSystem } from './render/lens-flare';
 import { Debug } from './debug/debug-overlay';
@@ -149,6 +149,10 @@ async function boot(): Promise<void> {
 
   // ── 3. Camera ──
   const camCtrl = new CameraController(camera);
+  // Dev-mode global for console-driven testing (flight mode etc).
+  if (import.meta.env?.DEV) {
+    (globalThis as Record<string, unknown>).__cam = camCtrl;
+  }
 
   // ── 4. Input ──
   const input = new InputManager(renderCtx.canvas);
@@ -163,6 +167,13 @@ async function boot(): Promise<void> {
   // objects too (galactic markers, stations) — just keeps focus centered.
   Events.on('camera:focus-object', (data: { obj: import('three').Object3D }) => {
     camCtrl.trackObject(data.obj);
+  });
+  // Cinematic flight (shift+dblclick) — Bezier arc with eased timing.
+  Events.on('camera:fly-to', (data: { x: number; y: number; z: number; targetZoomLevel: number | null }) => {
+    const target = new Vector3(data.x, data.y, data.z);
+    camCtrl.flyTo(target, {
+      targetZoomLevel: data.targetZoomLevel ?? undefined,
+    });
   });
 
   // ── 5. UI Systems ──
@@ -356,6 +367,11 @@ async function boot(): Promise<void> {
     // 9e. Galaxy LOD — fades local-arm detail / dust / nebula presence
     // by current camera distance so each zoom tier has the right density.
     updateGalaxyLOD(Game.data.camDist);
+
+    // 9f. Velocity-aware micro-streak on galactic stars. Gated below
+    // ~6000 WU/s — invisible during normal orbiting/zooming; ramps in
+    // only during high-speed translation (flight-path traversals).
+    updateStarStreaks(camCtrl.velocity);
 
     // 10. Render (post-processing pipeline)
     postCtx.render(elapsedTime);
