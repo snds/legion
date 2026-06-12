@@ -1,7 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════
 // POST-PROCESSING — EffectComposer Pipeline
 // Replaces direct renderer.render() with a multi-pass chain:
-//   RenderPass → SMAAPass → UnrealBloomPass → Vignette → OutputPass
+//   RenderPass → AutoExposure → SMAAPass → KarisBloom → Vignette → OutputPass
 // ═══════════════════════════════════════════════════════════════════
 
 import {
@@ -11,7 +11,7 @@ import {
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { SMAAPass } from 'three/examples/jsm/postprocessing/SMAAPass.js';
-import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+import { KarisBloomPass } from './bloom';
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { AutoExposurePass } from './auto-exposure';
@@ -236,7 +236,7 @@ const VignetteShader = {
 export interface PostProcessingContext {
   composer: EffectComposer;
   autoExposurePass: AutoExposurePass;
-  bloomPass: UnrealBloomPass;
+  bloomPass: KarisBloomPass;
   smaaPass: SMAAPass;
   vignettePass: ShaderPass;
   filmGrainPass: ShaderPass;
@@ -280,13 +280,9 @@ export function createPostProcessing(
   const nanSanitizePass = new ShaderPass(NaNSanitizeShader);
   composer.addPass(nanSanitizePass);
 
-  // 3. Bloom
-  const bloomPass = new UnrealBloomPass(
-    new Vector2(size.x, size.y),
-    VP.get('bloomStrength'),
-    VP.get('bloomRadius'),
-    VP.get('bloomThreshold'),
-  );
+  // 3. Bloom — threshold-free Karis mip bloom (see ./bloom.ts). VP bloomRadius
+  // (0..1) maps to the upsample tent radius; bloomThreshold is unused (no threshold).
+  const bloomPass = new KarisBloomPass(VP.get('bloomStrength'), VP.get('bloomRadius') * 0.01);
   composer.addPass(bloomPass);
 
   // Track insert index for lens flare (after bloom)
@@ -316,6 +312,7 @@ export function createPostProcessing(
   const resize = (w: number, h: number): void => {
     composer.setSize(w, h);
     smaaPass.setSize(w * pixelRatio, h * pixelRatio);
+    bloomPass.setSize(w * pixelRatio, h * pixelRatio);
   };
 
   // ── VP Sync ──
@@ -325,11 +322,9 @@ export function createPostProcessing(
         bloomPass.strength = VP.get('bloomStrength');
         break;
       case 'bloomRadius':
-        bloomPass.radius = VP.get('bloomRadius');
+        bloomPass.filterRadius = VP.get('bloomRadius') * 0.01;
         break;
-      case 'bloomThreshold':
-        bloomPass.threshold = VP.get('bloomThreshold');
-        break;
+      // bloomThreshold is intentionally unwired — the Karis bloom is threshold-free.
       case 'vignetteIntensity':
         (vignettePass.material as ShaderMaterial).uniforms.uIntensity.value = VP.get('vignetteIntensity');
         break;
