@@ -268,15 +268,7 @@ export function createPostProcessing(
   const autoExposurePass = new AutoExposurePass(() => VP.get('toneMappingExposure'));
   composer.addPass(autoExposurePass);
 
-  // 2. SMAA anti-aliasing
-  const smaaPass = new SMAAPass(
-    size.x * pixelRatio,
-    size.y * pixelRatio,
-  );
-  smaaPass.enabled = VP.get('smaaEnabled');
-  composer.addPass(smaaPass);
-
-  // 2.5. NaN sanitization — catch any NaN from scene shaders before bloom
+  // 2. NaN sanitization — catch any NaN from scene shaders before bloom
   const nanSanitizePass = new ShaderPass(NaNSanitizeShader);
   composer.addPass(nanSanitizePass);
 
@@ -300,13 +292,24 @@ export function createPostProcessing(
   const colorGradingPass = new ShaderPass(ColorGradingShader);
   composer.addPass(colorGradingPass);
 
-  // 6. Film grain (reduces banding in dark space gradients)
-  const filmGrainPass = new ShaderPass(FilmGrainShader);
-  composer.addPass(filmGrainPass);
-
-  // 7. Output (tone mapping + color space conversion)
+  // 6. Output — AgX tone mapping + sRGB encoding. Must run BEFORE the
+  // gamma-space passes below.
   const outputPass = new OutputPass();
   composer.addPass(outputPass);
+
+  // 7. SMAA — morphological AA, POST-tonemap. Its edge metric is calibrated for
+  // gamma-space LDR; the previous chain ran it on linear HDR (pre-tonemap), where
+  // it mis-detects edges (and the canvas `antialias` flag is inert behind the
+  // composer). Running it here fixes planet limbs / ring / orbit-line edges.
+  const smaaPass = new SMAAPass(size.x * pixelRatio, size.y * pixelRatio);
+  smaaPass.enabled = VP.get('smaaEnabled');
+  composer.addPass(smaaPass);
+
+  // 8. Film grain LAST — post-tonemap, so it is neither exposure-amplified (it
+  // previously ran pre-tonemap, so auto-exposure scaled it up in dark views) nor
+  // smoothed away by the AA pass.
+  const filmGrainPass = new ShaderPass(FilmGrainShader);
+  composer.addPass(filmGrainPass);
 
   // ── Resize Handler ──
   const resize = (w: number, h: number): void => {
