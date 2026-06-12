@@ -4,8 +4,10 @@
 // planet shader system. Day and twilight tints per type.
 // ═══════════════════════════════════════════════════════════════════
 
-// PlanetType enum values from core/components:
-// 0 = Rocky, 1 = Oceanic, 2 = IceGiant, 3 = GasGiant, 4 = Dwarf
+// PlanetType enum values from core/components (the REAL enum — this table
+// previously documented and used a stale ordering, so Desert got ice-giant
+// cyan, IceGiant got Pluto-grey, and Dwarf fell back to Rocky):
+// 0 = Rocky, 1 = Oceanic, 2 = Desert, 3 = GasGiant, 4 = IceGiant, 5 = Dwarf
 
 export interface AtmosphereColorSet {
   /** Primary atmosphere color (fresnel rim, day side) */
@@ -26,18 +28,23 @@ export const ATMOSPHERE_COLORS: Record<number, AtmosphereColorSet> = {
     primary: [0.4, 0.6, 0.9],
     intensity: 1.0,
   },
-  // Ice Giant — cyan-blue (Uranus/Neptune-like)
+  // Desert — dusty ochre haze (Arrakis-like)
   2: {
-    primary: [0.45, 0.7, 0.85],
-    intensity: 0.9,
+    primary: [0.82, 0.66, 0.42],
+    intensity: 0.7,
   },
   // Gas Giant — warm amber-yellow (Jupiter/Saturn-like)
   3: {
     primary: [0.9, 0.8, 0.5],
     intensity: 0.85,
   },
-  // Dwarf — very thin, grey (Pluto-like)
+  // Ice Giant — cyan-blue (Uranus/Neptune-like)
   4: {
+    primary: [0.45, 0.7, 0.85],
+    intensity: 0.9,
+  },
+  // Dwarf — very thin, grey (Pluto-like)
+  5: {
     primary: [0.5, 0.5, 0.55],
     intensity: 0.3,
   },
