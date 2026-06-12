@@ -254,14 +254,17 @@ function updateIconStates(domain: DomainName): void {
 
       case 'heliopause': {
         // Mesh fades out as camera pulls back. Range: camDist 1000..6000.
+        // Labels OFF: local entities collapse to ~the same screen position at
+        // this distance, so legible labels superimpose into a smear. Clustered
+        // labels return with the decluttering pass (zoom-overlay doc Phase 3).
         const fadeAmt = Math.max(0, Math.min(1, (camDist - 1000) / 5000));
-        meshFading(child, camDist, fadeAmt);
+        meshFading(child, camDist, fadeAmt, false);
         break;
       }
 
       case 'sector':
-        // Mesh gone, icon only.
-        iconOnly(child, camDist);
+        // Mesh gone, icon only. Labels off (same stacking rationale).
+        iconOnly(child, camDist, false);
         break;
 
       default:
