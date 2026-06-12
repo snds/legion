@@ -836,7 +836,23 @@ export function createAlienMarker(
 /** Tracked orbit line materials for resolution updates on window resize */
 const trackedOrbitMaterials: LineMaterial[] = [];
 
-export function createOrbitLine(sma: number, ecc: number): Line2 {
+// Orbit-line styling: planetary bodies get SOLID low-opacity white; other
+// system bodies (comets etc.) use their own colors. Hovering a body brightens
+// its orbit line via the registry below.
+const ORBIT_BASE_OPACITY = 0.14;
+const ORBIT_HOVER_OPACITY = 0.55;
+const orbitLineByBody = new Map<string, LineMaterial>();
+
+export interface OrbitLineOptions {
+  /** Body name — registers the line for hover brightening. */
+  bodyName?: string;
+  /** Line color (default: white for planetary bodies). */
+  color?: number;
+  /** Resting opacity (default ORBIT_BASE_OPACITY). */
+  opacity?: number;
+}
+
+export function createOrbitLine(sma: number, ecc: number, opts: OrbitLineOptions = {}): Line2 {
   const AU_SCALE = 10;
   const a = sma * AU_SCALE;
   const b = a * Math.sqrt(1 - ecc * ecc);
@@ -857,27 +873,40 @@ export function createOrbitLine(sma: number, ecc: number): Line2 {
   geo.setPositions(positions);
 
   const mat = new LineMaterial({
-    color: 0x88a0b8,        // cooler blue-grey reads better against black
+    color: opts.color ?? 0xffffff,  // planetary bodies: solid low-opacity white
     linewidth: 1,
     transparent: true,
-    opacity: 0.16,          // up from 0.03 — orbits should register, not vanish
-    dashed: true,           // predicted-path vocabulary
-    dashSize: 6,
-    gapSize: 4,
-    dashScale: 1,
+    opacity: opts.opacity ?? ORBIT_BASE_OPACITY,
     depthWrite: false,
     resolution: new Vector2(window.innerWidth, window.innerHeight),
   });
-  // LineMaterial requires defines.USE_DASH to actually dash
-  mat.defines = { ...(mat.defines ?? {}), USE_DASH: '' };
-  mat.needsUpdate = true;
+  mat.userData.baseOpacity = opts.opacity ?? ORBIT_BASE_OPACITY;
 
   trackedOrbitMaterials.push(mat);
+  if (opts.bodyName) orbitLineByBody.set(opts.bodyName, mat);
 
   const line = new Line2(geo, mat);
   line.name = 'orbit-line';
   line.computeLineDistances();
   return line;
+}
+
+/**
+ * Brighten the orbit line of the hovered body (null clears). Called by the
+ * raycast hover handler so hovering a planet/moon highlights its path.
+ */
+let highlightedOrbit: string | null = null;
+export function setOrbitHighlight(bodyName: string | null): void {
+  if (bodyName === highlightedOrbit) return;
+  if (highlightedOrbit) {
+    const prev = orbitLineByBody.get(highlightedOrbit);
+    if (prev) prev.opacity = (prev.userData.baseOpacity as number) ?? ORBIT_BASE_OPACITY;
+  }
+  highlightedOrbit = bodyName;
+  if (bodyName) {
+    const mat = orbitLineByBody.get(bodyName);
+    if (mat) mat.opacity = ORBIT_HOVER_OPACITY;
+  }
 }
 
 /** Update orbit line resolution on window resize */

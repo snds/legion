@@ -469,8 +469,8 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol'): WorldExtras {
     layers.local.add(mesh);
     registerRenderObject(renderObjectMap, eid, mesh);
 
-    // Orbit line
-    const orbit = createOrbitLine(pCfg.sma, pCfg.ecc);
+    // Orbit line — solid low-opacity white; registered for hover brightening
+    const orbit = createOrbitLine(pCfg.sma, pCfg.ecc, { bodyName: pCfg.name });
     layers.local.add(orbit);
   }
 
