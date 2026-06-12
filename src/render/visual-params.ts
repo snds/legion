@@ -48,6 +48,9 @@ export interface VisualParams {
   // ── Planets ──
   planetSegments: number;
   planetTerminatorSoftness: number;
+  planetLimbK: number;
+  planetLimbCe: number;
+  planetOblatenessScale: number;
   planetTerminatorOffset: number;
   planetSpecularPower: number;
   planetSpecularOffset: number;
@@ -139,7 +142,10 @@ const DEFAULTS: VisualParams = {
 
   // Planets
   planetSegments: 64,
-  planetTerminatorSoftness: 0.75,
+  planetTerminatorSoftness: 0.75, // atmospheric bodies; airless are fixed at 0.15
+  planetLimbK: 0.85,              // Jónsson limb-darkening incidence exponent
+  planetLimbCe: 0.75,             // Jónsson emission-angle threshold
+  planetOblatenessScale: 1.0,     // master multiplier on per-class flattening
   planetTerminatorOffset: -0.25,
   planetSpecularPower: 32,
   planetSpecularOffset: 0.2,

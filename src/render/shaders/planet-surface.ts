@@ -65,6 +65,13 @@ export const planetSurfaceFragmentShader = /* glsl */ `
   uniform float uRingInner;       // annulus radii (world units)
   uniform float uRingOuter;
   uniform float uRingShadowStrength;
+  // Jónsson limb darkening (Cassini-fitted, bjj.mmedia.is/3dtest/jup_shading.html)
+  // for gas/ice giants: diffuse follows cos(i)^k instead of pure Lambert, and
+  // past cos(e) < uLimbCe the disc darkens per-channel — blue falls off least,
+  // giving the photographic faintly-blue limb. Gated by uLimbDarken (0/1).
+  uniform float uLimbDarken;
+  uniform float uLimbK;           // incidence exponent (~0.85)
+  uniform float uLimbCe;          // emission-angle threshold (~0.75)
 
   varying vec3 vNormal;
   varying vec3 vWorldPos;
@@ -128,6 +135,26 @@ export const planetSurfaceFragmentShader = /* glsl */ `
     }
 
     vec3 surfaceColor = mix(nightColor, dayColor, dayFactor);
+
+    // Gas/ice giant limb darkening (Jónsson): replace the day-side shading
+    // with cos(i)^k Lambert shaping plus a per-channel emission-angle falloff.
+    // Continuous remap pow(x, rp)·(1−rc)+rc → 1 at the threshold, rc at the
+    // limb (blue rc=0.5 falls least ⇒ faintly blue limb, per Cassini fits).
+    if (uLimbDarken > 0.5) {
+      float ci = max(NdotL, 0.0);
+      float ce = max(dot(N, V), 0.0);
+      vec3 giantDay = baseColor * pow(ci, uLimbK);
+      if (ce < uLimbCe) {
+        vec3 rp = vec3(0.2, 0.125, 0.04);
+        vec3 rc = vec3(0.1, 0.07, 0.5);
+        float x = ce / uLimbCe;
+        vec3 limb = pow(vec3(x), rp) * (1.0 - rc) + rc;
+        // Phase factor blends the limb term in most strongly near full phase.
+        float phase = (dot(L, V) + 1.0) * 0.5;
+        giantDay *= mix(vec3(1.0), limb, phase);
+      }
+      surfaceColor = mix(nightColor, giantDay, dayFactor);
+    }
 
     // Specular highlight (Blinn-Phong) — gated by uSpecularScale per planet class.
     // Oceanic worlds get strong specular (sea-glint), ice giants medium,
