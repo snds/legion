@@ -808,11 +808,14 @@ export function createSystemMarker(
   group.userData.isHome = isHome;
 
   const shape: IconShape = isHome ? 'star' : (hasBobs ? 'diamond' : 'hex');
+  // NO label/sublabel: regional markers currently share placeholder positions
+  // (DIST 0.0), so now-legible child labels would superimpose into a smear.
+  // The galactic-tier system markers (galaxy.ts) carry their own labels;
+  // regional marker labels return with the marker-positioning + clustering
+  // pass (docs/zoom-overlay-patterns.md Phases 2-3).
   const icon = createIcon({
     shape,
     color: numToHex(color),
-    label: name.toUpperCase(),
-    sublabel: isHome ? 'HOME SYSTEM' : (hasBobs ? 'BOB PRESENCE' : 'UNEXPLORED'),
     // Every marker gets a colored glow — readable against the warm
     // galaxy disc backdrop now that the disc is visible at sector tier.
     glowColor: numToHex(color),
@@ -845,12 +848,11 @@ export function createAlienMarker(
   });
   group.add(new Mesh(geo, mat));
 
-  // Center icon
+  // Center icon — no child labels (same placeholder-position stacking
+  // rationale as createSystemMarker).
   const icon = createIcon({
     shape: 'triangle',
     color: numToHex(color),
-    label: name.toUpperCase(),
-    sublabel: 'ALIEN PRESENCE',
   });
   group.add(icon);
 

@@ -46,8 +46,10 @@ export interface IconConfig {
 const textureCache = new Map<string, Texture>();
 
 function cacheKey(cfg: IconConfig): string {
+  // Labels are NOT baked into the texture (they're standalone child sprites),
+  // so the cache key excludes them — every entity of a class shares one texture.
   return [
-    cfg.shape, cfg.color, cfg.label ?? '', cfg.sublabel ?? '',
+    cfg.shape, cfg.color,
     cfg.size ?? 160, cfg.internal ?? '', cfg.capacity ?? '', cfg.pips ?? '',
   ].join('|');
 }
@@ -62,7 +64,7 @@ function renderIconTexture(cfg: IconConfig): Texture {
   const logicalSize = cfg.size ?? 160;
   const SCALE = 4; // 4× supersampling
   const W = logicalSize * SCALE;
-  const H = (logicalSize * 1.25) * SCALE; // extra space for labels
+  const H = logicalSize * SCALE; // square — labels live in standalone sprites
 
   const canvas = document.createElement('canvas');
   canvas.width = W;
@@ -71,8 +73,12 @@ function renderIconTexture(cfg: IconConfig): Texture {
 
   const cx = W / 2;
   const iconR = (logicalSize * 0.35) * SCALE;
-  const iconCy = H * 0.35;
-  const outline = (cfg.outlineWidth ?? 2) * SCALE;
+  const iconCy = H * 0.5;
+  // Stroke floor: at the 28 screen-px display target, a 160-logical canvas
+  // shows 1 logical px as 0.175 screen px — the old 2-logical outline mipped
+  // to a ~0.35px grey smear (the EVE 'Iconocalypse' sub-pixel trap, docs/
+  // zoom-overlay-patterns.md). ≥10 logical ⇒ ≥1.75 screen px.
+  const outline = Math.max(cfg.outlineWidth ?? 2, 10) * SCALE;
 
   // Optional glow
   if (cfg.glowColor) {
@@ -99,23 +105,6 @@ function renderIconTexture(cfg: IconConfig): Texture {
     ctx.arc(cx, iconCy, 3 * SCALE, 0, Math.PI * 2);
     ctx.fillStyle = cfg.color;
     ctx.fill();
-  }
-
-  // Label
-  if (cfg.label) {
-    ctx.font = `bold ${12 * SCALE}px 'JetBrains Mono', monospace`;
-    ctx.fillStyle = '#ffffff';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'top';
-    ctx.fillText(cfg.label, cx, iconCy + iconR + 8 * SCALE, W * 0.9);
-  }
-
-  // Sublabel
-  if (cfg.sublabel) {
-    ctx.font = `${9 * SCALE}px 'JetBrains Mono', monospace`;
-    ctx.fillStyle = 'rgba(255,255,255,0.45)';
-    ctx.textAlign = 'center';
-    ctx.fillText(cfg.sublabel, cx, iconCy + iconR + 24 * SCALE, W * 0.9);
   }
 
   const texture = new CanvasTexture(canvas);
@@ -153,7 +142,7 @@ function drawHexInternals(
   }
   ctx.closePath();
   ctx.strokeStyle = dim;
-  ctx.lineWidth = 1.5 * SCALE;
+  ctx.lineWidth = 8 * SCALE; // stroke floor: ≥1.5 screen px at 28px display target
   ctx.stroke();
 
   // Vertex pips
@@ -176,14 +165,14 @@ function drawHexInternals(
     ctx.beginPath();
     ctx.arc(cx, cy, r * 0.70, start, end);
     ctx.strokeStyle = stroke;
-    ctx.lineWidth = 3 * SCALE;
+    ctx.lineWidth = 8 * SCALE; // stroke floor
     ctx.lineCap = 'round';
     ctx.stroke();
     // Capacity track (unused portion, very faint)
     ctx.beginPath();
     ctx.arc(cx, cy, r * 0.70, end, start + Math.PI * 1.5);
     ctx.strokeStyle = withAlpha(stroke, 0.12);
-    ctx.lineWidth = 3 * SCALE;
+    ctx.lineWidth = 8 * SCALE; // stroke floor
     ctx.stroke();
     ctx.lineCap = 'butt';
   }
@@ -191,7 +180,7 @@ function drawHexInternals(
   // Central glyph
   ctx.fillStyle = stroke;
   ctx.strokeStyle = stroke;
-  ctx.lineWidth = 2 * SCALE;
+  ctx.lineWidth = 8 * SCALE; // stroke floor
   const gR = r * 0.20;
   switch (cfg.internal) {
     case 'station': {
@@ -318,6 +307,12 @@ function drawShape(
  * Create a billboard sprite with the given icon configuration.
  * Returns a Three.js Sprite that always faces the camera.
  */
+// Display target the icon-system scales icons to (mirrors icon-system SCREEN_PX);
+// used only to express label sizes as parent-relative ratios.
+const ICON_TARGET_PX = 28;
+const LABEL_PX = 12;     // label cap height on screen (legibility floor ≥11)
+const SUBLABEL_PX = 9;
+
 export function createIcon(cfg: IconConfig): Sprite {
   const texture = renderIconTexture(cfg);
   const material = new SpriteMaterial({
@@ -331,9 +326,29 @@ export function createIcon(cfg: IconConfig): Sprite {
   const sprite = new Sprite(material);
   // Start at a small world-space size — icon-system.scaleFixed() will
   // rescale every frame to maintain constant screen-pixel size.
-  const aspect = 1.25; // H/W ratio (canvas is taller for labels)
+  const aspect = 1.0; // square texture — labels are standalone child sprites
   sprite.scale.set(1, aspect, 1);
   sprite.userData.aspect = aspect;
+
+  // Labels ride as CHILDREN of the icon sprite with constant parent-relative
+  // scale: scaleFixed() scales the parent each frame, so the label keeps its
+  // screen-px ratio for free, at legible size (the old baked-into-texture
+  // labels rendered ~2 screen px at the 28px icon target — unreadable).
+  if (cfg.label) {
+    const r = LABEL_PX / ICON_TARGET_PX;
+    const label = createLabel(cfg.label, '#ffffff', 13);
+    label.scale.set(8 * r, r, 1);          // label canvas is 8:1
+    label.position.set(0, -(0.5 + 0.5 * r + 0.10), 0);
+    sprite.add(label);
+  }
+  if (cfg.sublabel) {
+    const r = LABEL_PX / ICON_TARGET_PX;
+    const r2 = SUBLABEL_PX / ICON_TARGET_PX;
+    const sub = createLabel(cfg.sublabel, 'rgba(255,255,255,0.55)', 11);
+    sub.scale.set(8 * r2, r2, 1);
+    sub.position.set(0, -(0.5 + (cfg.label ? r : 0) + 0.5 * r2 + 0.16), 0);
+    sprite.add(sub);
+  }
 
   return sprite;
 }
@@ -375,6 +390,9 @@ export function createLabel(
 
   const sprite = new Sprite(material);
   sprite.scale.set(8, 1, 1);
+  // Marked so mesh-fade logic skips labels (their opacity is independent of
+  // the icon-state opacity ramps).
+  sprite.userData.isLabel = true;
   return sprite;
 }
 

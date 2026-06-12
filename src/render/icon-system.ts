@@ -108,9 +108,14 @@ export function fadeMeshes(obj: Object3D, opacity: number): void {
 
 // ── Icon Visibility ──────────────────────────────────────────────
 
-/** Show all icon children, apply opacity and scaling. */
+/** Show all icon children, apply opacity and scaling.
+ *  `labels` toggles the icons' child label sprites: at tiers where many local
+ *  entities collapse to the same screen position (heliopause+), legible labels
+ *  superimpose into an unreadable smear — gate them off until the clustering
+ *  pass (docs/zoom-overlay-patterns.md Phase 3) lands. */
 export function showIcons(
   obj: Object3D, opacity: number, camDist: number, fixedSize = true, screenPx = SCREEN_PX,
+  labels = true,
 ): void {
   obj.traverse(child => {
     if (child.userData?.isIcon) {
@@ -119,6 +124,9 @@ export function showIcons(
       (sprite.material as SpriteMaterial).opacity = opacity;
       if (fixedSize) scaleFixed(sprite, camDist, screenPx);
       else scaleWorld(sprite, camDist);
+      for (const ch of sprite.children) {
+        if (ch.userData?.isLabel) ch.visible = labels;
+      }
     }
   });
 }
@@ -151,17 +159,17 @@ export function meshFull_iconOn(obj: Object3D, camDist: number): void {
  * fadeAmt: 0 = mesh fully visible, 1 = mesh fully transparent.
  */
 export function meshFading(
-  obj: Object3D, camDist: number, fadeAmt: number,
+  obj: Object3D, camDist: number, fadeAmt: number, labels = true,
 ): void {
   fadeMeshes(obj, 1 - MathUtils.clamp(fadeAmt, 0, 1));
-  showIcons(obj, ICON_OPACITY, camDist, true);
+  showIcons(obj, ICON_OPACITY, camDist, true, SCREEN_PX, labels);
 }
 
 /**
  * Heliopause+: mesh completely hidden, icon-only display.
  * The icon represents the object at all further zoom tiers.
  */
-export function iconOnly(obj: Object3D, camDist: number): void {
+export function iconOnly(obj: Object3D, camDist: number, labels = true): void {
   fadeMeshes(obj, 0);
-  showIcons(obj, ICON_OPACITY, camDist, true);
+  showIcons(obj, ICON_OPACITY, camDist, true, SCREEN_PX, labels);
 }
