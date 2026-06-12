@@ -21,6 +21,7 @@ import {
   MeshBasicMaterial, PointsMaterial, SpriteMaterial, ShaderMaterial,
   LineBasicMaterial,
   Float32BufferAttribute, Vector3, DoubleSide, BackSide, AdditiveBlending, NormalBlending,
+  CustomBlending, OneFactor, OneMinusSrcAlphaFactor,
   CanvasTexture, Color,
 } from 'three';
 import { getStellarRender } from './planet-colors';
@@ -740,45 +741,32 @@ export function createGalaxy(): Group {
   const boxMin = galaxyWorldCenter.clone().add(new Vector3(-DISC_RADIUS_WU, -DISC_Y_HALF_WU, -DISC_RADIUS_WU));
   const boxMax = galaxyWorldCenter.clone().add(new Vector3( DISC_RADIUS_WU,  DISC_Y_HALF_WU,  DISC_RADIUS_WU));
 
+  // v2: the shader marches the SHARED analytic galaxy model (galaxy-density
+  // chunk — CI-calibrated, band-not-fog proven by vitest). Look uniforms are
+  // gone: structure lives in the model; uEmissionScale is the ONLY brightness
+  // knob (absolute level is auto-exposure's job). Premultiplied compositing:
+  // emission adds over the sky while dust coverage occludes the additive star
+  // Points rendered behind — the principled replacement for the deleted
+  // core-glow sprites.
   const discVolumeMat = new ShaderMaterial({
     vertexShader: galacticDiscVolumeVertexShader,
     fragmentShader: galacticDiscVolumeFragmentShader,
     transparent: true,
     depthWrite: false,
     // BackSide ensures something always renders even when the camera is
-    // INSIDE the box (at arm tier the camera enters the disc volume).
-    // The shader does ray-AABB intersection so it correctly clips to
-    // the volume regardless of which face the rasterizer hit.
+    // INSIDE the box (the shader ray-clips to the AABB regardless).
     side: BackSide,
-    blending: NormalBlending,
+    blending: CustomBlending,
+    blendSrc: OneFactor,
+    blendDst: OneMinusSrcAlphaFactor,
+    blendSrcAlpha: OneFactor,
+    blendDstAlpha: OneMinusSrcAlphaFactor,
     uniforms: {
-      uBoxMin:         { value: boxMin },
-      uBoxMax:         { value: boxMax },
-      uDiscRadius:     { value: DISC_RADIUS_WU },
-      uDiscThickness:  { value: 150 },           // 0.45 kpc — slightly wider than
-                                                  // observed scale height (~0.3 kpc)
-                                                  // so the raymarch hits material
-                                                  // on enough samples to integrate
-      uBulgeColor:     { value: new Color(0xffe2a8) },
-      uArmColor:       { value: new Color(0xd9b894) },
-      uDustColor:      { value: new Color(0x1a0a08) },
-      uBulgeRadius:    { value: 0.22 },
-      uArmTwist:       { value: 5.0 },
-      uArmCount:       { value: 4.0 },
-      uArmPhaseOffset: { value: Math.PI * 0.25 },
-      uBarAngle:       { value: Math.PI * 25 / 180 },
-      uBarLength:      { value: 0.20 },
-      uBarWidth:       { value: 0.06 },
-      uDustStrength:   { value: 1.0 },
-      uExtinction:     { value: 0.012 },         // Beer-Lambert coefficient (1/WU).
-                                                  // Tuned so a typical 30-step march
-                                                  // through dense midplane accumulates
-                                                  // ~0.7 alpha — disc reads as visible
-                                                  // diffuse mass without saturating.
-      uOpacity:        { value: 1.0 },
-      uWarpAmplitude:  { value: 333 },           // 1 kpc warp at r=1
-      uWarpInnerR:     { value: 0.5 },
-      uWarpAngle:      { value: Math.PI * 0.7 },
+      uBoxMin: { value: boxMin },
+      uBoxMax: { value: boxMax },
+      uGalaxyOrigin: { value: galaxyWorldCenter.clone() },
+      uEmissionScale: { value: 0.002 },
+      uOpacity: { value: 1.0 }, // pinned — Phase-4 crossfade is the only ramp
     },
   });
 
@@ -788,33 +776,14 @@ export function createGalaxy(): Group {
   );
   discVolume.renderOrder = 2;
   galaxy.add(discVolume);
-  GALAXY_LOD.discMats.push(discVolumeMat);
+  // NOT pushed to GALAXY_LOD.discMats: the volume no longer participates in
+  // the discPresence opacity ramp — the medium has ONE set of constants
+  // (docs/galaxy-visual-redesign.md §4.5); the Phase-4 crossfade will be the
+  // only permitted transition.
 
-  // ── 4. Core Glow ─────────────────────────────────────────────
-
-  const coreGlow = new Sprite(new SpriteMaterial({
-    map: glowTex, color: 0xfff8e0,
-    transparent: true, blending: AdditiveBlending,
-    depthWrite: false, opacity: 0.75,
-  }));
-  coreGlow.scale.set(2800, 2800, 1);
-  galaxy.add(coreGlow);
-
-  const coreHalo = new Sprite(new SpriteMaterial({
-    map: glowTex, color: 0xffeedd,
-    transparent: true, blending: AdditiveBlending,
-    depthWrite: false, opacity: 0.3,
-  }));
-  coreHalo.scale.set(5000, 5000, 1);
-  galaxy.add(coreHalo);
-
-  const coreWash = new Sprite(new SpriteMaterial({
-    map: glowTex, color: 0xffe8cc,
-    transparent: true, blending: AdditiveBlending,
-    depthWrite: false, opacity: 0.12,
-  }));
-  coreWash.scale.set(8000, 4000, 1);
-  galaxy.add(coreWash);
+  // (Core-glow sprite trio deleted: the bulge/bar glow now comes from the
+  // model's Hernquist+bar emission inside the volume — the sprites were a
+  // chief cause of the interior tan-wash.)
 
   // ── 5. Nebula Clusters (along spiral arms) ────────────────────
   const NEBULA_COUNT = 50;

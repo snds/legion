@@ -164,12 +164,15 @@ export function taper(R: number): number {
   return 1 - t * t * (3 - 2 * t);
 }
 
-/** Two-major + two-minor log-spiral arm pattern in [0,1]. */
+/** Two-major + two-minor log-spiral arm pattern in [0,1]. Arms fade out
+ *  inside the bar region (real spirals emerge from the bar ends, they don't
+ *  curl into the bulge). */
 export function armPattern(R: number, theta: number): number {
   const lnTerm = Math.log(Math.max(R, 50) / ARM_REF_R) / Math.tan(PITCH);
   const p2 = Math.cos(2 * (theta - lnTerm));
   const p4 = Math.cos(4 * (theta - lnTerm));
-  return Math.max(0, 0.667 * p2 + 0.333 * p4);
+  const inner = Math.min(1, Math.max(0, (R - 700) / 500)); // 0 at R≤700 → 1 at R≥1200
+  return Math.max(0, 0.667 * p2 + 0.333 * p4) * inner * inner * (3 - 2 * inner);
 }
 
 /** Dust-lane mask: sharpened crest displaced LANE_OFFSET toward the arm's
@@ -237,8 +240,13 @@ export function sampleGalaxy(px: number, py: number, pz: number): GalaxySample {
   // EXTINCTION — thinner, clumpy, lane-concentrated, + authored rift clouds
   let dust = Math.exp(-R / HR_DUST) *
     (Math.exp(-Math.abs(yw) / HZ_DUST) + DUST2_WEIGHT * Math.exp(-Math.abs(yw) / HZ_DUST2));
-  dust *= 0.4 + 1.2 * fbm3(px / CLUMP_SCALE, py / CLUMP_SCALE, pz / CLUMP_SCALE);
-  dust *= 0.25 + dustLane(R, theta);
+  // Clump fBm only where dust is non-negligible (perf: most raymarch steps
+  // land above the 30-WU slab where the base is ~0; threshold is far below
+  // any visible κ so results are unchanged).
+  if (dust > 1e-5) {
+    dust *= 0.4 + 1.2 * fbm3(px / CLUMP_SCALE, py / CLUMP_SCALE, pz / CLUMP_SCALE);
+    dust *= 0.25 + dustLane(R, theta);
+  }
   dust *= tap;
 
   let kappaV = (KAPPA_MID * dust) / DUST_NORM;

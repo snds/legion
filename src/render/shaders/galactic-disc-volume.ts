@@ -1,27 +1,31 @@
 // ═══════════════════════════════════════════════════════════════════
-// GALACTIC DISC VOLUME — Single-Pass Ray-Marched Volumetric Disc
-// Replaces the 9-disc-plane + 8-dust-plane stack with one BoxGeometry
-// + raymarch fragment shader. Each fragment marches the view ray from
-// front face to back face of the box, sampling disc emission and dust
-// extinction at each step. Front-to-back compositing accumulates the
-// integrated color and transmittance.
+// GALACTIC DISC VOLUME v2 — emission–absorption raymarch over the SHARED
+// analytic galaxy model (galaxy-density.glsl.ts ← galaxy-density.ts).
 //
-// Why this beats stacked planes:
-//   • Real volume — looks correct from any angle, including edge-on
-//   • Dust occludes light from BEHIND it through the integration, not
-//     just from its own layer
-//   • One draw call instead of 17
-//   • No layer-pop artifacts at oblique angles
-//   • Same procedural pattern (arms, bar, bulge, dust) as before, now
-//     evaluated in 3D with a vertical Gaussian density profile
+// v1 was an art-tuned 2D-pattern volume that read correctly only from
+// outside at galaxy tier; from inside, every ray accumulated similar
+// optical depth → uniform fog (the reverted-bake failure). v2 marches the
+// CI-calibrated physical model (vitest: band-not-fog proven numerically),
+// so one medium serves exterior views, flythrough, and the future
+// system-tier bake (docs/galaxy-visual-redesign.md §4).
 //
-// Performance:
-//   • 24 march steps per fragment
-//   • 3-octave FBM (reduced from 5 in the 2D shader) for noise sampling
-//   • Early exit when transmittance < 0.01
-//   • Disc covers ~30-60% of screen at galaxy tier, so net cost ~3-5ms
-//     on a modest GPU — well within budget
+// Key properties:
+//   • Camera-inside-capable ray setup (tNear clamp) — unchanged from v1.
+//   • LOG-distributed, jittered steps (IGN) — resolves the near field
+//     without starving the far field on long in-plane rays.
+//   • PER-CHANNEL transmittance (CCM89 κ_RGB): dust lanes redden what is
+//     behind them (tan/amber rifts), not just darken.
+//   • Premultiplied output (emission, coverage): with CustomBlending
+//     (One, OneMinusSrcAlpha) the band's glow ADDS over the black sky
+//     while dust coverage OCCLUDES the additive star Points behind it —
+//     the principled replacement for the deleted dust-strand particles
+//     and core-glow sprites.
+//   • Emission is calibrated by uEmissionScale ONLY — brightness ratios
+//     inside the sky are the model's job, absolute level is exposure's
+//     job (§4.5: no per-tier emissivity inflation, no opacity ramps).
 // ═══════════════════════════════════════════════════════════════════
+
+import { galaxyDensityGLSL } from './galaxy-density.glsl';
 
 export const galacticDiscVolumeVertexShader = /* glsl */ `
   varying vec3 vWorldPos;
@@ -35,179 +39,27 @@ export const galacticDiscVolumeVertexShader = /* glsl */ `
 export const galacticDiscVolumeFragmentShader = /* glsl */ `
   precision highp float;
 
-  // AABB of the volumetric box in world space.
-  uniform vec3 uBoxMin;
+  uniform vec3 uBoxMin;        // volume AABB, world space (static — constraint)
   uniform vec3 uBoxMax;
-  // Galactic disc geometry parameters (world units).
-  uniform float uDiscRadius;     // disc-plane radius (~5000 WU = 15 kpc)
-  uniform float uDiscThickness;  // vertical scale-height (~100 WU = 0.3 kpc)
-  // Disc-look uniforms (mirrors the 2D shader).
-  uniform vec3 uBulgeColor;
-  uniform vec3 uArmColor;
-  uniform vec3 uDustColor;
-  uniform float uBulgeRadius;
-  uniform float uArmTwist;
-  uniform float uArmCount;
-  uniform float uArmPhaseOffset;
-  uniform float uBarAngle;
-  uniform float uBarLength;
-  uniform float uBarWidth;
-  uniform float uDustStrength;
-  uniform float uOpacity;
-  uniform float uExtinction;     // Beer-Lambert extinction coefficient (1/WU)
-  // Galactic warp (vertex-like, evaluated in the sampling function).
-  uniform float uWarpAmplitude;  // peak Y displacement (WU) at r=1
-  uniform float uWarpInnerR;     // normalized r below which warp is 0
-  uniform float uWarpAngle;      // line-of-nodes azimuth
+  uniform vec3 uGalaxyOrigin;  // galaxy group's world position (Sgr A* in world)
+  uniform float uEmissionScale;
+  uniform float uOpacity;      // pinned 1.0; Phase-4 crossfade is the only ramp
 
   varying vec3 vWorldPos;
 
-  // ── Noise primitives (3 octaves for raymarch perf vs 5 in 2D) ──
-  vec2 hash2(vec2 p) {
-    return fract(sin(vec2(
-      dot(p, vec2(127.1, 311.7)),
-      dot(p, vec2(269.5, 183.3))
-    )) * 43758.5453);
-  }
-  float noise2(vec2 p) {
-    vec2 i = floor(p);
-    vec2 f = fract(p);
-    vec2 u = f * f * (3.0 - 2.0 * f);
-    float a = dot(hash2(i)                 - 0.5, f);
-    float b = dot(hash2(i + vec2(1.0, 0.0)) - 0.5, f - vec2(1.0, 0.0));
-    float c = dot(hash2(i + vec2(0.0, 1.0)) - 0.5, f - vec2(0.0, 1.0));
-    float d = dot(hash2(i + vec2(1.0, 1.0)) - 0.5, f - vec2(1.0, 1.0));
-    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y) * 0.5 + 0.5;
-  }
-  float fbm(vec2 p) {
-    float v = 0.0;
-    float a = 0.5;
-    for (int i = 0; i < 3; i++) {
-      v += a * noise2(p);
-      p *= 2.07;
-      a *= 0.5;
-    }
-    return v;
-  }
+  ${galaxyDensityGLSL}
 
-  // ── Sample the disc at a 3D point in world space ──
-  // Returns vec4(emission_rgb, density). emission already accounts for
-  // the position's vertical density profile so the caller doesn't have
-  // to re-multiply.
-  vec4 sampleDisc(vec3 worldP) {
-    vec3 boxCenter = (uBoxMin + uBoxMax) * 0.5;
-    vec3 local = worldP - boxCenter;
-    // 2D disc plane coords (X, Z) normalized to [-1, 1]
-    vec2 pUV = vec2(local.x, local.z) / uDiscRadius;
-    float r = length(pUV);
-    if (r > 1.0) return vec4(0.0);
-
-    float theta = atan(pUV.y, pUV.x);
-    float lr = log(max(r, 0.02));
-    float armPhase = theta - lr * uArmTwist + uArmPhaseOffset;
-
-    // Galactic warp — displace the effective Y at this position by a
-    // sinusoidal amount past the warp inner radius.
-    float warpAmp = max(0.0, r - uWarpInnerR) * uWarpAmplitude;
-    float warpY = warpAmp * sin(theta - uWarpAngle);
-    float effectiveY = local.y - warpY;
-
-    // Arm density profile (variable sharpness for diffuse outer edges)
-    float armBand = 0.5 + 0.5 * cos(armPhase * uArmCount);
-    float armSharpness = mix(2.0, 0.7, smoothstep(0.15, 0.85, r));
-    float arms = pow(armBand, armSharpness);
-    arms *= smoothstep(0.08, 0.26, r);
-    arms *= 1.0 - smoothstep(0.82, 1.0, r);
-    float principal = 0.5 + 0.5 * cos(armPhase * 2.0);
-    arms *= 0.55 + 0.45 * principal;
-
-    // Bulge
-    float bulge = exp(-pow(r / uBulgeRadius, 2.0) * 2.5);
-
-    // Bar (elongated ellipse oriented at uBarAngle)
-    float cba = cos(uBarAngle), sba = sin(uBarAngle);
-    vec2 barCoord = vec2(cba * pUV.x + sba * pUV.y, -sba * pUV.x + cba * pUV.y);
-    float bar = exp(
-      -pow(barCoord.x / uBarLength, 2.0) * 1.6
-      -pow(barCoord.y / uBarWidth,  2.0) * 6.0
-    );
-
-    // Radial envelope
-    float discEnv = exp(-r * 1.6) * (1.0 - smoothstep(0.88, 1.0, r));
-
-    // Cloud noise (3-octave FBM, rotated by log(r) to spiral with arms)
-    float swirl = -lr * 1.4;
-    mat2 rot = mat2(cos(swirl), -sin(swirl), sin(swirl), cos(swirl));
-    vec2 sUV = rot * (pUV * 6.0);
-    float cloud = mix(0.5, fbm(sUV), 0.95);
-
-    // Vertical Gaussian density. The bulge has its own ~spherical
-    // profile; arms are thin-disc; bar is mid. Combined here as one
-    // exponential drop-off — simple but reads correctly.
-    float h = effectiveY / uDiscThickness;
-    float verticalDensity = exp(-h * h * 2.0);
-
-    // Density (used for alpha accumulation)
-    float density = (discEnv * (0.6 + arms * 0.9) + bulge * 1.4 + bar * 1.7)
-                  * verticalDensity * cloud;
-
-    // Color (warm sepia disc + warm gold bulge + warm gold bar)
-    vec3 armTint = mix(uArmColor * 0.5, uArmColor * 1.15, arms);
-    vec3 baseDisc = armTint * (discEnv + arms * 0.9) * 2.2;
-    vec3 bulgeContribution = uBulgeColor * bulge * 2.4;
-    vec3 barContribution = uBulgeColor * bar * 2.6;
-    vec3 emission = (baseDisc + bulgeContribution + barContribution) * verticalDensity * cloud;
-
-    return vec4(emission, density);
-  }
-
-  // ── Sample dust at a 3D point ──
-  // Dust is thinner in Y than stars (it concentrates in the midplane).
-  float sampleDust(vec3 worldP) {
-    vec3 boxCenter = (uBoxMin + uBoxMax) * 0.5;
-    vec3 local = worldP - boxCenter;
-    vec2 pUV = vec2(local.x, local.z) / uDiscRadius;
-    float r = length(pUV);
-    if (r > 1.0) return 0.0;
-
-    float theta = atan(pUV.y, pUV.x);
-    float lr = log(max(r, 0.02));
-    float armPhase = theta - lr * uArmTwist + uArmPhaseOffset;
-
-    // Warp displacement
-    float warpAmp = max(0.0, r - uWarpInnerR) * uWarpAmplitude;
-    float warpY = warpAmp * sin(theta - uWarpAngle);
-    float effectiveY = local.y - warpY;
-
-    // Dust noise pattern (same as 2D shader)
-    float swirl = -lr * 1.4;
-    mat2 rot = mat2(cos(swirl), -sin(swirl), sin(swirl), cos(swirl));
-    vec2 dustUV = rot * (pUV * 14.0) + vec2(armPhase * 1.8, 0.0);
-    float dustNoise = fbm(dustUV);
-    float dustFine = fbm(pUV * 36.0);
-
-    // Arm-edge concentration
-    float armBand = 0.5 + 0.5 * cos(armPhase * uArmCount);
-    float arms = pow(armBand, 1.5);
-    float armEdge = pow(arms, 0.8) * (0.55 + 0.45 * cos(armPhase * uArmCount - 0.6));
-
-    float dust = smoothstep(0.42, 0.78, dustNoise * armEdge);
-    dust *= 0.45 + 0.55 * dustFine;
-    dust *= smoothstep(0.08, 0.25, r);
-    dust *= 1.0 - smoothstep(0.82, 1.0, r);
-
-    // Dust vertical profile — thinner than stars (concentrated at midplane).
-    float h = effectiveY / (uDiscThickness * 0.5);
-    float verticalDensity = exp(-h * h * 2.5);
-
-    return dust * verticalDensity;
+  // Interleaved gradient noise — cheap per-pixel jitter that breaks the
+  // log-step banding without a noise texture.
+  float ign(vec2 px) {
+    return fract(52.9829189 * fract(0.06711056 * px.x + 0.00583715 * px.y));
   }
 
   void main() {
     vec3 ro = cameraPosition;
     vec3 rd = normalize(vWorldPos - cameraPosition);
 
-    // Ray-AABB slab intersection
+    // Ray-AABB slab intersection (camera-inside-capable)
     vec3 invD = 1.0 / rd;
     vec3 t1 = (uBoxMin - ro) * invD;
     vec3 t2 = (uBoxMax - ro) * invD;
@@ -216,43 +68,36 @@ export const galacticDiscVolumeFragmentShader = /* glsl */ `
     float tNear = max(max(tMin.x, tMin.y), tMin.z);
     float tFar  = min(min(tMax.x, tMax.y), tMax.z);
     if (tNear > tFar || tFar < 0.0) discard;
-    tNear = max(tNear, 0.0);
 
-    // March
-    const int STEPS = 24;
-    float stepSize = (tFar - tNear) / float(STEPS);
+    // Logarithmic step distribution from just past the camera to the box
+    // exit: dense where a step subtends a large angle, coarse far away.
+    float t0 = max(tNear, 2.0);
+    float jitter = ign(gl_FragCoord.xy);
+    const int STEPS = 32; // 40 per spec was ~28fps at galaxy tier; half-res (Phase 6) is the real reserve
 
-    vec3 accumColor = vec3(0.0);
-    float transmittance = 1.0;
+    vec3 accum = vec3(0.0);
+    vec3 T = vec3(1.0);
 
     for (int i = 0; i < STEPS; i++) {
-      float t = tNear + (float(i) + 0.5) * stepSize;
-      vec3 p = ro + rd * t;
+      float a0 = (float(i) + jitter) / float(STEPS);
+      float a1 = (float(i) + 1.0) / float(STEPS);
+      float t  = t0 * pow(tFar / t0, a0);
+      float tn = t0 * pow(tFar / t0, a1);
+      float dt = max(tn - t, 0.0);
 
-      vec4 s = sampleDisc(p);
-      if (s.a < 0.001) continue;
+      GalaxySample s = sampleGalaxy(ro + rd * t - uGalaxyOrigin);
 
-      float dust = sampleDust(p);
-      // Extinction along this step (Beer-Lambert) — stars get extinguished by
-      // their own density (self-shielding) plus dust at ~5x weight.
-      float sigma_a = (s.a + dust * uDustStrength * 5.0) * uExtinction;
-      float deltaT = exp(-sigma_a * stepSize);
+      accum += T * s.j * dt;                  // emission decoupled from alpha
+      T *= exp(-s.kappaV * GD_KAPPA_RGB * dt);
 
-      // Emission within this step. With pre-multiplied emission and the
-      // (1 - deltaT) factor we get the standard volume-rendering integral
-      // without dividing by sigma_a (which avoids div-by-zero in thin regions).
-      vec3 stepEmission = s.rgb * (1.0 - deltaT);
-
-      // Tint stars by dust (warm absorption color of interstellar grains)
-      stepEmission = mix(stepEmission, stepEmission * uDustColor, dust * uDustStrength * 0.4);
-
-      accumColor += transmittance * stepEmission;
-      transmittance *= deltaT;
-      if (transmittance < 0.01) break;
+      if (max(T.r, max(T.g, T.b)) < 0.005) break;
     }
 
-    float alpha = (1.0 - transmittance) * uOpacity;
-    if (alpha < 0.001) discard;
-    gl_FragColor = vec4(accumColor, alpha);
+    // Premultiplied: rgb = light added over the sky; alpha = how much the
+    // dust occludes what is rendered behind (additive star Points).
+    float coverage = 1.0 - (T.r + T.g + T.b) / 3.0;
+    vec3 rgb = accum * uEmissionScale * uOpacity;
+    if (coverage < 0.002 && max(rgb.r, max(rgb.g, rgb.b)) < 0.0005) discard;
+    gl_FragColor = vec4(rgb, coverage * uOpacity);
   }
 `;
