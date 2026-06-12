@@ -15,7 +15,12 @@ export const planetSurfaceVertexShader = /* glsl */ `
   varying vec2 vUv;
 
   void main() {
-    vNormal = normalize(normalMatrix * normal);
+    // WORLD-space normal. normalMatrix would give a VIEW-space normal, which —
+    // dotted against the world-space uSunDir in the fragment shader — made the
+    // terminator rotate with the camera instead of staying opposite the sun.
+    // mat3(modelMatrix) is exact here: planet transforms are rotation + uniform
+    // scale only (normalize() absorbs the scale).
+    vNormal = normalize(mat3(modelMatrix) * normal);
     vec4 worldPos = modelMatrix * vec4(position, 1.0);
     vWorldPos = worldPos.xyz;
     // Guard: when camera is at object position, viewDir is zero → normalize produces NaN
