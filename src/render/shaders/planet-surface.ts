@@ -51,6 +51,15 @@ export const planetSurfaceFragmentShader = /* glsl */ `
   uniform vec3 uBounceDir;        // world-space direction to the bounce source
   uniform vec3 uBounceColor;      // reflected-light tint (the source body's albedo color)
   uniform float uBounceStrength;
+  // Ring shadow cast onto the planet surface (ringed planets only). Project the
+  // fragment toward the sun onto the ring plane; if it lands in the annulus, the
+  // ring occludes the sun. World-space. See docs §5.6.
+  uniform bool uHasRingShadow;
+  uniform vec3 uRingNormal;       // ring-plane normal (world)
+  uniform vec3 uPlanetCenter;     // planet center (world)
+  uniform float uRingInner;       // annulus radii (world units)
+  uniform float uRingOuter;
+  uniform float uRingShadowStrength;
 
   varying vec3 vNormal;
   varying vec3 vWorldPos;
@@ -138,6 +147,23 @@ export const planetSurfaceFragmentShader = /* glsl */ `
     // facing the parent body): the "moon lit blue/tan by its gas giant" cue.
     float bounceNdotL = max(dot(N, normalize(uBounceDir)), 0.0);
     surfaceColor += uBounceColor * (uBounceStrength * bounceNdotL);
+
+    // Ring shadow — march from the fragment toward the sun to the ring plane.
+    if (uHasRingShadow) {
+      float denom = dot(L, uRingNormal);
+      if (abs(denom) > 1e-4) {
+        // t along +L (toward sun) to reach the ring plane through the center.
+        float t = dot(uPlanetCenter - vWorldPos, uRingNormal) / denom;
+        if (t > 0.0) {                          // ring lies between fragment and sun
+          vec3 hit = vWorldPos + t * L;
+          float rHit = length(hit - uPlanetCenter);
+          // soft inner/outer edges; ~constant optical depth across the annulus
+          float band = smoothstep(uRingInner, uRingInner * 1.03, rHit)
+                     * (1.0 - smoothstep(uRingOuter * 0.97, uRingOuter, rHit));
+          surfaceColor *= (1.0 - uRingShadowStrength * band);
+        }
+      }
+    }
 
     gl_FragColor = vec4(surfaceColor, 1.0);
   }
