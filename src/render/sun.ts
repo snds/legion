@@ -27,7 +27,8 @@ export interface SunSystem {
 export function createSunSystem(radius: number): SunSystem {
   const group = new Group();
   group.name = 'sun-system';
-  let elapsedTime = 0;
+  let elapsedTime = 0;   // wrapped at 1000 s for shader uTime uniforms
+  let coronalRotY = 0;   // wrapped at 2π for seamless coronal rotation
 
   // ── 1. Perlin Cubemap Generator ──────────────────────────────
 
@@ -286,15 +287,20 @@ export function createSunSystem(radius: number): SunSystem {
   cubeScene.add(perlinBox);
 
   function update(renderer: WebGLRenderer, dt: number): void {
-    elapsedTime += dt;
+    // Wrap the shader clock at 1000 s so the float32 uTime uniforms never
+    // lose precision over a long session (The Witness, Castaño 2022). The
+    // noise/surface/ray shaders tolerate the periodic wrap; coronal rotation
+    // is kept pop-free below via a separate mod-2π accumulator.
+    elapsedTime = (elapsedTime + dt) % 1000;
 
     // Update time uniforms
     perlinMat.uniforms.uTime.value = elapsedTime;
     surfaceMat.uniforms.uTime.value = elapsedTime;
     rayMat.uniforms.uTime.value = elapsedTime;
 
-    // Slowly rotate coronal loops
-    coronalGroup.rotation.y = elapsedTime * 0.02;
+    // Slowly rotate coronal loops (accumulate mod 2π so it wraps seamlessly)
+    coronalRotY = (coronalRotY + dt * 0.02) % (Math.PI * 2);
+    coronalGroup.rotation.y = coronalRotY;
     coronalGroup.rotation.x = Math.sin(elapsedTime * 0.01) * 0.05;
 
     // Re-render Perlin cubemap

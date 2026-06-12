@@ -55,41 +55,50 @@ function orbitalSystem(w: IWorld, ctx: FrameContext): void {
 
       const sma = Orbit.semiMajorAxis[eid];
       const ecc = Orbit.eccentricity[eid];
-      const incl = Orbit.inclination[eid];
+      const incl = Orbit.inclination[eid];   // i
+      const argPe = Orbit.argPeriapsis[eid]; // ω
+      const lonAN = Orbit.longAscNode[eid];  // Ω
 
       // Advance mean anomaly
       Orbit.meanAnomaly[eid] += Orbit.meanMotion[eid] * gameDt;
 
-      // Solve Kepler equation (Newton-Raphson, 5 iterations)
-      let M = Orbit.meanAnomaly[eid] % (Math.PI * 2);
-      let E = M;
-      for (let j = 0; j < 5; j++) {
+      // Solve Kepler's equation M = E − e·sinE (Newton–Raphson).
+      // Seed E = π for high eccentricity to avoid the E≈0 stall (Curtis Alg. 3.1).
+      const M = Orbit.meanAnomaly[eid] % (Math.PI * 2);
+      let E = ecc > 0.8 ? Math.PI : M;
+      for (let j = 0; j < 6; j++) {
         E = E - (E - ecc * Math.sin(E) - M) / (1 - ecc * Math.cos(E));
       }
-
-      // True anomaly
       const cosE = Math.cos(E);
       const sinE = Math.sin(E);
-      const nu = Math.atan2(
-        Math.sqrt(1 - ecc * ecc) * sinE,
-        cosE - ecc,
-      );
 
-      // Radius
-      const r = sma * (1 - ecc * cosE);
+      // Perifocal coordinates (periapsis along +x'); equivalent to
+      // (r·cosν, r·sinν) but branch-free. r = a(1 − e·cosE).
+      const xp = sma * (cosE - ecc);
+      const yp = sma * Math.sqrt(1 - ecc * ecc) * sinE;
+
+      // Rotate perifocal → reference frame by R = R_z(Ω)·R_x(i)·R_z(ω)
+      // (Curtis Alg. 4.5). Astronomy convention is Z-up; Legion is Y-up with
+      // the ecliptic in the X–Z plane, so we map (X,Y,Z) → (X, Z, Y) below.
+      const cosO = Math.cos(lonAN), sinO = Math.sin(lonAN);
+      const cosw = Math.cos(argPe), sinw = Math.sin(argPe);
+      const cosi = Math.cos(incl),  sini = Math.sin(incl);
+
+      const px = xp * (cosO * cosw - sinO * sinw * cosi) + yp * (-cosO * sinw - sinO * cosw * cosi);
+      const py = xp * (sinO * cosw + cosO * sinw * cosi) + yp * (-sinO * sinw + cosO * cosw * cosi);
+      const pz = xp * (sinw * sini) + yp * (cosw * sini);
 
       if (isMoon) {
-        // Moon: sma is in parent-local visual units, not AU.
-        // Position relative to parent, no AU_SCALE.
-        Position.x[eid] = Position.x[parentEid] + r * Math.cos(nu);
-        Position.y[eid] = Position.y[parentEid] + r * Math.sin(nu) * Math.sin(incl);
-        Position.z[eid] = Position.z[parentEid] + r * Math.sin(nu) * Math.cos(incl);
+        // Moon: sma is in parent-local visual units, position relative to parent.
+        Position.x[eid] = Position.x[parentEid] + px;
+        Position.y[eid] = Position.y[parentEid] + pz;
+        Position.z[eid] = Position.z[parentEid] + py;
       } else {
-        // Primary body: position in AU, scaled
+        // Primary body: sma in AU, scaled to world units.
         const AU_SCALE = 10; // 1 AU = 10 world units
-        Position.x[eid] = r * Math.cos(nu) * AU_SCALE;
-        Position.y[eid] = r * Math.sin(nu) * Math.sin(incl) * AU_SCALE;
-        Position.z[eid] = r * Math.sin(nu) * Math.cos(incl) * AU_SCALE;
+        Position.x[eid] = px * AU_SCALE;
+        Position.y[eid] = pz * AU_SCALE;
+        Position.z[eid] = py * AU_SCALE;
       }
     }
   }
