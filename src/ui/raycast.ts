@@ -23,6 +23,10 @@ import type { LayerGroups } from '../render/scene';
 let camera: PerspectiveCamera;
 let selectables: Object3D[] = [];
 const raycaster = new Raycaster();
+// Fat, screen-constant hit corridor for Line2 orbit lines (px added to the
+// 1px draw width) — pencil-thin lines are otherwise unhoverable. Screen-space,
+// so the affordance automatically scales with camera proximity.
+(raycaster.params as unknown as Record<string, unknown>).Line2 = { threshold: 8 };
 const mouseVec = new Vector2();
 const worldPos = new Vector3();
 
@@ -124,11 +128,22 @@ function makeHoverReticule(): Sprite {
 }
 
 function setHoverState(hit: HitResult | null): void {
-  // Brighten the hovered body's orbit line (planets/moons); clear otherwise.
+  // Brighten the hovered body's orbit line — when hovering the body (planet/
+  // moon) OR the orbit line itself; clear otherwise.
   const t = hit?.data?.type as string | undefined;
   setOrbitHighlight(
-    (t === 'planet' || t === 'moon') ? ((hit!.data.name as string) ?? null) : null,
+    (t === 'planet' || t === 'moon' || t === 'orbit')
+      ? ((hit!.data.name as string) ?? null)
+      : null,
   );
+
+  // Orbit-line hovers brighten the line but get no bracket reticule (sizing a
+  // reticule on an ellipse is meaningless).
+  if (t === 'orbit') {
+    hoveredObject = null;
+    if (hoverIndicator) hoverIndicator.visible = false;
+    return;
+  }
 
   if (!hoverIndicator) return;
   if (!hit) {
@@ -234,7 +249,10 @@ export function initRaycast(
 
     const hit = getHit(e.clientX, e.clientY);
     if (hit) {
-      Tooltip.show(hit.data, e.clientX, e.clientY);
+      // Orbit-line hovers brighten the line (via setHoverState) but show no
+      // entity tooltip — the line isn't an inspectable entity.
+      if ((hit.data.type as string) === 'orbit') Tooltip.hide();
+      else Tooltip.show(hit.data, e.clientX, e.clientY);
       canvas.style.cursor = 'pointer';
       setHoverState(hit);
     } else {
@@ -258,6 +276,9 @@ export function initRaycast(
     if (e.button !== 0 && e.button !== 2) return;
 
     const hit = getHit(e.clientX, e.clientY);
+    // Orbit lines are hover-only affordances: clicking one neither selects
+    // nor deselects (their userData has no entity payload).
+    if (hit && (hit.data.type as string) === 'orbit') return;
     if (hit) {
       // Pull the real ECS eid out of userData (set by registerRenderObject).
       // Non-ECS objects (stations, galactic markers, alien civs, transit
@@ -280,6 +301,7 @@ export function initRaycast(
   canvas.addEventListener('dblclick', (e: MouseEvent) => {
     const hit = getHit(e.clientX, e.clientY);
     if (!hit) return;
+    if ((hit.data.type as string) === 'orbit') return; // hover-only affordance
 
     hit.object.getWorldPosition(worldPos);
     const eid = (hit.data as Record<string, unknown>).eid as number | undefined ?? 0;
