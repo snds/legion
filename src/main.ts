@@ -372,7 +372,7 @@ async function boot(): Promise<void> {
     // Always pass a focus target so angular culling knows which planet to keep visible.
     // Default to origin (star) when no entity is selected.
     const focusTarget = Game.data.camFocusTarget ?? { x: 0, y: 0, z: 0 };
-    updatePlanetShaders(Game.data.gameTime, camera.position, focusTarget, Game.data.zoomDomain);
+    updatePlanetShaders(Game.data.gameTime, shaderTime, camera.position, focusTarget, Game.data.zoomDomain);
 
     // 9c. Lens flare update (star position → screen space)
     lensFlare.update(starOrigin, camera, frameTime);

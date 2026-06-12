@@ -217,9 +217,11 @@ export function createPlanetMesh(
       uHasTexture: { value: false },
       uTime: { value: 0 },
       uHasAtmosphere: { value: hasAtmosphere },
-      // Specular gating: Oceanic = 1.0 (sea glint), Ice giants = 0.55,
-      // Rocky/Gas/Dwarf = 0 (no plausible specular highlight).
-      uSpecularScale: { value: planetType === 1 ? 1.0 : planetType === 2 ? 0.55 : 0.0 },
+      // Specular gating: Oceanic(1) = 1.0 (sea glint), IceGiant(4) = 0.55,
+      // Rocky/Desert/Gas/Dwarf = 0 (no plausible specular highlight).
+      // (Was `=== 2`, which is Desert in the PlanetType enum — ice giants
+      // were getting zero specular and deserts a sea glint.)
+      uSpecularScale: { value: planetType === 1 ? 1.0 : planetType === 4 ? 0.55 : 0.0 },
       // Twilight scattering tint — warmer for thicker atmospheres.
       uTwilightTint: { value: new Vector3(
         planetType === 1 ? 1.0 : planetType === 0 ? 0.95 : 0.7,
@@ -434,9 +436,15 @@ function applyPlanetOpacity(entry: PlanetMaterialEntry, opacity: number): void {
 
 /** Update all planet shader uniforms per frame (sun direction, rotation, ring shadows).
  *  Also fades out non-focused planets that subtend too much of the viewport,
- *  preventing orbiting planets from flashing across the camera at close zoom. */
+ *  preventing orbiting planets from flashing across the camera at close zoom.
+ *  @param gameTime   sim seconds — drives planet ROTATION (must track warp)
+ *  @param shaderTime bounded wall-clock seconds — drives cosmetic shader
+ *                    animation (storm flicker). Was fed gameTime, which made
+ *                    flicker speed scale with time compression and overflow
+ *                    float32 within a session. */
 export function updatePlanetShaders(
   gameTime = 0,
+  shaderTime = 0,
   cameraPosition?: Vector3,
   focusTarget?: { x: number; y: number; z: number } | null,
   zoomDomain?: string,
@@ -473,7 +481,7 @@ export function updatePlanetShaders(
     if (sunDir.lengthSq() === 0) sunDir.set(0, 0, 1);
 
     entry.surfaceMat.uniforms.uSunDir.value.copy(sunDir);
-    entry.surfaceMat.uniforms.uTime.value = gameTime;
+    entry.surfaceMat.uniforms.uTime.value = shaderTime;
 
     // Planet rotation (spin group Y-axis)
     if (entry.spinGroup && entry.dayLength > 0) {
