@@ -14,6 +14,7 @@ import { SMAAPass } from 'three/examples/jsm/postprocessing/SMAAPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import { AutoExposurePass } from './auto-exposure';
 import { VP } from './visual-params';
 
 // ── NaN Sanitization Shader ──────────────────────────────────────
@@ -234,6 +235,7 @@ const VignetteShader = {
 
 export interface PostProcessingContext {
   composer: EffectComposer;
+  autoExposurePass: AutoExposurePass;
   bloomPass: UnrealBloomPass;
   smaaPass: SMAAPass;
   vignettePass: ShaderPass;
@@ -258,6 +260,13 @@ export function createPostProcessing(
   // 1. Render pass
   const renderPass = new RenderPass(scene, camera);
   composer.addPass(renderPass);
+
+  // 1.5. Auto-exposure metering tap — reads the raw scene HDR and drives
+  // renderer.toneMappingExposure (consumed by the AgX OutputPass). The VP
+  // exposure becomes an EV bias on the metered value. needsSwap=false: it does
+  // not disturb the chain, so SMAA below still receives the scene.
+  const autoExposurePass = new AutoExposurePass(() => VP.get('toneMappingExposure'));
+  composer.addPass(autoExposurePass);
 
   // 2. SMAA anti-aliasing
   const smaaPass = new SMAAPass(
@@ -335,6 +344,7 @@ export function createPostProcessing(
 
   return {
     composer,
+    autoExposurePass,
     bloomPass,
     smaaPass,
     vignettePass,
