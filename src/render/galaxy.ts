@@ -282,7 +282,6 @@ interface GalaxyLODState {
   localArmMat: ShaderMaterial | null;
   dustMat: PointsMaterial | null;
   discMats: ShaderMaterial[];           // stacked disc star layers
-  dustLayerMats: ShaderMaterial[];      // interleaved volumetric dust layers
   nebulaMats: SpriteMaterial[];
 }
 
@@ -291,7 +290,6 @@ const GALAXY_LOD: GalaxyLODState = {
   localArmMat: null,
   dustMat: null,
   discMats: [],
-  dustLayerMats: [],
   nebulaMats: [],
 };
 
@@ -351,10 +349,6 @@ export function updateGalaxyLOD(camDist: number): void {
   // stacked-thickness disc (each layer has its own ShaderMaterial
   // with a baked-in uLayerOpacity Gaussian weight).
   for (const m of GALAXY_LOD.discMats) {
-    m.uniforms.uOpacity.value = discPresence;
-  }
-  // Volumetric dust layers fade in along with the disc.
-  for (const m of GALAXY_LOD.dustLayerMats) {
     m.uniforms.uOpacity.value = discPresence;
   }
 
@@ -454,7 +448,6 @@ export function createGalaxy(): Group {
   GALAXY_LOD.localArmMat = null;
   GALAXY_LOD.dustMat = null;
   GALAXY_LOD.discMats.length = 0;
-  GALAXY_LOD.dustLayerMats.length = 0;
   GALAXY_LOD.nebulaMats.length = 0;
 
   const galaxy = new Group();
