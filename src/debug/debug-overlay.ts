@@ -9,6 +9,7 @@
 // ═══════════════════════════════════════════════════════════════════
 
 import { Game } from '../core/state';
+import { formatGameClock } from '../core/time';
 import { Events } from '../core/events';
 import { getAIDebugInfo } from '../simulation/ai/ai-manager';
 import { getGraphStats } from '../simulation/pathfinding';
@@ -122,7 +123,7 @@ class DebugOverlay {
       `Draw: ${calls} calls, ${(triangles / 1000).toFixed(1)}K tris`,
       `Heap: ${heapUsed}`,
       ``,
-      `Time: ${speed.label} (TC ${speed.tc}) | Day ${Math.floor(state.gameTime)}`,
+      `Time: ${speed.label} (TC ${speed.tc}) | ${formatGameClock(state.gameTime)}`,
       `Zoom: ${state.zoomDomain} (${state.zoomLevel.toFixed(0)}%) dist=${state.camDist.toFixed(0)}`,
       `Selected: ${state.selectedEntity ?? 'none'}`,
       ``,

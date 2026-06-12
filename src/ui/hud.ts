@@ -11,6 +11,7 @@
 // ═══════════════════════════════════════════════════════════════════
 
 import { Game, type DomainName } from '../core/state';
+import { formatGameClock } from '../core/time';
 
 // ── DOM References ───────────────────────────────────────────────
 // Cached once at init to avoid per-frame getElementById calls.
@@ -59,15 +60,12 @@ function fmtNum(n: number): string {
 }
 
 /**
- * Format game time (seconds) to game clock string.
- * Matches monolithic fmtGT(): "DAY 001 — YEAR 2347"
+ * Format elapsed game-seconds to the game clock string "DAY ddd — YEAR yyyy",
+ * computed from the real Gregorian calendar (leap years included) via the et
+ * master clock (src/core/time.ts), anchored at GAME_EPOCH (2347-01-01).
  */
-function fmtGameTime(seconds: number): string {
-  const YEAR_S = 86400 * 365;
-  const DAY_S = 86400;
-  const year = Math.floor(seconds / YEAR_S);
-  const day = Math.floor((seconds % YEAR_S) / DAY_S);
-  return `DAY ${String(day + 1).padStart(3, '0')} — YEAR ${2347 + year}`;
+function fmtGameTime(gameSeconds: number): string {
+  return formatGameClock(gameSeconds);
 }
 
 // ── System Status Per Domain ─────────────────────────────────────

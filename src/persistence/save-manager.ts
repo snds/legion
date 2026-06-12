@@ -14,6 +14,7 @@
 
 import { Events } from '../core/events';
 import { Game } from '../core/state';
+import { SECONDS_PER_JULIAN_YEAR } from '../core/time';
 import { world, Strings } from '../core/world';
 import { upsertSlotMeta, listSlots, deleteSlotMeta, type SaveSlot } from './save-db';
 import { serializeBlackboards, deserializeBlackboards } from '../simulation/ai/blackboard';
@@ -155,7 +156,7 @@ export async function saveGame(
       name: name ?? `Save ${slotId}`,
       timestamp: data.timestamp,
       gameTime: Game.data.gameTime,
-      turnNumber: Math.floor(Game.data.gameTime / 365),
+      turnNumber: Math.floor(Game.data.gameTime / SECONDS_PER_JULIAN_YEAR), // elapsed years
       bobCount: 0,  // populated from ECS query in production
       systemsExplored: 0,
       version: SAVE_VERSION,

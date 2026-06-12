@@ -10,6 +10,7 @@
 // ═══════════════════════════════════════════════════════════════════
 
 import { Events } from './events';
+import { gameTimeToEt } from './time';
 
 // ── Zoom Step Definitions ────────────────────────────────────────
 
@@ -52,16 +53,22 @@ export interface TimeSpeed {
   orbit: number;     // orbit animation speed multiplier
 }
 
-// Two speed tables: local (capped at 25×) and galactic (full range).
-// The active table is selected based on zoom domain.
+// Two speed tables: local and galactic. The active table is selected by zoom
+// domain. Because every celestial body is propagated on-rails (analytic Kepler,
+// stable at any compression — see docs §4), the system-view table now reaches
+// the same generous range as the galactic one: real orbital periods mean you
+// warp up to DAY/S–YR/S to watch planets move. The two tables are kept separate
+// so future warp-gating (the integrating-vessel case, doc §4.5) can diverge them.
 
 export const LOCAL_TIME_SPEEDS: TimeSpeed[] = [
-  { label: 'PAUSED', tc: 0,      orbit: 0 },
-  { label: '1×',     tc: 1,      orbit: 1 },
-  { label: '2×',     tc: 2,      orbit: 2 },
-  { label: '5×',     tc: 5,      orbit: 4 },
-  { label: '10×',    tc: 10,     orbit: 6 },
-  { label: '25×',    tc: 25,     orbit: 10 },
+  { label: 'PAUSED', tc: 0,             orbit: 0 },
+  { label: '1×',     tc: 1,             orbit: 1 },
+  { label: '60×',    tc: 60,            orbit: 8 },
+  { label: 'HR/S',   tc: 3600,          orbit: 30 },
+  { label: 'DAY/S',  tc: 86400,         orbit: 80 },
+  { label: 'WK/S',   tc: 86400 * 7,     orbit: 150 },
+  { label: 'MO/S',   tc: 86400 * 30,    orbit: 300 },
+  { label: 'YR/S',   tc: 86400 * 365,   orbit: 600 },
 ];
 
 export const GALACTIC_TIME_SPEEDS: TimeSpeed[] = [
@@ -166,7 +173,7 @@ export function getCamDist(z: number): number {
 
 export interface GameData {
   // Time
-  gameTime: number;          // in-game time (seconds elapsed)
+  gameTime: number;          // elapsed game-time in SECONDS since GAME_EPOCH (et = epoch + gameTime)
   timeSpeedIndex: number;    // index into TIME_SPEEDS (0 = paused)
   paused: boolean;
   _lastSpeed: number;        // speed before pause (for toggle restore)
@@ -228,6 +235,11 @@ class GameState {
   };
 
   // ── Time ──
+
+  /** Ephemeris time (TDB seconds past J2000) for the current game-time. */
+  currentEt(): number {
+    return gameTimeToEt(this.data.gameTime);
+  }
 
   getTimeSpeed(): TimeSpeed {
     const speeds = getActiveTimeSpeeds();

@@ -15,6 +15,7 @@ import {
 } from './components';
 import type { Object3D } from 'three';
 import { getEffectiveScale } from '../render/scale-manager';
+import { SECONDS_PER_JULIAN_YEAR } from './time';
 
 // ── Frame Context ────────────────────────────────────────────────
 
@@ -130,9 +131,11 @@ function transitSystem(w: IWorld, ctx: FrameContext): void {
 
   for (let i = 0; i < eids.length; i++) {
     const eid = eids[i];
-    const totalDays = Transit.travelYears[eid] * 365;
-    if (totalDays > 0) {
-      Transit.progress[eid] += gameDt / totalDays;
+    // Canonical seconds: a transit of N years takes N·SECONDS_PER_JULIAN_YEAR of
+    // game-time. Interstellar travel is years long — warp to traverse it quickly.
+    const totalSeconds = Transit.travelYears[eid] * SECONDS_PER_JULIAN_YEAR;
+    if (totalSeconds > 0) {
+      Transit.progress[eid] += gameDt / totalSeconds;
       if (Transit.progress[eid] >= 1) {
         Transit.progress[eid] = 1;
         BobState.systemEid[eid] = Transit.toSystemEid[eid];
