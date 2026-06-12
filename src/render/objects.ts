@@ -161,6 +161,12 @@ interface PlanetMaterialEntry {
   ringMat: ShaderMaterial | null;
   planetRadius: number;
   dayLength: number;  // in Earth days (0 = no rotation)
+  // Ring shadow casting (set only for ringed planets). Radii in planet-local
+  // units; normal is the ring plane's world-space normal (constant — the planet
+  // root group is positioned + uniformly scaled, never rotated).
+  ringInnerLocal: number;
+  ringOuterLocal: number;
+  ringNormal: Vector3 | null;
 }
 const trackedPlanets: PlanetMaterialEntry[] = [];
 
@@ -225,6 +231,13 @@ export function createPlanetMesh(
       uBounceDir: { value: new Vector3(0, 1, 0) },
       uBounceColor: { value: new Vector3(1, 1, 1) },
       uBounceStrength: { value: 0.0 },
+      // Ring shadow (set per-frame for ringed planets; uHasRingShadow gates it).
+      uHasRingShadow: { value: false },
+      uRingNormal: { value: new Vector3(0, 1, 0) },
+      uPlanetCenter: { value: new Vector3(0, 0, 0) },
+      uRingInner: { value: 0.0 },
+      uRingOuter: { value: 0.0 },
+      uRingShadowStrength: { value: 0.0 },
     },
   });
 
@@ -293,9 +306,20 @@ export function createPlanetMesh(
 
   // ── Rings (any planet with ringTexturePath) ──
   let ringMat: ShaderMaterial | null = null;
+  let ringInnerLocal = 0;
+  let ringOuterLocal = 0;
+  let ringNormal: Vector3 | null = null;
   if (ringTexturePath) {
     const innerR = size * 1.8;
     const outerR = size * 3.2;
+    ringInnerLocal = innerR;
+    ringOuterLocal = outerR;
+    // Ring plane normal in world space. RingGeometry (normal +Z) is laid flat by
+    // ring.rotation.x = -π/2 → normal +Y, then tilted by ringTiltGroup.rotation.z
+    // = axialTilt around Z ⇒ Rz(tilt)·(0,1,0) = (−sin tilt, cos tilt, 0). The
+    // planet root group is never rotated, so this is also the world normal.
+    const tiltRad = axialTilt * (Math.PI / 180);
+    ringNormal = new Vector3(-Math.sin(tiltRad), Math.cos(tiltRad), 0);
     const ringColor = new Color(color).offsetHSL(0, -0.2, 0.1);
 
     ringMat = new ShaderMaterial({
@@ -352,7 +376,10 @@ export function createPlanetMesh(
   }
 
   // Track for per-frame updates
-  trackedPlanets.push({ group, spinGroup, surfaceMat, atmosMat, ringMat, planetRadius: size, dayLength });
+  trackedPlanets.push({
+    group, spinGroup, surfaceMat, atmosMat, ringMat, planetRadius: size, dayLength,
+    ringInnerLocal, ringOuterLocal, ringNormal,
+  });
 
   // Icon billboard
   const statusColors: Record<number, string> = {
@@ -461,6 +488,19 @@ export function updatePlanetShaders(
     if (entry.ringMat) {
       entry.ringMat.uniforms.uSunDir.value.copy(sunDir);
       entry.ringMat.uniforms.uPlanetCenter.value.copy(pos);
+    }
+
+    // Ring shadow cast onto the planet's own surface (ringed planets only).
+    // Convert local annulus radii to world via the uniform visual scale.
+    if (entry.ringNormal) {
+      const sm = entry.surfaceMat.uniforms;
+      const s = entry.group.scale.x;
+      sm.uHasRingShadow.value = true;
+      sm.uRingNormal.value.copy(entry.ringNormal);
+      sm.uPlanetCenter.value.copy(pos);
+      sm.uRingInner.value = entry.ringInnerLocal * s;
+      sm.uRingOuter.value = entry.ringOuterLocal * s;
+      sm.uRingShadowStrength.value = VP.get('ringShadowStrength');
     }
 
     // ── Planetshine ──
@@ -630,6 +670,13 @@ export function createMoonMesh(
       uBounceDir: { value: new Vector3(0, 1, 0) },
       uBounceColor: { value: new Vector3(1, 1, 1) },
       uBounceStrength: { value: 0.0 },
+      // Ring shadow — moons have no rings; uniforms present for the shared shader.
+      uHasRingShadow: { value: false },
+      uRingNormal: { value: new Vector3(0, 1, 0) },
+      uPlanetCenter: { value: new Vector3(0, 0, 0) },
+      uRingInner: { value: 0.0 },
+      uRingOuter: { value: 0.0 },
+      uRingShadowStrength: { value: 0.0 },
     },
   });
 
@@ -646,7 +693,10 @@ export function createMoonMesh(
   spinGroup.add(surfaceMesh);
 
   // Track for per-frame sun direction updates (reuse planet tracking)
-  trackedPlanets.push({ group, spinGroup, surfaceMat, atmosMat: null, ringMat: null, planetRadius: size, dayLength });
+  trackedPlanets.push({
+    group, spinGroup, surfaceMat, atmosMat: null, ringMat: null, planetRadius: size, dayLength,
+    ringInnerLocal: 0, ringOuterLocal: 0, ringNormal: null,
+  });
 
   // Icon billboard
   const icon = createIcon({
