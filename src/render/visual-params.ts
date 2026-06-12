@@ -156,8 +156,10 @@ const DEFAULTS: VisualParams = {
   // Asteroid Belt
   asteroidCount: 2000,
   dustCount: 1000,
-  asteroidLightIntensity: 0.2,
-  dustLightIntensity: 0.27,
+  // Full-strength Lambert: rock form comes from lit/shadow facet contrast
+  // (the old 0.2/0.27 + 0.08 ambient rendered the belt as flat blobs).
+  asteroidLightIntensity: 1.0,
+  dustLightIntensity: 1.0,
   asteroidDetail: 2,
   asteroidNoiseMagnitude: 0.3,
   asteroidCraterProbability: 0.5,

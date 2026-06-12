@@ -105,8 +105,22 @@ function randomAsteroidColor(): Color {
     Math.random() * (VP.get('asteroidMaxHue') - VP.get('asteroidMinHue'));
   const s = VP.get('asteroidMinSat') +
     Math.random() * (VP.get('asteroidMaxSat') - VP.get('asteroidMinSat'));
-  const l = 0.58 + Math.random() * 0.30; // brightness 0.58 - 0.88
+  // Realistic rock albedo: C-type asteroids ~0.05, S-type ~0.15-0.25. The old
+  // 0.58-0.88 lightness read as chalky bright blobs; rocks should be DARK,
+  // their form carried by lit/shadow facet contrast, not base brightness.
+  const l = 0.22 + Math.random() * 0.23; // lightness 0.22 - 0.45
   return new Color().setHSL(h, s, l);
+}
+
+/** Shared star-lighting uniforms for belt materials. Single star at origin
+ *  today; MAX_STARS=2 in the shader so binary systems are a uniform update. */
+function starLightUniforms(beltMidRadiusWU: number) {
+  return {
+    uStarPos: { value: [new Vector3(0, 0, 0), new Vector3(0, 0, 0)] },
+    uStarColor: { value: [new Color(1, 0.98, 0.94), new Color(0, 0, 0)] },
+    uStarCount: { value: 1 },
+    uRefDist: { value: beltMidRadiusWU },
+  };
 }
 
 export interface AsteroidBeltSystem {
@@ -141,11 +155,13 @@ export function createAsteroidBelt(
   }
 
   // ── Main asteroids ──
+  const beltMidWU = ((innerAU + outerAU) / 2) * AU_SCALE;
   const mainMat = new ShaderMaterial({
     vertexShader: asteroidVertexShader,
     fragmentShader: asteroidFragmentShader,
     uniforms: {
       uLightIntensity: { value: VP.get('asteroidLightIntensity') },
+      ...starLightUniforms(beltMidWU),
     },
   });
 
@@ -223,6 +239,7 @@ export function createAsteroidBelt(
     fragmentShader: asteroidFragmentShader,
     uniforms: {
       uLightIntensity: { value: VP.get('dustLightIntensity') },
+      ...starLightUniforms(beltMidWU),
     },
   });
 
