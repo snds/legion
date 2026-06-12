@@ -284,6 +284,8 @@ interface GalaxyLODState {
   dustMat: PointsMaterial | null;
   discMats: ShaderMaterial[];           // stacked disc star layers
   nebulaMats: SpriteMaterial[];
+  volumeMat: ShaderMaterial | null;     // disc volume — Phase-4 crossfade target
+  volumeMesh: Mesh | null;
 }
 
 const GALAXY_LOD: GalaxyLODState = {
@@ -292,6 +294,8 @@ const GALAXY_LOD: GalaxyLODState = {
   dustMat: null,
   discMats: [],
   nebulaMats: [],
+  volumeMat: null,
+  volumeMesh: null,
 };
 
 // Shared world-space camera velocity vector. Every star material's
@@ -338,7 +342,24 @@ function smoothRamp(x: number, lo: number, hi: number): number {
 }
 
 /** Call each frame with the current camera distance to tune galaxy LOD. */
+/** Phase-4 crossfade (docs/galaxy-visual-redesign.md §5.4): 0 at/below
+ *  camDist 2800 (system tiers + heliopause — baked-cube sky), 1 at/above
+ *  3800 (live volume). The window sits INSIDE the sector tier, where the
+ *  galaxy group is already visible — placing it earlier (spec's advisory
+ *  2000→3000) made the group's nebula sprites/labels leak into heliopause.
+ *  THE only permitted opacity ramp on the volume; main.ts drives
+ *  scene.backgroundIntensity with (1 − this). */
+export function getGalaxyCrossfade(camDist: number): number {
+  return smoothRamp(camDist, 2800, 3800);
+}
+
 export function updateGalaxyLOD(camDist: number): void {
+  // Crossfade the live volume in across the heliopause→sector window; hide
+  // the mesh entirely below it so the march cost is zero at system tiers.
+  const xf = getGalaxyCrossfade(camDist);
+  if (GALAXY_LOD.volumeMat) GALAXY_LOD.volumeMat.uniforms.uOpacity.value = xf;
+  if (GALAXY_LOD.volumeMesh) GALAXY_LOD.volumeMesh.visible = xf > 0.001;
+
   // Top-level "is the galaxy present at this camera distance" curve.
   // 0 at sector inner edge (~2500 WU) → 1 by the time we're in arm
   // range (~5500 WU). Everything galactic-scale (disc shader, particles,
@@ -450,6 +471,8 @@ export function createGalaxy(): Group {
   GALAXY_LOD.dustMat = null;
   GALAXY_LOD.discMats.length = 0;
   GALAXY_LOD.nebulaMats.length = 0;
+  GALAXY_LOD.volumeMat = null;
+  GALAXY_LOD.volumeMesh = null;
 
   const galaxy = new Group();
   galaxy.name = 'galaxy';
@@ -777,6 +800,8 @@ export function createGalaxy(): Group {
   discVolume.name = 'galactic-disc-volume'; // bake harness swaps a 256-step material onto this
   discVolume.renderOrder = 2;
   galaxy.add(discVolume);
+  GALAXY_LOD.volumeMat = discVolumeMat;
+  GALAXY_LOD.volumeMesh = discVolume;
   // NOT pushed to GALAXY_LOD.discMats: the volume no longer participates in
   // the discPresence opacity ramp — the medium has ONE set of constants
   // (docs/galaxy-visual-redesign.md §4.5); the Phase-4 crossfade will be the
