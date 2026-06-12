@@ -1,9 +1,14 @@
 // ═══════════════════════════════════════════════════════════════════
-// RENDERER — WebGL 2 with ACES Filmic Tone Mapping
-// Matches the monolithic prototype's rendering pipeline.
+// RENDERER — WebGL 2 with AgX Tone Mapping
+// AgX (Sobotka) replaces ACES Filmic: ACES has the "notorious six" hue skew
+// (saturated blues → purple, oranges → red) which destroys exactly the
+// blackbody O/B-blue vs M-orange star colors the scene depends on. AgX rolls
+// saturated emissives to white with far less hue distortion via inset/outset
+// gamut compression + a log2 sigmoid. Applied by the post chain's OutputPass.
+// See docs/space-engine-techniques-for-legion.md §5.8.
 // ═══════════════════════════════════════════════════════════════════
 
-import { WebGLRenderer, ACESFilmicToneMapping } from 'three';
+import { WebGLRenderer, AgXToneMapping } from 'three';
 import { VP } from './visual-params'; // ADMIN VISUAL EDITOR — REMOVE
 
 export interface RendererContext {
@@ -24,7 +29,7 @@ export async function createRenderer(
 
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-  renderer.toneMapping = ACESFilmicToneMapping;
+  renderer.toneMapping = AgXToneMapping;
   renderer.toneMappingExposure = VP.get('toneMappingExposure');
   renderer.sortObjects = true;
 
