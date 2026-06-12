@@ -73,7 +73,13 @@ export const galacticDiscVolumeFragmentShader = /* glsl */ `
     // exit: dense where a step subtends a large angle, coarse far away.
     float t0 = max(tNear, 2.0);
     float jitter = ign(gl_FragCoord.xy);
-    const int STEPS = 32; // 40 per spec was ~28fps at galaxy tier; half-res (Phase 6) is the real reserve
+    // STEPS is a material define: 32 live (40 per spec was ~28fps at galaxy
+    // tier full-coverage; Phase 6 half-res is the real reserve), 256 for the
+    // one-shot system-tier bake (galaxy-backdrop.ts) where there is no frame
+    // budget and long in-plane rays need the resolution.
+    #ifndef STEPS
+    #define STEPS 32
+    #endif
 
     vec3 accum = vec3(0.0);
     vec3 T = vec3(1.0);

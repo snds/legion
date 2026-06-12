@@ -63,49 +63,8 @@ export function createBackgroundStars(count: number): Points {
   return points;
 }
 
-// ── Milky Way Band ───────────────────────────────────────────────
-
-export function createMilkyWay(count: number): Points {
-  const positions = new Float32Array(count * 3);
-  const colors = new Float32Array(count * 3);
-
-  for (let i = 0; i < count; i++) {
-    const theta = Math.random() * Math.PI * 2;
-    const r = 20000 + Math.random() * 80000;
-
-    // Concentrate particles in a flat disk
-    const spread = 3000 + Math.random() * 8000;
-    const ySpread = (Math.random() - 0.5) * spread * 0.15;
-
-    positions[i * 3] = r * Math.cos(theta) + (Math.random() - 0.5) * spread;
-    positions[i * 3 + 1] = ySpread;
-    positions[i * 3 + 2] = r * Math.sin(theta) + (Math.random() - 0.5) * spread;
-
-    // Warm colors toward center, cooler at edges
-    const t = r / 100000;
-    const c = new Color().setHSL(0.12 + t * 0.4, 0.3 - t * 0.2, 0.4 + Math.random() * 0.3);
-    colors[i * 3] = c.r;
-    colors[i * 3 + 1] = c.g;
-    colors[i * 3 + 2] = c.b;
-  }
-
-  const geo = new BufferGeometry();
-  geo.setAttribute('position', new Float32BufferAttribute(positions, 3));
-  geo.setAttribute('color', new Float32BufferAttribute(colors, 3));
-
-  const mat = new PointsMaterial({
-    size: 150,
-    vertexColors: true,
-    transparent: true,
-    opacity: 0.25,
-    sizeAttenuation: true,
-    depthWrite: false,
-  });
-
-  const points = new Points(geo, mat);
-  points.name = 'milky-way';
-  return points;
-}
+// (Legacy Milky Way band deleted — replaced by the baked cubemap of the
+// real galaxy model; see src/render/galaxy-backdrop.ts.)
 
 // ── Debris Disk (Asteroid Belt) ──────────────────────────────────
 
