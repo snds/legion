@@ -839,7 +839,7 @@ const trackedOrbitMaterials: LineMaterial[] = [];
 // Orbit-line styling: planetary bodies get SOLID low-opacity white; other
 // system bodies (comets etc.) use their own colors. Hovering a body brightens
 // its orbit line via the registry below.
-const ORBIT_BASE_OPACITY = 0.14;
+const ORBIT_BASE_OPACITY = 0.08;  // subtle at rest (bloom lifts perceived brightness)
 const ORBIT_HOVER_OPACITY = 0.55;
 const orbitLineByBody = new Map<string, LineMaterial>();
 
@@ -852,21 +852,44 @@ export interface OrbitLineOptions {
   opacity?: number;
 }
 
-export function createOrbitLine(sma: number, ecc: number, opts: OrbitLineOptions = {}): Line2 {
+export interface OrbitLineElements {
+  sma: number;          // AU
+  ecc: number;
+  inclination: number;  // i (radians)
+  argPeriapsis: number; // ω (radians)
+  longAscNode: number;  // Ω (radians)
+}
+
+export function createOrbitLine(el: OrbitLineElements, opts: OrbitLineOptions = {}): Line2 {
   const AU_SCALE = 10;
-  const a = sma * AU_SCALE;
-  const b = a * Math.sqrt(1 - ecc * ecc);
+  const a = el.sma * AU_SCALE;
+  const b = a * Math.sqrt(1 - el.ecc * el.ecc);
+  // Perifocal-plane ellipse with the focus (star) at the local origin.
   const curve = new EllipseCurve(
-    -a * ecc, 0,  // center offset by focal distance
+    -a * el.ecc, 0,  // center offset by focal distance
     a, b,
     0, Math.PI * 2,
     false, 0,
   );
 
+  // Rotate perifocal → reference frame by R = R_z(Ω)·R_x(i)·R_z(ω) and apply
+  // the same Y-up axis mapping the propagator uses (systems.ts orbitalSystem:
+  // world (X,Y,Z) = (px, pz, py)). The line MUST share the propagator's exact
+  // transform or bodies with real i/Ω/ω drift off their drawn paths — the
+  // user-visible "planet offset from its orbit line" bug.
+  const cosO = Math.cos(el.longAscNode), sinO = Math.sin(el.longAscNode);
+  const cosw = Math.cos(el.argPeriapsis), sinw = Math.sin(el.argPeriapsis);
+  const cosi = Math.cos(el.inclination),  sini = Math.sin(el.inclination);
+
   const points = curve.getPoints(128);
   const positions: number[] = [];
   for (let i = 0; i < points.length; i++) {
-    positions.push(points[i].x, 0, points[i].y);
+    const xp = points[i].x;
+    const yp = points[i].y;
+    const px = xp * (cosO * cosw - sinO * sinw * cosi) + yp * (-cosO * sinw - sinO * cosw * cosi);
+    const py = xp * (sinO * cosw + cosO * sinw * cosi) + yp * (-sinO * sinw + cosO * cosw * cosi);
+    const pz = xp * (sinw * sini) + yp * (cosw * sini);
+    positions.push(px, pz, py);
   }
 
   const geo = new LineGeometry();
@@ -887,6 +910,10 @@ export function createOrbitLine(sma: number, ecc: number, opts: OrbitLineOptions
 
   const line = new Line2(geo, mat);
   line.name = 'orbit-line';
+  // Raycast identity: lets the hover system brighten the line when the LINE
+  // itself is hovered (raycaster.params.Line2.threshold gives it a fat,
+  // screen-constant hit corridor despite the 1px draw width).
+  if (opts.bodyName) line.userData = { type: 'orbit', name: opts.bodyName };
   line.computeLineDistances();
   return line;
 }

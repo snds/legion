@@ -469,8 +469,15 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol'): WorldExtras {
     layers.local.add(mesh);
     registerRenderObject(renderObjectMap, eid, mesh);
 
-    // Orbit line — solid low-opacity white; registered for hover brightening
-    const orbit = createOrbitLine(pCfg.sma, pCfg.ecc, { bodyName: pCfg.name });
+    // Orbit line — solid low-opacity white; registered for hover brightening.
+    // Full elements so the drawn path matches the propagator exactly.
+    const orbit = createOrbitLine({
+      sma: pCfg.sma,
+      ecc: pCfg.ecc,
+      inclination: pCfg.inclination ?? 0,
+      argPeriapsis: pCfg.argPeriapsis ?? 0,
+      longAscNode: pCfg.longAscNode ?? 0,
+    }, { bodyName: pCfg.name });
     layers.local.add(orbit);
   }
 
