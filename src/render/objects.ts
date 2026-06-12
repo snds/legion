@@ -164,6 +164,12 @@ interface PlanetMaterialEntry {
 }
 const trackedPlanets: PlanetMaterialEntry[] = [];
 
+// Planetshine tuning. strength = clamp(GAIN · (parentRadius/dist)², MAX). Both
+// radius and distance scale with the visual scale, so the ratio is scale-free.
+const PLANETSHINE_GAIN = 2.5;
+const PLANETSHINE_MAX = 0.22;
+const _bounceVec = new Vector3();
+
 const textureLoader = new TextureLoader();
 
 export function createPlanetMesh(
@@ -215,6 +221,10 @@ export function createPlanetMesh(
         planetType === 1 ? 0.25 : planetType === 0 ? 0.20 : 0.45,
       ) },
       uTwilightStrength: { value: hasAtmosphere ? 0.18 : 0.0 },
+      // Planetshine (set per-frame by updatePlanetShaders; 0 = no bright neighbour).
+      uBounceDir: { value: new Vector3(0, 1, 0) },
+      uBounceColor: { value: new Vector3(1, 1, 1) },
+      uBounceStrength: { value: 0.0 },
     },
   });
 
@@ -406,6 +416,9 @@ export function updatePlanetShaders(
 ): void {
   const sunDir = new Vector3();
 
+  // Planetshine sources — moons receive a diffuse bounce from their nearest planet.
+  const planetEntries = trackedPlanets.filter((e) => e.group.userData?.type === 'planet');
+
   // At surface/system zoom, determine which planet (if any) the camera is focused on.
   // The focused planet stays visible; all others get angular-size culling.
   const isCloseZoom =
@@ -448,6 +461,33 @@ export function updatePlanetShaders(
     if (entry.ringMat) {
       entry.ringMat.uniforms.uSunDir.value.copy(sunDir);
       entry.ringMat.uniforms.uPlanetCenter.value.copy(pos);
+    }
+
+    // ── Planetshine ──
+    // A moon's night side facing its parent is lit by the planet's reflected
+    // sunlight. Bounce source = nearest planet; tint = that planet's albedo
+    // color; intensity falls off as (parentRadius / distance)². Planets
+    // themselves get negligible planetshine (strength 0).
+    if (entry.group.userData?.type === 'moon' && planetEntries.length > 0) {
+      let parent: PlanetMaterialEntry | null = null;
+      let bestDsq = Infinity;
+      for (const p of planetEntries) {
+        const pp = p.group.position;
+        const dsq = (pp.x - pos.x) ** 2 + (pp.y - pos.y) ** 2 + (pp.z - pos.z) ** 2;
+        if (dsq < bestDsq) { bestDsq = dsq; parent = p; }
+      }
+      if (parent) {
+        const pp = parent.group.position;
+        _bounceVec.set(pp.x - pos.x, pp.y - pos.y, pp.z - pos.z);
+        const dist = Math.max(_bounceVec.length(), 1e-4);
+        _bounceVec.multiplyScalar(1 / dist);
+        const parentRadius = parent.planetRadius * parent.group.scale.x;
+        const ratio = parentRadius / dist;
+        const strength = Math.min(PLANETSHINE_GAIN * ratio * ratio, PLANETSHINE_MAX);
+        entry.surfaceMat.uniforms.uBounceDir.value.copy(_bounceVec);
+        entry.surfaceMat.uniforms.uBounceColor.value.copy(parent.surfaceMat.uniforms.uColor.value);
+        entry.surfaceMat.uniforms.uBounceStrength.value = strength;
+      }
     }
 
     // ── Non-focused planet culling at close zoom ──
@@ -586,6 +626,10 @@ export function createMoonMesh(
       uSpecularScale: { value: 0.0 }, // moons: no specular
       uTwilightTint: { value: new Vector3(0.95, 0.45, 0.20) },
       uTwilightStrength: { value: 0.0 },
+      // Planetshine — moons get a meaningful bounce from their parent body.
+      uBounceDir: { value: new Vector3(0, 1, 0) },
+      uBounceColor: { value: new Vector3(1, 1, 1) },
+      uBounceStrength: { value: 0.0 },
     },
   });
 

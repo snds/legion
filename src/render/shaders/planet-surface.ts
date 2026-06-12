@@ -45,6 +45,12 @@ export const planetSurfaceFragmentShader = /* glsl */ `
   uniform float uSpecularScale;   // 0..1, gates specular intensity per planet class
   uniform vec3 uTwilightTint;     // warm rim color at the terminator
   uniform float uTwilightStrength;
+  // Planetshine: a single secondary bounce light (e.g. a moon lit by its gas
+  // giant's reflected sunlight). uBounceStrength is 0 for bodies with no bright
+  // neighbour (set per-frame on the CPU). See docs §5.7.
+  uniform vec3 uBounceDir;        // world-space direction to the bounce source
+  uniform vec3 uBounceColor;      // reflected-light tint (the source body's albedo color)
+  uniform float uBounceStrength;
 
   varying vec3 vNormal;
   varying vec3 vWorldPos;
@@ -126,6 +132,12 @@ export const planetSurfaceFragmentShader = /* glsl */ `
     terminatorBand = clamp(1.0 - abs(NdotL), 0.0, 1.0);
     terminatorBand = pow(terminatorBand, 8.0);
     surfaceColor += uTwilightTint * terminatorBand * uTwilightStrength;
+
+    // Planetshine — diffuse fill from the bounce source (Lambert on uBounceDir).
+    // Additive and dim, so it reads only where the sun doesn't (the night side
+    // facing the parent body): the "moon lit blue/tan by its gas giant" cue.
+    float bounceNdotL = max(dot(N, normalize(uBounceDir)), 0.0);
+    surfaceColor += uBounceColor * (uBounceStrength * bounceNdotL);
 
     gl_FragColor = vec4(surfaceColor, 1.0);
   }
