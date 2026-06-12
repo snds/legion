@@ -200,7 +200,16 @@ export function createPlanetMesh(
   const spinGroup = new Group();
   spinGroup.name = `spin-${name}`;
   spinGroup.rotation.z = axialTilt * (Math.PI / 180);
+  // Oblateness: gas giants are visibly flattened by fast rotation (real
+  // Jupiter ~6.5%, Saturn ~9.8%); ice giants mildly (~2%). Surface AND
+  // atmosphere shells live in spinGroup, so both squash consistently.
+  const oblate = planetType === 3 ? 0.93 : planetType === 4 ? 0.98 : 1.0;
+  spinGroup.scale.y = 1 - (1 - oblate) * VP.get('planetOblatenessScale');
   group.add(spinGroup);
+
+  // Airless bodies have knife-edge terminators; the soft VP default is an
+  // atmosphere look (docs/planet-visual-realism.md §lighting).
+  const terminatorSoftness = hasAtmosphere ? VP.get('planetTerminatorSoftness') : 0.15;
 
   // ── Surface ──
   const surfaceMat = new ShaderMaterial({
@@ -209,7 +218,7 @@ export function createPlanetMesh(
     uniforms: {
       uColor: { value: new Vector3(c.r, c.g, c.b) },
       uSunDir: { value: new Vector3(0, 0, 1) },
-      uTerminatorSoftness: { value: VP.get('planetTerminatorSoftness') },
+      uTerminatorSoftness: { value: terminatorSoftness },
       uTerminatorOffset: { value: VP.get('planetTerminatorOffset') },
       uSpecularPower: { value: VP.get('planetSpecularPower') },
       uSpecularOffset: { value: VP.get('planetSpecularOffset') },
@@ -240,6 +249,10 @@ export function createPlanetMesh(
       uRingInner: { value: 0.0 },
       uRingOuter: { value: 0.0 },
       uRingShadowStrength: { value: 0.0 },
+      // Jónsson limb darkening — gas/ice giants only (types 3/4).
+      uLimbDarken: { value: planetType === 3 || planetType === 4 ? 1.0 : 0.0 },
+      uLimbK: { value: VP.get('planetLimbK') },
+      uLimbCe: { value: VP.get('planetLimbCe') },
     },
   });
 
@@ -663,7 +676,8 @@ export function createMoonMesh(
     uniforms: {
       uColor: { value: new Vector3(c.r, c.g, c.b) },
       uSunDir: { value: new Vector3(0, 0, 1) },
-      uTerminatorSoftness: { value: VP.get('planetTerminatorSoftness') },
+      // Moons are airless: knife-edge terminator.
+      uTerminatorSoftness: { value: 0.15 },
       uTerminatorOffset: { value: VP.get('planetTerminatorOffset') },
       uSpecularPower: { value: VP.get('planetSpecularPower') },
       uSpecularOffset: { value: VP.get('planetSpecularOffset') },
@@ -685,6 +699,10 @@ export function createMoonMesh(
       uRingInner: { value: 0.0 },
       uRingOuter: { value: 0.0 },
       uRingShadowStrength: { value: 0.0 },
+      // No limb darkening on moons (airless rocky bodies).
+      uLimbDarken: { value: 0.0 },
+      uLimbK: { value: VP.get('planetLimbK') },
+      uLimbCe: { value: VP.get('planetLimbCe') },
     },
   });
 
