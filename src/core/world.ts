@@ -104,7 +104,9 @@ export interface PlanetConfig {
   status: number;
   hasAtmosphere: boolean;
   atmosColor: number;
-  inclination?: number;
+  inclination?: number;  // i (radians)
+  argPeriapsis?: number; // ω (radians)
+  longAscNode?: number;  // Ω (radians)
   startAngle?: number;
   meanMotion?: number;
   texturePath?: string;
@@ -131,8 +133,12 @@ export function createPlanetEntity(cfg: PlanetConfig): number {
   Orbit.semiMajorAxis[eid] = cfg.sma;
   Orbit.eccentricity[eid] = cfg.ecc;
   Orbit.inclination[eid] = cfg.inclination ?? 0;
+  Orbit.argPeriapsis[eid] = cfg.argPeriapsis ?? 0;
+  Orbit.longAscNode[eid] = cfg.longAscNode ?? 0;
   Orbit.meanAnomaly[eid] = cfg.startAngle ?? Math.random() * Math.PI * 2;
-  Orbit.meanMotion[eid] = cfg.meanMotion ?? (2 * Math.PI) / (cfg.sma * cfg.sma * 365);
+  // Kepler's third law: P[days] = 365.25·a[AU]^1.5 ⇒ n = 2π / (365.25·a^1.5).
+  // (Was a², which made outer planets orbit far too slowly relative to inner.)
+  Orbit.meanMotion[eid] = cfg.meanMotion ?? (2 * Math.PI) / (Math.pow(cfg.sma, 1.5) * 365.25);
 
   PlanetState.planetType[eid] = cfg.planetType;
   PlanetState.surfaceTemp[eid] = cfg.surfaceTemp;
@@ -153,7 +159,9 @@ export interface MoonConfig {
   color: number;
   sma: number;      // orbital radius in parent-local visual units
   ecc: number;
-  inclination?: number;
+  inclination?: number;  // i (radians)
+  argPeriapsis?: number; // ω (radians)
+  longAscNode?: number;  // Ω (radians)
   dayLength?: number;
   tidalLock?: boolean;
   texturePath?: string;
@@ -178,8 +186,10 @@ export function createMoonEntity(cfg: MoonConfig, parentEid: number): number {
   Orbit.semiMajorAxis[eid] = cfg.sma;
   Orbit.eccentricity[eid] = cfg.ecc;
   Orbit.inclination[eid] = cfg.inclination ?? 0;
+  Orbit.argPeriapsis[eid] = cfg.argPeriapsis ?? 0;
+  Orbit.longAscNode[eid] = cfg.longAscNode ?? 0;
   Orbit.meanAnomaly[eid] = Math.random() * Math.PI * 2;
-  // Moon orbital period: faster than planets, scale by sma^1.5 (Kepler)
+  // Moon period scales by sma^1.5 (Kepler) in parent-local visual units.
   Orbit.meanMotion[eid] = (2 * Math.PI) / (cfg.sma * Math.sqrt(cfg.sma) * 10);
   Orbit.parentEid[eid] = parentEid;
 

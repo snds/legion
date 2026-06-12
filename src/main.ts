@@ -273,9 +273,48 @@ async function boot(): Promise<void> {
   });
 
   // ── Game Loop ──
+  // Fixed-timestep simulation (Fiedler, gafferongames.com/post/fix_your_timestep)
+  // decoupled from the variable render rate: the sim advances in FIXED_DT quanta
+  // so physics/AI are deterministic and reproducible regardless of frame rate or
+  // display refresh, while rendering and cosmetic shader clocks run per frame.
   const starOrigin = new Vector3(0, 0, 0); // Star is always at origin
+  const FIXED_DT = 1 / 60;   // simulation quantum, seconds of real time
+  const MAX_FRAME = 0.25;    // clamp frame time to avoid the spiral of death
+  const MAX_STEPS = 600;     // hard cap on catch-up steps per frame
   let lastTime = performance.now();
-  let elapsedTime = 0;
+  let accumulator = 0;
+  let wallClock = 0;         // monotonic real seconds; never time-warp scaled
+  let simStep = 0;           // monotonic fixed-step index (command tick / determinism)
+  let gpuStats: { update: () => void } | null = null;
+
+  // One deterministic simulation tick.
+  function stepSim(dt: number): void {
+    const tc = Game.getTimeSpeed().tc;
+
+    // Command tick = monotonic sim step (warp-independent, netcode-deterministic).
+    setCommandTick(simStep);
+
+    // Advance game time by one fixed quantum, scaled by time compression.
+    if (tc > 0) Game.data.gameTime += dt * tc;
+
+    // AI (staggered evaluation)
+    updateAI({ world, gameTime: Game.data.gameTime, dt, timeCompression: tc });
+
+    // ECS systems (orbital, velocity, transit, render-sync)
+    const frameCtx: FrameContext = {
+      dt,
+      gameTime: Game.data.gameTime,
+      timeCompression: tc,
+      zoomLevel: Game.data.zoomLevel,
+      renderMap: renderObjectMap,
+    };
+    runSystems(world, frameCtx);
+
+    // Steering
+    updateSteering(dt, tc);
+
+    simStep++;
+  }
 
   function gameLoop(): void {
     // Self-terminate if a newer boot has started (HMR stacking)
@@ -286,55 +325,30 @@ async function boot(): Promise<void> {
     _hmr.animFrameId = requestAnimationFrame(gameLoop);
 
     const now = performance.now();
-    const dt = Math.min((now - lastTime) / 1000, 0.1); // cap at 100ms
+    const frameTime = Math.min((now - lastTime) / 1000, MAX_FRAME);
     lastTime = now;
-    elapsedTime += dt;
+    wallClock += frameTime;
+    const shaderTime = wallClock % 1000; // bounded f32 clock for shader uniforms
 
-    const tc = Game.getTimeSpeed().tc;
-    const gameTime = Game.data.gameTime;
-
-    // Update command tick
-    setCommandTick(Math.floor(gameTime));
-
-    // 1. Advance game time
-    if (tc > 0) {
-      Game.data.gameTime += dt * tc;
+    // 1. Fixed-timestep simulation catch-up
+    accumulator += frameTime;
+    let steps = 0;
+    while (accumulator >= FIXED_DT && steps < MAX_STEPS) {
+      stepSim(FIXED_DT);
+      accumulator -= FIXED_DT;
+      steps++;
     }
+    if (steps === MAX_STEPS) accumulator = 0; // shed backlog after a long stall
 
-    // 3. AI (staggered evaluation)
-    updateAI({
-      world,
-      gameTime: Game.data.gameTime,
-      dt,
-      timeCompression: tc,
-    });
-
-    // 4. ECS Systems
-    const frameCtx: FrameContext = {
-      dt,
-      gameTime: Game.data.gameTime,
-      timeCompression: tc,
-      zoomLevel: Game.data.zoomLevel,
-      renderMap: renderObjectMap,
-    };
-    runSystems(world, frameCtx);
-
-    // 5. Steering
-    updateSteering(dt, tc);
-
-    // 5b. (Removed — camera now tracks via CameraController.trackedObject
-    //      driven by 'camera:focus-object'. Single-click selection no
-    //      longer hijacks the camera; only double-click triggers focus.)
-
-    // 6. Camera
-    camCtrl.update(dt);
+    // 6. Camera (render-rate)
+    camCtrl.update(frameTime);
 
     // 7. Audio
-    Audio.updateMix(dt);
-    Ambience.update(dt);
+    Audio.updateMix(frameTime);
+    Ambience.update(frameTime);
 
     // 8. FPS tracking
-    Game.data.fps = Math.round(1 / Math.max(dt, 0.001));
+    Game.data.fps = Math.round(1 / Math.max(frameTime, 0.001));
 
     // 8b. Step controls (zoom bar sync)
     updateStepControlsFrame();
@@ -347,10 +361,10 @@ async function boot(): Promise<void> {
 
     // 8e. Selection panels (connection line + production queue tick)
     SelectionPanels.drawConnection(camera);
-    if (!Game.data.paused) SelectionPanels.tickQueue(dt);
+    if (!Game.data.paused) SelectionPanels.tickQueue(frameTime);
 
     // 9. Sun shader update (animated cubemap + uniforms)
-    updateSunSystem(renderCtx.renderer, dt);
+    updateSunSystem(renderCtx.renderer, frameTime);
 
     // 9b. Planet shader update (sun direction, rotation, storms, non-focused planet culling)
     // Always pass a focus target so angular culling knows which planet to keep visible.
@@ -359,10 +373,10 @@ async function boot(): Promise<void> {
     updatePlanetShaders(Game.data.gameTime, camera.position, focusTarget, Game.data.zoomDomain);
 
     // 9c. Lens flare update (star position → screen space)
-    lensFlare.update(starOrigin, camera, dt);
+    lensFlare.update(starOrigin, camera, frameTime);
 
-    // 9d. Galaxy animations (dashed lines, chevron pulses)
-    updateGalaxyAnimations(elapsedTime);
+    // 9d. Galaxy animations (dashed lines, chevron pulses) — bounded shader clock
+    updateGalaxyAnimations(shaderTime);
 
     // 9e. Galaxy LOD — fades local-arm detail / dust / nebula presence
     // by current camera distance so each zoom tier has the right density.
@@ -373,11 +387,34 @@ async function boot(): Promise<void> {
     // only during high-speed translation (flight-path traversals).
     updateStarStreaks(camCtrl.velocity);
 
-    // 10. Render (post-processing pipeline)
-    postCtx.render(elapsedTime);
+    // 10. Render (post-processing pipeline) — bounded shader clock
+    postCtx.render(shaderTime);
 
-    // 10. Debug
-    Debug.update(dt);
+    // 10b. GPU/CPU profiling overlay (opt-in: dev, or ?stats on the live demo)
+    if (gpuStats) {
+      gpuStats.update();
+      renderCtx.renderer.info.reset();
+    }
+
+    // 11. Debug
+    Debug.update(frameTime);
+  }
+
+  // ── Profiling baseline (stats-gl): GPU ms via EXT_disjoint_timer_query_webgl2.
+  // Opt-in so the live demo stays clean: enabled in dev or with ?stats in the URL.
+  const showStats =
+    import.meta.env.DEV || new URLSearchParams(location.search).has('stats');
+  if (showStats) {
+    try {
+      const { default: Stats } = await import('stats-gl');
+      const stats = new Stats({ trackGPU: true });
+      await stats.init(renderCtx.renderer);
+      document.body.appendChild(stats.dom);
+      renderCtx.renderer.info.autoReset = false; // reset once per frame in the loop
+      gpuStats = stats;
+    } catch (err) {
+      console.warn('[Legion] stats-gl unavailable:', err);
+    }
   }
 
   // Start the loop
