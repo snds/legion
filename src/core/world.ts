@@ -18,6 +18,7 @@ import {
   StarSystem, AlienCiv, Transit, RenderSize,
   IsLocal, IsSelectable, NeedsSyncToRender,
 } from './components';
+import { SECONDS_PER_JULIAN_YEAR, SECONDS_PER_DAY } from './time';
 
 // ── World ────────────────────────────────────────────────────────
 
@@ -136,9 +137,11 @@ export function createPlanetEntity(cfg: PlanetConfig): number {
   Orbit.argPeriapsis[eid] = cfg.argPeriapsis ?? 0;
   Orbit.longAscNode[eid] = cfg.longAscNode ?? 0;
   Orbit.meanAnomaly[eid] = cfg.startAngle ?? Math.random() * Math.PI * 2;
-  // Kepler's third law: P[days] = 365.25·a[AU]^1.5 ⇒ n = 2π / (365.25·a^1.5).
-  // (Was a², which made outer planets orbit far too slowly relative to inner.)
-  Orbit.meanMotion[eid] = cfg.meanMotion ?? (2 * Math.PI) / (Math.pow(cfg.sma, 1.5) * 365.25);
+  // Kepler's third law in the canonical SECOND unit: P[s] = SECONDS_PER_JULIAN_YEAR·a[AU]^1.5
+  // ⇒ n = 2π / P. Real periods (Earth a=1 ⇒ P = 1 Julian year); observe orbital
+  // motion by time-warping. (cfg.meanMotion, if given, is taken as rad/second.)
+  Orbit.meanMotion[eid] =
+    cfg.meanMotion ?? (2 * Math.PI) / (SECONDS_PER_JULIAN_YEAR * Math.pow(cfg.sma, 1.5));
 
   PlanetState.planetType[eid] = cfg.planetType;
   PlanetState.surfaceTemp[eid] = cfg.surfaceTemp;
@@ -189,8 +192,11 @@ export function createMoonEntity(cfg: MoonConfig, parentEid: number): number {
   Orbit.argPeriapsis[eid] = cfg.argPeriapsis ?? 0;
   Orbit.longAscNode[eid] = cfg.longAscNode ?? 0;
   Orbit.meanAnomaly[eid] = Math.random() * Math.PI * 2;
-  // Moon period scales by sma^1.5 (Kepler) in parent-local visual units.
-  Orbit.meanMotion[eid] = (2 * Math.PI) / (cfg.sma * Math.sqrt(cfg.sma) * 10);
+  // Moon period scales by sma^1.5 (Kepler) in parent-local visual units, in the
+  // canonical SECOND unit. The constant 10 sets the period scale (sma=1.9 ⇒ ~26 d,
+  // Luna-like); /SECONDS_PER_DAY converts the prior per-day rate to rad/second.
+  Orbit.meanMotion[eid] =
+    (2 * Math.PI) / (cfg.sma * Math.sqrt(cfg.sma) * 10 * SECONDS_PER_DAY);
   Orbit.parentEid[eid] = parentEid;
 
   RenderSize.radius[eid] = cfg.size;
