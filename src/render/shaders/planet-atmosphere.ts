@@ -14,7 +14,10 @@ export const planetAtmosphereVertexShader = /* glsl */ `
   varying vec3 vViewDir;
 
   void main() {
-    vNormal = normalize(normalMatrix * normal);
+    // WORLD-space normal (matches planet-surface.ts fix): normalMatrix is the
+    // VIEW-space normal matrix, which made the atmosphere's day/twilight gating
+    // rotate with the camera instead of tracking the world-space sun.
+    vNormal = normalize(mat3(modelMatrix) * normal);
     vec4 worldPos = modelMatrix * vec4(position, 1.0);
     vWorldPos = worldPos.xyz;
     // Guard: when camera is at object position, toCamera ≈ 0 → normalize produces NaN
