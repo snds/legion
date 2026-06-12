@@ -77,6 +77,8 @@ import {
   SOL_STAR, SOL_PLANETS, SOL_MOONS,
   createInitialBobs,
 } from './data/star-catalog';
+import { applySolEphemeris } from './data/jpl-ephemeris';
+import { GAME_EPOCH_ET } from './core/time';
 import { PlanetState, Identity, EntityType, BobState, Personality, StarSystem } from './core/components';
 
 // ── HMR State ──
@@ -437,7 +439,10 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol'): WorldExtras {
 
   const isSol = systemId === 'sol';
   const star = isSol ? SOL_STAR : EPS_ERI_STAR;
-  const planets = isSol ? SOL_PLANETS : EPS_ERI_PLANETS;
+  // Sol planets get their real JPL orbital elements (positions + plane
+  // orientations) evaluated at the game epoch; fictional systems keep authored
+  // elements. Periods then follow from a^1.5 in the on-rails propagator.
+  const planets = isSol ? applySolEphemeris(SOL_PLANETS, GAME_EPOCH_ET) : EPS_ERI_PLANETS;
   const moons = isSol ? SOL_MOONS : [];
 
   // ── Star ──
