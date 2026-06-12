@@ -16,7 +16,7 @@ import {
   BULGE_A, BULGE_AMP, BULGE_SQUASH, CLUMP_SCALE, DISC_RADIUS_WU,
   DUST2_WEIGHT, DUST_NORM, DUST_SHARP, HII_KNOTS, HR_DUST, HR_THICK,
   HR_THIN, HZ_DUST, HZ_DUST2, HZ_THICK, HZ_THIN, HOME_POS, KAPPA_MID,
-  LANE_OFFSET, PITCH, RIFT_CLOUDS, R_FLARE, TAPER_IN, TAPER_OUT,
+  KAPPA_RGB, LANE_OFFSET, PITCH, RIFT_CLOUDS, R_FLARE, TAPER_IN, TAPER_OUT,
   THICK_WEIGHT, WARP_ONSET, WARP_RIM_AMP,
   COL_BULGE, COL_DISC, COL_HII, COL_OLD,
 } from '../galaxy-density';
@@ -69,6 +69,7 @@ const float GD_TAPER_IN = ${f(TAPER_IN)};
 const float GD_TAPER_OUT = ${f(TAPER_OUT)};
 const float GD_DISC_RADIUS = ${f(DISC_RADIUS_WU)};
 const float GD_DUST_NORM = ${f(Number(DUST_NORM.toPrecision(10)))};
+const vec3 GD_KAPPA_RGB = ${v3(KAPPA_RGB)};
 const vec3 GD_HOME = ${v3(HOME_POS)};
 const vec3 GD_COL_DISC = ${v3(COL_DISC)};
 const vec3 GD_COL_OLD = ${v3(COL_OLD)};
@@ -135,7 +136,8 @@ float gdArmPattern(float R, float theta) {
   float lnTerm = log(max(R, 50.0) / GD_ARM_REF_R) / tan(GD_PITCH);
   float p2 = cos(2.0 * (theta - lnTerm));
   float p4 = cos(4.0 * (theta - lnTerm));
-  return max(0.0, 0.667 * p2 + 0.333 * p4);
+  float inner = clamp((R - 700.0) / 500.0, 0.0, 1.0); // arms emerge past the bar
+  return max(0.0, 0.667 * p2 + 0.333 * p4) * inner * inner * (3.0 - 2.0 * inner);
 }
 
 float gdDustLane(float R, float theta) {
@@ -187,8 +189,11 @@ GalaxySample sampleGalaxy(vec3 p) {
   // EXTINCTION
   float dust = exp(-R / GD_HR_DUST)
     * (exp(-abs(yw) / GD_HZ_DUST) + GD_DUST2_W * exp(-abs(yw) / GD_HZ_DUST2));
-  dust *= 0.4 + 1.2 * gdFbm3(p / GD_CLUMP_SCALE);
-  dust *= 0.25 + gdDustLane(R, theta);
+  // Clump fBm only where dust is non-negligible (perf; mirrors TS guard).
+  if (dust > 1e-5) {
+    dust *= 0.4 + 1.2 * gdFbm3(p / GD_CLUMP_SCALE);
+    dust *= 0.25 + gdDustLane(R, theta);
+  }
   dust *= tap;
 
   float kappaV = GD_KAPPA_MID * dust / GD_DUST_NORM;
