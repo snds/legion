@@ -147,16 +147,17 @@ function applyDomain(domain: DomainName): void {
   }
 }
 
-/** Fade background stars and milky way band at outer zoom tiers. */
-function setBackgroundOpacity(starsOp: number, milkyOp: number): void {
+/** Fade background stars at outer zoom tiers. (The legacy 'milky-way' band
+ *  was deleted in the same commit as the baked-cubemap backdrop; the second
+ *  parameter is kept so per-domain call sites remain untouched until the
+ *  Phase-4 crossfade reworks them.) */
+function setBackgroundOpacity(starsOp: number, _milkyOp: number): void {
   if (!targets) return;
   targets.layers.background.traverse(child => {
     if ((child as Points).isPoints && (child as Points).material) {
       const mat = (child as Points).material as PointsMaterial;
       if (child.name === 'background-stars') {
         mat.opacity = starsOp;
-      } else if (child.name === 'milky-way') {
-        mat.opacity = milkyOp;
       }
     }
   });

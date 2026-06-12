@@ -24,9 +24,10 @@ import { createRenderer, type RendererContext } from './render/renderer';
 import { createScene, registerRenderObject, type SceneContext } from './render/scene';
 import { setMaxAnisotropy } from './render/icons';
 import {
-  createBackgroundStars, createMilkyWay,
+  createBackgroundStars,
   createHeliopause,
 } from './render/particles';
+import { bakeGalaxyBackdrop, DEEP_SPACE_BG } from './render/galaxy-backdrop';
 import { createAsteroidBelt } from './render/asteroid-belt';
 import {
   createStarMesh, createPlanetMesh, createMoonMesh, createBobMesh,
@@ -245,6 +246,18 @@ async function boot(): Promise<void> {
     worldExtras.sectorOrb,
   );
 
+  // ── 8c-bis. Bake the Milky Way backdrop (one-shot, 256-step volume) ──
+  // The sky as seen from this system, used as scene.background below the
+  // sector tier (zero per-frame cost). Safe now: the volume marches the
+  // CI-proven band-not-fog model (galaxy-density.test.ts).
+  const galaxyBackdrop = bakeGalaxyBackdrop(renderCtx.renderer, scene, worldExtras.galaxyArms);
+  // Backdrop display level: the bake composites the volume AND the baked star
+  // particles (whose brightness uEmissionScale does not govern), so the
+  // night-sky level is set here, once, display-side. Target: band core reads
+  // dim-but-visible (~AgX toe) at normal system-tier exposure — invisible
+  // against lit planets, present in sky-dominated framings.
+  scene.backgroundIntensity = 0.0025;
+
   // ── 8d. Default focus: home habitable planet ──
   // Without this, the camera starts pointed at the star, making the
   // close-in tiers (surface, low-orbit, orbit) frame the inside of
@@ -360,6 +373,16 @@ async function boot(): Promise<void> {
 
     // 8d. Layer visibility per zoom tier
     updateVisibility();
+
+    // 8d-bis. Sky: baked Milky Way cubemap at system tiers; flat deep-space
+    // at sector+ where the live galaxy volume renders against it. (The
+    // Phase-4 crossfade replaces this hard switch.)
+    {
+      const dom = Game.data.zoomDomain;
+      const liveGalaxy = dom === 'sector' || dom === 'arm' || dom === 'galaxy';
+      const want = liveGalaxy ? DEEP_SPACE_BG : galaxyBackdrop;
+      if (scene.background !== want) scene.background = want;
+    }
 
     // 8e. Selection panels (connection line + production queue tick)
     SelectionPanels.drawConnection(camera);
@@ -563,8 +586,9 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol'): WorldExtras {
   buildStarGraph(systemEids, 15);
 
   // ── Background ──
+  // (Legacy createMilkyWay band deleted: the system-tier Milky Way is now the
+  // positionally-coherent baked cubemap of the real galaxy model — main boot.)
   layers.background.add(createBackgroundStars(8000));
-  layers.background.add(createMilkyWay(25000));
 
   // ── Debris Disk ──
   // ── Asteroid Belt (instanced, flat-shaded) ──

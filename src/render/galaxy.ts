@@ -774,6 +774,7 @@ export function createGalaxy(): Group {
     new BoxGeometry(2 * DISC_RADIUS_WU, 2 * DISC_Y_HALF_WU, 2 * DISC_RADIUS_WU),
     discVolumeMat,
   );
+  discVolume.name = 'galactic-disc-volume'; // bake harness swaps a 256-step material onto this
   discVolume.renderOrder = 2;
   galaxy.add(discVolume);
   // NOT pushed to GALAXY_LOD.discMats: the volume no longer participates in
