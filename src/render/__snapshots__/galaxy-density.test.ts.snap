@@ -1,0 +1,46 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`galaxy density model — sample-table regression lock > matches the recorded sample table (update deliberately, in both mirrors) 1`] = `
+[
+  {
+    "j": [
+      0.04087908,
+      0.04298875,
+      0.04515535,
+    ],
+    "kappaV": 0.0009056285,
+  },
+  {
+    "j": [
+      6.395243,
+      5.25916,
+      4.236264,
+    ],
+    "kappaV": 0.02546673,
+  },
+  {
+    "j": [
+      0.1050047,
+      0.1058348,
+      0.1069781,
+    ],
+    "kappaV": 0.001677652,
+  },
+  {
+    "j": [
+      0.01505369,
+      0.01544994,
+      0.01573889,
+    ],
+    "kappaV": 0.00006600268,
+  },
+  {
+    "j": [
+      0.001109354,
+      0.00110784,
+      0.001088157,
+    ],
+    "kappaV": 3.02796e-7,
+  },
+]
+`;
