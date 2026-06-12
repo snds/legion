@@ -110,9 +110,9 @@ const DEFAULTS: VisualParams = {
   toneMappingExposure: 0.85,
 
   // Post-Processing
-  bloomStrength: 0.18,
-  bloomRadius: 0.6,
-  bloomThreshold: 1.2,
+  bloomStrength: 0.08,   // Karis bloom composite mix factor (threshold-free)
+  bloomRadius: 0.6,      // → upsample tent radius ×0.01 in UV
+  bloomThreshold: 1.2,   // unused (Karis bloom is threshold-free); kept for VP schema compat
   vignetteIntensity: 0.4,
   vignetteDropoff: 0.25,
   smaaEnabled: true,
