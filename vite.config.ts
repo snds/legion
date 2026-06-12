@@ -2,6 +2,10 @@ import { defineConfig } from 'vite';
 import { resolve } from 'path';
 
 export default defineConfig({
+  // Deploy base. Root in dev; the GitHub Pages workflow sets BASE_PATH=/legion/
+  // so emitted asset URLs (and import.meta.env.BASE_URL, used by src/core/assets.ts)
+  // resolve under the project-pages subpath.
+  base: process.env.BASE_PATH ?? '/',
   resolve: {
     alias: {
       '@core': resolve(__dirname, 'src/core'),

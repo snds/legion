@@ -26,6 +26,7 @@ import { planetRingsVertexShader, planetRingsFragmentShader } from './shaders/pl
 import { getAtmosphereColor } from './planet-colors';
 import { VP } from './visual-params';
 import { generatePlanetTexture, hasProceduralRecipe } from './procedural-textures';
+import { asset } from '@core/assets';
 
 // ── Color Helpers ────────────────────────────────────────────────
 
@@ -219,7 +220,7 @@ export function createPlanetMesh(
 
   // Load day texture if provided (file-based, e.g. Sol textures)
   if (texturePath) {
-    textureLoader.load(texturePath, (tex) => {
+    textureLoader.load(asset(texturePath), (tex) => {
       tex.colorSpace = SRGBColorSpace;
       surfaceMat.uniforms.uDayTexture.value = tex;
       surfaceMat.uniforms.uHasTexture.value = true;
@@ -310,7 +311,7 @@ export function createPlanetMesh(
     });
 
     textureLoader.load(
-      ringTexturePath,
+      asset(ringTexturePath),
       (tex) => {
         ringMat!.uniforms.uRingTexture.value = tex;
         ringMat!.uniforms.uHasRingTexture.value = true;
@@ -589,7 +590,7 @@ export function createMoonMesh(
   });
 
   if (texturePath) {
-    textureLoader.load(texturePath, (tex) => {
+    textureLoader.load(asset(texturePath), (tex) => {
       tex.colorSpace = SRGBColorSpace;
       surfaceMat.uniforms.uDayTexture.value = tex;
       surfaceMat.uniforms.uHasTexture.value = true;
