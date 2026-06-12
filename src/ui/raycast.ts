@@ -17,6 +17,7 @@ import { Tooltip, type TooltipData } from './tooltip';
 import { SelectionPanels } from './panels/selection';
 import { Game, ZOOM_STEPS } from '../core/state';
 import { Events } from '../core/events';
+import { setOrbitHighlight } from '../render/objects';
 import type { LayerGroups } from '../render/scene';
 
 let camera: PerspectiveCamera;
@@ -123,6 +124,12 @@ function makeHoverReticule(): Sprite {
 }
 
 function setHoverState(hit: HitResult | null): void {
+  // Brighten the hovered body's orbit line (planets/moons); clear otherwise.
+  const t = hit?.data?.type as string | undefined;
+  setOrbitHighlight(
+    (t === 'planet' || t === 'moon') ? ((hit!.data.name as string) ?? null) : null,
+  );
+
   if (!hoverIndicator) return;
   if (!hit) {
     if (hoveredObject) {
