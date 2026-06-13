@@ -33,6 +33,91 @@ export function setIconFov(fovDeg: number): void {
   FOV_FACTOR = 2 * Math.tan(MathUtils.degToRad(fovDeg * 0.5));
 }
 
+// ── Apparent-size mesh↔icon LOD (overlay Phase 2) ────────────────
+// The master signal is the body's APPARENT screen size, not raw camDist — a
+// gas giant and a moon at equal distance have wildly different legibility.
+// docs/zoom-overlay-patterns.md §4.1.
+
+/** Body radius in screen pixels at the current FOV. Mirrors scaleFixed's math
+ *  inverted: scaleFixed makes worldSize = (px/H)·camDist·FOV_FACTOR, so
+ *  px = worldRadius/camDist · H / FOV_FACTOR. */
+export function apparentPx(radiusWU: number, camDist: number): number {
+  if (camDist <= 1e-6) return 1e6;
+  return (radiusWU / camDist) * (window.innerHeight / FOV_FACTOR);
+}
+
+// Handoff bands (apparent px). 3=MESH, 2=MESH+ICON, 1=ICON_FADE_IN, 0=ICON.
+const BAND_MESH = 64;   // > → mesh only
+const BAND_ICON = 15;   // > → mesh + icon overlay
+const BAND_FADE = 8;    // > → icon fades in over still-full mesh; ≤ → icon only
+const HYST = 0.1;       // symmetric ±10% dead band per boundary
+
+export const ICON_STATE = { ICON: 0, FADE_IN: 1, MESH_ICON: 2, MESH: 3 } as const;
+
+function nominalState(ap: number): number {
+  return ap > BAND_MESH ? 3 : ap > BAND_ICON ? 2 : ap > BAND_FADE ? 1 : 0;
+}
+
+/**
+ * Resolve the LOD state from apparent size with hysteresis, and apply the
+ * mesh-fade / icon-visibility for that state. Returns the new state to store
+ * per-entity (drives the dead band so parking at a boundary never flickers).
+ *
+ * iconBias multiplies thresholds: >1 icon-ifies sooner (noisy small meshes),
+ * <1 holds the mesh longer (big readable art) — applied as effAp = ap / bias.
+ */
+export function updateBodyLOD(
+  obj: Object3D, camDist: number, radiusWU: number, iconBias: number, prevState: number,
+): number {
+  const effAp = apparentPx(radiusWU, camDist) / iconBias;
+
+  // Keep prevState while effAp sits in its hysteresis-widened range; else snap.
+  const inRange = (s: number): boolean => {
+    if (s < 0 || s > 3) return false; // no prior state → snap to nominal
+    if (s === 3) return effAp >= BAND_MESH * (1 - HYST);
+    if (s === 2) return effAp >= BAND_ICON * (1 - HYST) && effAp <= BAND_MESH * (1 + HYST);
+    if (s === 1) return effAp >= BAND_FADE * (1 - HYST) && effAp <= BAND_ICON * (1 + HYST);
+    return effAp <= BAND_FADE * (1 + HYST);
+  };
+  const state = inRange(prevState) ? prevState : nominalState(effAp);
+
+  switch (state) {
+    case 3: // MESH — full mesh, no icon (icon on a fullscreen planet is noise).
+      fadeMeshes(obj, 1);
+      hideIcons(obj);
+      break;
+    case 2: // MESH+ICON — full mesh, subtle small icon overlay.
+      fadeMeshes(obj, 1);
+      showIcons(obj, ICON_OPACITY_CLOSE, camDist, true, SCREEN_PX_CLOSE, true);
+      break;
+    case 1: { // ICON_FADE_IN — icon fades in over the still-full mesh (SupCom).
+      fadeMeshes(obj, 1);
+      const t = MathUtils.clamp((BAND_ICON - effAp) / (BAND_ICON - BAND_FADE), 0, 1);
+      showIcons(obj, t * ICON_OPACITY, camDist, true, SCREEN_PX, true);
+      break;
+    }
+    default: // ICON — mesh untouched (sub-pixel, shrinks out); icon only, no labels.
+      showIcons(obj, ICON_OPACITY, camDist, true, SCREEN_PX, false);
+      break;
+  }
+  return state;
+}
+
+/** Per-archetype icon bias (docs §4.1). Corrected PlanetType enum. */
+export function iconBiasFor(type: string | undefined, planetTypeId: number | undefined): number {
+  if (type === 'bob' || type === 'station') return 1.3;
+  if (type === 'moon') return 1.1;
+  if (type === 'planet') {
+    switch (planetTypeId) {
+      case 3: return 0.8;  // GasGiant — hold the mesh longer
+      case 4: return 0.9;  // IceGiant
+      case 5: return 1.15; // Dwarf — icon-ify sooner
+      default: return 1.0; // Rocky / Oceanic / Desert
+    }
+  }
+  return 1.0;
+}
+
 // ── Scaling Functions ────────────────────────────────────────────
 
 /**
