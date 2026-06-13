@@ -48,7 +48,15 @@ export const BAR_W = 520;          // in-plane minor sigma (axis ratio ~2.1)
 export const BAR_H = 80;           // vertical sigma
 export const PITCH = (13.4 * Math.PI) / 180;     // spiral pitch (repo ARM_TWIST)
 export const ARM_REF_R = 866;      // log-spiral reference radius
-export const A_STARS = 0.45;       // stellar arm contrast (m=2 major dominant)
+export const A_STARS = 1.15;       // stellar arm contrast (m=2 major dominant)
+// Spiral-arm SHAPE (cloud-raymarch technique: defined base ridge × 3D FBM).
+// ARM_SHARP sharpens the cosine into a defined ridge that's still SMOOTH
+// (pow of a cosine, not a hard step); the FBM then breaks the ridge into
+// organic, star-position-like clumps with soft falloff — fixing both the
+// 'zero definition' (low contrast) and the 'hard-edged shapes' (no falloff).
+export const ARM_SHARP = 2.3;      // ridge definition (higher = tighter arms)
+export const ARM_FBM_SCALE = 620;  // arm clump scale (~1.9 kpc wisps)
+export const ARM_FBM_FLOOR = 0.32; // min arm brightness under the FBM (0..1)
 
 // ── Dust extinction ──────────────────────────────────────────────
 export const HR_DUST = 866;        // 2.6 kpc compromise (D&S 2.26 / LAMOST 3.19)
@@ -173,12 +181,26 @@ export function spiralInnerFade(R: number): number {
   return t * t * (3 - 2 * t);
 }
 
-/** Two-major + two-minor log-spiral arm pattern in [0,1]. */
+/** Two-major + two-minor log-spiral arm RIDGE in [0,1]. Sharpened cosine
+ *  (pow → defined arms, still smooth) rather than a raw low-contrast cosine.
+ *  The organic per-position falloff is applied separately in sampleGalaxy via
+ *  armFalloff(); this 2D ridge also drives the particle spawner. */
 export function armPattern(R: number, theta: number): number {
   const lnTerm = Math.log(Math.max(R, 50) / ARM_REF_R) / Math.tan(PITCH);
-  const p2 = Math.cos(2 * (theta - lnTerm));
-  const p4 = Math.cos(4 * (theta - lnTerm));
-  return Math.max(0, 0.667 * p2 + 0.333 * p4) * spiralInnerFade(R);
+  // m=2 major + m=4 secondary crest, with REAL inter-arm nulls preserved
+  // (the negative lobes clamp to 0). Raising the crest to ARM_SHARP narrows
+  // and DEFINES the arms while keeping the two-armed topology — the previous
+  // raw cosine was too low-contrast to read as arms at all.
+  const crest = 0.667 * Math.cos(2 * (theta - lnTerm)) + 0.333 * Math.cos(4 * (theta - lnTerm));
+  return Math.pow(Math.max(0, crest), ARM_SHARP) * spiralInnerFade(R);
+}
+
+/** Organic 3D-FBM falloff that breaks the smooth arm ridge into clumpy,
+ *  wispy, star-position-like structure (cloud base-shape × noise). In
+ *  [ARM_FBM_FLOOR, 1]. Position-dependent → only used in the volume sampler. */
+export function armFalloff(px: number, py: number, pz: number): number {
+  const n = fbm3(px / ARM_FBM_SCALE, py / ARM_FBM_SCALE, pz / ARM_FBM_SCALE) * 0.5 + 0.5;
+  return ARM_FBM_FLOOR + (1 - ARM_FBM_FLOOR) * n;
 }
 
 /** Dust-lane mask: sharpened crest displaced LANE_OFFSET toward the arm's
@@ -228,7 +250,7 @@ export function sampleGalaxy(px: number, py: number, pz: number): GalaxySample {
     Math.hypot(px, yw * BULGE_SQUASH, pz), BULGE_A,
   );
   const bar = BAR_AMP * barField(px, yw, pz);
-  const armS = 1 + A_STARS * armPattern(R, theta);
+  const armS = 1 + A_STARS * armPattern(R, theta) * armFalloff(px, py, pz);
 
   let jr = (COL_DISC[0] * thin * armS + COL_OLD[0] * thick + COL_BULGE[0] * (bulge + bar)) * tap;
   let jg = (COL_DISC[1] * thin * armS + COL_OLD[1] * thick + COL_BULGE[1] * (bulge + bar)) * tap;

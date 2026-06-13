@@ -12,7 +12,8 @@
 // ═══════════════════════════════════════════════════════════════════
 
 import {
-  A_STARS, ARM_REF_R, BAR_AMP, BAR_ANGLE, BAR_H, BAR_LEN, BAR_W,
+  A_STARS, ARM_REF_R, ARM_SHARP, ARM_FBM_SCALE, ARM_FBM_FLOOR,
+  BAR_AMP, BAR_ANGLE, BAR_H, BAR_LEN, BAR_W,
   BULGE_A, BULGE_AMP, BULGE_SQUASH, CLUMP_SCALE, DISC_RADIUS_WU,
   DUST2_WEIGHT, DUST_NORM, DUST_SHARP, HII_KNOTS, HR_DUST, HR_THICK,
   HR_THIN, HZ_DUST, HZ_DUST2, HZ_THICK, HZ_THIN, HOME_POS, KAPPA_MID,
@@ -54,6 +55,9 @@ const float GD_BAR_H = ${f(BAR_H)};
 const float GD_PITCH = ${f(PITCH)};
 const float GD_ARM_REF_R = ${f(ARM_REF_R)};
 const float GD_A_STARS = ${f(A_STARS)};
+const float GD_ARM_SHARP = ${f(ARM_SHARP)};
+const float GD_ARM_FBM_SCALE = ${f(ARM_FBM_SCALE)};
+const float GD_ARM_FBM_FLOOR = ${f(ARM_FBM_FLOOR)};
 const float GD_HR_DUST = ${f(HR_DUST)};
 const float GD_HZ_DUST = ${f(HZ_DUST)};
 const float GD_HZ_DUST2 = ${f(HZ_DUST2)};
@@ -139,9 +143,17 @@ float gdSpiralInnerFade(float R) {
 
 float gdArmPattern(float R, float theta) {
   float lnTerm = log(max(R, 50.0) / GD_ARM_REF_R) / tan(GD_PITCH);
-  float p2 = cos(2.0 * (theta - lnTerm));
-  float p4 = cos(4.0 * (theta - lnTerm));
-  return max(0.0, 0.667 * p2 + 0.333 * p4) * gdSpiralInnerFade(R);
+  // m=2 major + m=4 secondary crest, inter-arm nulls preserved (negative
+  // lobes clamp to 0); pow(.,ARM_SHARP) narrows & defines the arms.
+  float crest = 0.667 * cos(2.0 * (theta - lnTerm)) + 0.333 * cos(4.0 * (theta - lnTerm));
+  return pow(max(0.0, crest), GD_ARM_SHARP) * gdSpiralInnerFade(R);
+}
+
+// Organic 3D-FBM falloff that breaks the smooth arm ridge into clumpy, wispy,
+// star-position-like structure (cloud base-shape × noise). In [FLOOR, 1].
+float gdArmFalloff(vec3 p) {
+  float n = gdFbm3(p / GD_ARM_FBM_SCALE) * 0.5 + 0.5;
+  return GD_ARM_FBM_FLOOR + (1.0 - GD_ARM_FBM_FLOOR) * n;
 }
 
 float gdDustLane(float R, float theta) {
@@ -179,7 +191,7 @@ GalaxySample sampleGalaxy(vec3 p) {
   float bulge = GD_BULGE_AMP * gdHernquist(
     length(vec3(p.x, yw * GD_BULGE_SQUASH, p.z)), GD_BULGE_A);
   float bar = GD_BAR_AMP * gdBarField(p.x, yw, p.z);
-  float armS = 1.0 + GD_A_STARS * gdArmPattern(R, theta);
+  float armS = 1.0 + GD_A_STARS * gdArmPattern(R, theta) * gdArmFalloff(p);
 
   vec3 j = (GD_COL_DISC * (thin * armS) + GD_COL_OLD * thick
             + GD_COL_BULGE * (bulge + bar)) * tap;
