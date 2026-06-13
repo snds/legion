@@ -311,11 +311,12 @@ export function createPlanetMesh(
       uniforms: {
         uAtmosColor: { value: primary },
         uSunDir: { value: new Vector3(0, 0, 1) },
-        uFresnelPower: { value: VP.get('atmosFresnelPower') },
-        uCenterFalloff: { value: VP.get('atmosCenterFalloff') },
-        uEdgeThreshold: { value: VP.get('atmosEdgeThreshold') },
-        uEdgeSoftness: { value: VP.get('atmosEdgeSoftness') },
-        uTwilightBias: { value: VP.get('atmosTwilightBias') },
+        // Single-scattering geometry (planet centre + radius set per-frame).
+        uPlanetCenter: { value: new Vector3(0, 0, 0) },
+        uPlanetRadius: { value: size },
+        uAtmosScale: { value: VP.get('atmosScale') },
+        uSunIntensity: { value: 22.0 },
+        uScatterScale: { value: 1.0 },
       },
     });
 
@@ -515,7 +516,11 @@ export function updatePlanetShaders(
     }
 
     if (entry.atmosMat) {
-      entry.atmosMat.uniforms.uSunDir.value.copy(sunDir);
+      const am = entry.atmosMat.uniforms;
+      am.uSunDir.value.copy(sunDir);
+      // Single-scattering needs the planet centre + world radius each frame.
+      am.uPlanetCenter.value.copy(pos);
+      am.uPlanetRadius.value = entry.planetRadius * entry.group.scale.x;
     }
 
     if (entry.ringMat) {
@@ -633,20 +638,13 @@ VP.subscribe((key) => {
       case 'planetSpecularOffset':
         entry.surfaceMat.uniforms.uSpecularOffset.value = VP.get(key);
         break;
+      // Legacy fresnel-rim knobs — obsolete since the single-scattering
+      // rewrite (uniforms no longer exist); guarded so the VP editor is inert.
       case 'atmosFresnelPower':
-        if (entry.atmosMat) entry.atmosMat.uniforms.uFresnelPower.value = VP.get(key);
-        break;
       case 'atmosCenterFalloff':
-        if (entry.atmosMat) entry.atmosMat.uniforms.uCenterFalloff.value = VP.get(key);
-        break;
       case 'atmosEdgeThreshold':
-        if (entry.atmosMat) entry.atmosMat.uniforms.uEdgeThreshold.value = VP.get(key);
-        break;
       case 'atmosEdgeSoftness':
-        if (entry.atmosMat) entry.atmosMat.uniforms.uEdgeSoftness.value = VP.get(key);
-        break;
       case 'atmosTwilightBias':
-        if (entry.atmosMat) entry.atmosMat.uniforms.uTwilightBias.value = VP.get(key);
         break;
       case 'ringShadowAmbient':
         if (entry.ringMat) entry.ringMat.uniforms.uShadowAmbient.value = VP.get(key);
