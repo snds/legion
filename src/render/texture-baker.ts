@@ -444,7 +444,14 @@ const RECIPE_AUX_GLSL: Partial<Record<PlanetRecipeId, string>> = {
       float swirl = fbm(dir*5.0 + vec3(13.0,0.0,0.0), 5, 2.0, 0.5) * 0.5 + 0.5;
       float midlat = smoothstep(0.45, 0.8, fbm(dir*3.0, 4, 2.0, 0.5) * 0.5 + 0.5);
       float cloud = clamp(itcz*0.5 + smoothstep(0.5,0.8,swirl)*0.55 + midlat*0.22, 0.0, 1.0) * 0.82;
-      return vec4(cloud, ocean, 0.0, 0.0);
+      // City lights (B) — clustered on low COASTAL land (just above sea level),
+      // sparse via a high-frequency settlement threshold. Emits on the night
+      // side through the bloom chain (docs §2.3 city-lights emissive).
+      float land = 1.0 - ocean;
+      float coastal = land * smoothstep(0.585, 0.51, elev);   // hug the coastline
+      float pop = smoothstep(0.60, 0.80, fbm(dir*9.0 + vec3(80.0,0.0,0.0), 4, 2.0, 0.5) * 0.5 + 0.5);
+      float cities = clamp(coastal * pop, 0.0, 1.0);
+      return vec4(cloud, ocean, cities, 0.0);
     }`,
 };
 
