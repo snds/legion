@@ -23,6 +23,7 @@ import { Vector3 } from 'three';
 import { createRenderer, type RendererContext } from './render/renderer';
 import { createScene, registerRenderObject, type SceneContext } from './render/scene';
 import { setMaxAnisotropy } from './render/icons';
+import { setBakeRenderer } from './render/texture-baker';
 import {
   createBackgroundStars,
   createHeliopause,
@@ -132,6 +133,9 @@ async function boot(): Promise<void> {
   console.info(`[Legion] Renderer: ${renderCtx.backend.toUpperCase()}`);
 
   setMaxAnisotropy(renderCtx.maxAnisotropy);
+  // Register the renderer with the planet texture baker before the world is
+  // populated (populateWorld → createPlanetMesh → generatePlanetTexture).
+  setBakeRenderer(renderCtx.renderer);
 
   // ── 2. Scene ──
   const sceneCtx = createScene();
