@@ -1,0 +1,5 @@
+milkyway-galactic-4k.jpg is derived from NASA SVS "Deep Star Maps 2020"
+(https://svs.gsfc.nasa.gov/4851), galactic-coordinate equirectangular,
+created by Ernie Wright (NASA/GSFC) from Hipparcos-2, Tycho-2 and Gaia DR2.
+NASA SVS material is in the PUBLIC DOMAIN. Tone-mapped from the 4K galactic
+EXR to an sRGB JPG (mobius tonemap) for use as the system-tier sky backdrop.
