@@ -24,6 +24,7 @@ import { createRenderer, type RendererContext } from './render/renderer';
 import { createScene, registerRenderObject, type SceneContext } from './render/scene';
 import { setMaxAnisotropy } from './render/icons';
 import { setBakeRenderer } from './render/texture-baker';
+import { VP } from './render/visual-params';
 import {
   createHeliopause,
 } from './render/particles';
@@ -385,7 +386,7 @@ async function boot(): Promise<void> {
     // (updateGalaxyLOD) — two representations of the same medium handing off,
     // no hard switch, no pop. At sector+ the cube is black (intensity 0).
     scene.backgroundIntensity =
-      BACKDROP_INTENSITY * (1 - getGalaxyCrossfade(Game.data.camDist));
+      BACKDROP_INTENSITY * VP.get('backdropIntensity') * (1 - getGalaxyCrossfade(Game.data.camDist));
 
     // 8e. Selection panels (connection line + production queue tick)
     SelectionPanels.drawConnection(camera);

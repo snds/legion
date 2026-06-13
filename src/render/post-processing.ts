@@ -280,8 +280,11 @@ export function createPostProcessing(
   // Track insert index for lens flare (after bloom)
   const lensFlareInsertIndex = composer.passes.length;
 
-  // 3.5. Chromatic aberration (subtle radial RGB split for diegetic-screen feel)
+  // 3.5. Chromatic aberration (subtle radial RGB split for diegetic-screen feel).
+  // Intensity + on/off are user-controllable via the Settings panel (VP).
   const chromaticAberrationPass = new ShaderPass(ChromaticAberrationShader);
+  (chromaticAberrationPass.material as ShaderMaterial).uniforms.uMaxOffset.value = VP.get('chromaticAberration');
+  chromaticAberrationPass.enabled = VP.get('chromaticAberration') > 0;
   composer.addPass(chromaticAberrationPass);
 
   // 4. Vignette
@@ -309,6 +312,8 @@ export function createPostProcessing(
   // previously ran pre-tonemap, so auto-exposure scaled it up in dark views) nor
   // smoothed away by the AA pass.
   const filmGrainPass = new ShaderPass(FilmGrainShader);
+  (filmGrainPass.material as ShaderMaterial).uniforms.uIntensity.value = VP.get('filmGrainIntensity');
+  filmGrainPass.enabled = VP.get('filmGrainIntensity') > 0;
   composer.addPass(filmGrainPass);
 
   // ── Resize Handler ──
@@ -337,6 +342,18 @@ export function createPostProcessing(
       case 'smaaEnabled':
         smaaPass.enabled = VP.get('smaaEnabled');
         break;
+      case 'chromaticAberration': {
+        const v = VP.get('chromaticAberration');
+        (chromaticAberrationPass.material as ShaderMaterial).uniforms.uMaxOffset.value = v;
+        chromaticAberrationPass.enabled = v > 0;
+        break;
+      }
+      case 'filmGrainIntensity': {
+        const v = VP.get('filmGrainIntensity');
+        (filmGrainPass.material as ShaderMaterial).uniforms.uIntensity.value = v;
+        filmGrainPass.enabled = v > 0;
+        break;
+      }
     }
   });
 
