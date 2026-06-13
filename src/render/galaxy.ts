@@ -27,6 +27,12 @@ import {
 import { getStellarRender } from './planet-colors';
 import { galacticStarsVertexShader, galacticStarsFragmentShader } from './shaders/galactic-stars';
 import { galacticDiscVolumeVertexShader, galacticDiscVolumeFragmentShader } from './shaders/galactic-disc-volume';
+import {
+  armPattern as mArmPattern, taper as mTaper, flare as mFlare, warpY as mWarpY,
+  A_STARS as M_A_STARS, HR_THIN as M_HR_THIN, HZ_THIN as M_HZ_THIN,
+  BAR_ANGLE as M_BAR_ANGLE, PITCH as M_PITCH, ARM_REF_R as M_ARM_REF_R,
+  DISC_RADIUS_WU as M_DISC_RADIUS,
+} from './galaxy-density';
 
 // ── Stellar Population Sampling ──────────────────────────────────
 //
@@ -396,11 +402,7 @@ export function updateGalaxyLOD(camDist: number): void {
     u.uSizeScale.value = closeFade * 1.2 * discPresence;
   }
 
-  // Dust lanes (particle, separate from shader): peak in arm/sector range.
-  if (GALAXY_LOD.dustMat) {
-    const closeFade = 1 - smoothRamp(camDist, 6000, 11000);
-    GALAXY_LOD.dustMat.opacity = closeFade * 0.55 * discPresence;
-  }
+  // (dust-strand particles deleted; their LOD ramp removed with them)
 
   // Nebulae: prominent at arm scale, fading at galaxy and at sector.
   if (GALAXY_LOD.nebulaMats.length > 0) {
@@ -498,9 +500,8 @@ export function createGalaxy(): Group {
   // particle arms and the procedural arms land in alignment. Pitch
   // tan⁻¹(1/ARM_TWIST) ≈ 13.4° — Milky Way is observed at ~12–14°.
   const ARM_TWIST = 4.2;
-  // Bar orientation in galactic plane. Real Milky Way bar is ~25–30°
-  // from the Sun→GC line. Particle arms emerge from the bar tips.
-  const BAR_ANGLE = Math.PI * 25 / 180;
+  // Bar orientation — SINGLE SOURCE: the shared analytic model (28°).
+  const BAR_ANGLE = M_BAR_ANGLE;
   const ARM_PHASE_OFFSET = BAR_ANGLE;
   // Galactic warp — must match the disc shader's uWarp* uniforms so
   // particles ride the same warped plane as the procedural disc.
@@ -518,38 +519,36 @@ export function createGalaxy(): Group {
   const armCols: number[] = [];
   const armSizes: number[] = [];
 
-  for (let i = 0; i < ARM_COUNT; i++) {
-    const arm = Math.floor(Math.random() * ARMS);
-    const armAngle = (Math.PI * 2 / ARMS) * arm;
-    // Arms start at the bar tip radius (~2.7 kpc). Exponential-disc-like
-    // radial distribution: pow(u, 1.7) biases particles toward smaller r
-    // (matches the Milky Way's ~3 kpc disc scale length and removes the
-    // bright outer ring artifact of uniform-r sampling, since 2πr·dr
-    // area weighting otherwise over-concentrates the rim).
-    const u = Math.random();
-    const r = 2.7 + Math.pow(u, 1.7) * (GAL_RADIUS - 2.7);
-    const spiralTwist = Math.log(r / 2.7) * ARM_TWIST;
-    // Arm spread widens significantly with radius — outer arms feather
-    // into the inter-arm population rather than reading as crisp bands.
-    const spread = ARM_SPREAD * (1 + r * 0.18);
-    const theta = armAngle + spiralTwist + ARM_PHASE_OFFSET + (Math.random() - 0.5) * spread;
-    // Thin disc scale height grows with r ("disc flaring" — observed in
-    // Gaia data). Inner thin disc ~0.1 kpc, outer puffs to ~0.3 kpc.
-    const diskHeight = 0.06 + r * 0.018;
-    const height = (Math.random() - 0.5) * diskHeight * 2;
-
-    const xk = r * Math.cos(theta);
-    const zk = r * Math.sin(theta);
-    const x = xk * KPC;
-    const z = zk * KPC;
-    const y = (height + warpY(r, xk, zk)) * KPC;
+  // Disc stars are REJECTION-SAMPLED against the shared analytic model
+  // (galaxy-density.ts) — the same functions the volume shader marches — so
+  // resolved stars and the unresolved glow agree BY CONSTRUCTION: two dominant
+  // arms, the 28° bar phase, arm fade-out inside the bar region (this is what
+  // kills the old inner 'curl'), exponential disc, flaring slab, outer taper,
+  // and the model warp. (docs/galaxy-visual-redesign.md §7 Phase 5)
+  const R_PEAK_P = M_HR_THIN * Math.exp(-1); // peak of the R·exp(−R/hR) weight
+  let placed = 0;
+  let guard = 0;
+  while (placed < ARM_COUNT && guard++ < ARM_COUNT * 40) {
+    const R = Math.random() * M_DISC_RADIUS;
+    // area-weighted exponential disc: accept ∝ R·exp(−R/hR)
+    if (Math.random() > (R * Math.exp(-R / M_HR_THIN)) / R_PEAK_P) continue;
+    const theta = Math.random() * Math.PI * 2;
+    // exact model arm modulation (two-major pattern incl. inner fade)
+    if (Math.random() > (1 + M_A_STARS * mArmPattern(R, theta)) / (1 + M_A_STARS)) continue;
+    if (Math.random() > mTaper(R)) continue;
+    const x = R * Math.cos(theta);
+    const z = R * Math.sin(theta);
+    // Laplacian slab (matches exp(−|y|/hz)), flaring with R, on the model warp
+    const hz = M_HZ_THIN * mFlare(R);
+    const y = -hz * Math.log(1 - Math.random()) * (Math.random() < 0.5 ? -1 : 1)
+      + mWarpY(x, z);
     armPts.push(x, y, z);
 
-    // Sample stellar population: per-particle color from the Planckian
-    // MK spectrum, per-particle size from luminosity-class distribution.
+    // Per-particle Planckian color + luminosity-class size.
     const [cr, cg, cb, sz] = sampleStellarPopulation();
     armCols.push(cr, cg, cb);
     armSizes.push(sz);
+    placed++;
   }
 
   // ── 2. Galactic Bulge + Bar Star Sprinkle (8K) ────────────────
@@ -698,41 +697,8 @@ export function createGalaxy(): Group {
   galaxy.add(localArmField);
   GALAXY_LOD.localArmMat = localArmMat;
 
-  // ── 3d. Dust Lane Strands (8K) ────────────────────────────────
-  // Sparse, slightly cooler particles tracing the inner edges of the
-  // spiral arms — reads as fine filaments of dust against the brighter
-  // arm background. Adds the granular "depth" of a real disc when you
-  // fly inside it.
-
-  const DUST_N = 8000;
-  const dustPts: number[] = [];
-  for (let i = 0; i < DUST_N; i++) {
-    const arm = Math.floor(Math.random() * ARMS);
-    const armAngle = (Math.PI * 2 / ARMS) * arm;
-    const r = 2.7 + Math.random() * (GAL_RADIUS - 2.7);
-    // Match the arm log-spiral pitch — dust lanes ride the inner edge
-    // of each arm (radialOffset shifts them slightly off the arm centerline).
-    const spiralTwist = Math.log(r / 2.7) * ARM_TWIST;
-    const radialOffset = 0.08 + Math.random() * 0.10;
-    const theta = armAngle + spiralTwist + ARM_PHASE_OFFSET - radialOffset;
-    const xk = r * Math.cos(theta);
-    const zk = r * Math.sin(theta);
-    const x = xk * KPC;
-    const z = zk * KPC;
-    const heightK = (Math.random() - 0.5) * 0.04;
-    const y = (heightK + warpY(r, xk, zk)) * KPC;
-    dustPts.push(x, y, z);
-  }
-  const dustGeo = new BufferGeometry();
-  dustGeo.setAttribute('position', new Float32BufferAttribute(dustPts, 3));
-  const dustMat = new PointsMaterial({
-    color: 0x3a1a14, size: 2.5, sizeAttenuation: false,
-    transparent: true, opacity: 0.0, depthWrite: false,
-  });
-  const dustField = new Points(dustGeo, dustMat);
-  dustField.name = 'dust-lanes';
-  galaxy.add(dustField);
-  GALAXY_LOD.dustMat = dustMat;
+  // (Dust-lane strand particles deleted — the volume's per-channel dust
+  // extinction is the principled version; docs §5.3.)
 
   // ── 3b. Volumetric Galactic Disc — Single Ray-Marched Box ─────
   //
@@ -814,18 +780,14 @@ export function createGalaxy(): Group {
   // ── 5. Nebula Clusters (along spiral arms) ────────────────────
   const NEBULA_COUNT = 50;
   for (let i = 0; i < NEBULA_COUNT; i++) {
-    const arm = Math.floor(Math.random() * ARMS);
-    const armAngle = (Math.PI * 2 / ARMS) * arm;
-    const r = 2.7 + Math.random() * (GAL_RADIUS - 2.7);
-    // Nebulae are star-forming regions concentrated in the arms.
-    const spiralTwist = Math.log(r / 2.7) * ARM_TWIST;
-    const theta = armAngle + spiralTwist + ARM_PHASE_OFFSET + (Math.random() - 0.5) * 0.5;
-    const xk = r * Math.cos(theta);
-    const zk = r * Math.sin(theta);
-    const x = xk * KPC;
-    const z = zk * KPC;
-    const heightK = (Math.random() - 0.5) * 0.3;
-    const y = (heightK + warpY(r, xk, zk)) * KPC;
+    // Star-forming regions sit on the MODEL's m=2 arm crests, slightly
+    // DOWNSTREAM of the dust lane (density-wave anatomy), alternating arms.
+    const R = 1400 + Math.random() * 3000;
+    const lnTerm = Math.log(R / M_ARM_REF_R) / Math.tan(M_PITCH);
+    const theta = lnTerm + (i % 2) * Math.PI + 0.10 + (Math.random() - 0.5) * 0.18;
+    const x = R * Math.cos(theta);
+    const z = R * Math.sin(theta);
+    const y = (Math.random() - 0.5) * 100 + mWarpY(x, z);
 
     const hueShift = Math.random();
     const nebR = 0.65 + hueShift * 0.3;
