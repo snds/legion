@@ -50,9 +50,19 @@ export function bakeGalaxyBackdrop(
   // Force full LOD presence (star sizes/opacities are camDist-ramped).
   updateGalaxyLOD(13000);
 
+  // Bake the VOLUME ONLY. The galaxy's star Points and (billboard) nebula
+  // sprites don't tile seamlessly into a cubemap — sprites orient to each of
+  // the 6 face cameras, so they mismatch at face edges and read as a hard
+  // cube-face seam in the dim backdrop. The resolved foreground stars now come
+  // from the real HYG catalogue (star-field.ts), so the cube only needs the
+  // smooth, view-continuous diffuse glow of the volume raymarch. Hide every
+  // galaxy child except the volume mesh for the bake; restore after.
+  const volumeMesh = galaxyGroup.getObjectByName('galactic-disc-volume') as Mesh | undefined;
+  const savedChildren = galaxyGroup.children.map((c) => [c, c.visible] as const);
+  for (const [c] of savedChildren) c.visible = c === volumeMesh;
+
   // Swap the 256-step bake variant onto the volume mesh (shared uniforms —
   // same medium, same single brightness knob).
-  const volumeMesh = galaxyGroup.getObjectByName('galactic-disc-volume') as Mesh | undefined;
   let liveMat: ShaderMaterial | null = null;
   let bakeMat: ShaderMaterial | null = null;
   if (volumeMesh) {
@@ -90,7 +100,8 @@ export function bakeGalaxyBackdrop(
     volumeMesh.material = liveMat;
     bakeMat?.dispose();
   }
-  for (const [c, v] of saved) c.visible = v;
+  for (const [c, v] of savedChildren) c.visible = v; // galaxy children
+  for (const [c, v] of saved) c.visible = v;          // scene roots
 
   return cubeRT.texture;
 }
