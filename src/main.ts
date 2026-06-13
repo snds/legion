@@ -34,7 +34,7 @@ import { bakeGalaxyBackdrop } from './render/galaxy-backdrop';
 import { createAsteroidBelt } from './render/asteroid-belt';
 import {
   createStarMesh, createPlanetMesh, createMoonMesh, createBobMesh,
-  createSystemMarker, createOrbitLine, updateSunSystem,
+  createSystemMarker, createMarkerStem, createOrbitLine, updateSunSystem,
   updatePlanetShaders, updateOrbitLineResolution,
 } from './render/objects';
 import { CameraController } from './core/camera';
@@ -624,6 +624,10 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol'): WorldExtras {
     // Marker group stays unit-scale; the icon is sized SCREEN-CONSTANT per frame
     // by visibility.ts (updateRegionalMarkers → scaleFixed), fixing the old
     // grow/shrink-with-scene defect (G8) from marker.scale.setScalar(450).
+
+    // Out-of-plane stem: drops to the reference plane (y=0) so the marker's
+    // height above/below the plane reads at a glance (Solar-System-Scope style).
+    marker.add(createMarkerStem(marker.position.y, sCfg.color));
 
     layers.regional.add(marker);
     registerRenderObject(renderObjectMap, eid, marker);

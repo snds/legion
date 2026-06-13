@@ -265,10 +265,14 @@ function updateRegionalMarkers(camDist: number, swap: number): void {
     marker.visible = show;
     if (!show) continue;
     marker.traverse(c => {
-      if (!c.userData?.isIcon) return;
-      const sp = c as Sprite;
-      scaleFixed(sp, camDist, REGIONAL_ICON_PX);
-      (sp.material as SpriteMaterial).opacity = swap * 0.95;
+      if (c.userData?.isIcon) {
+        const sp = c as Sprite;
+        scaleFixed(sp, camDist, REGIONAL_ICON_PX);
+        (sp.material as SpriteMaterial).opacity = swap * 0.95;
+      } else if (c.userData?.isStemPart) {
+        // Out-of-plane stem line — fade in with the markers, kept dim.
+        ((c as unknown as { material: { opacity: number } }).material).opacity = swap * 0.4;
+      }
     });
   }
 }
