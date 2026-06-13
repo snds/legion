@@ -184,35 +184,109 @@ const RECIPE_GLSL: Record<PlanetRecipeId, string> = {
       return c/255.0;
     }`,
 
-  // Jotunheim — Jupiter-like amber/cream/brown bands
+  // Jotunheim — GasGiant (Jupiter-class). Seeded 1D latitude band profile
+  // (perturbed widths, smoothstep belt/zone edges) → photo-derived ramp;
+  // bands fade to a mottled vortex above ~|lat| 50°; one GRS-class storm
+  // with analytic spiral warp + brick tint. docs §2.1.
   jotunheim: /* glsl */ `
-    vec3 surfaceColor(vec3 dir, float vLat){
-      float lat = vLat * 3.14159265;
-      float bands = sin(lat*12.0)*0.3 + sin(lat*6.0)*0.2;
-      float wx = sn(dir*3.0) * 0.5;
-      float swirl = fbm(dir*6.0 + vec3(wx,0.0,0.0), 4, 2.0, 0.5) * 0.3;
-      float t = (bands + swirl) * 0.5 + 0.5;
-      vec3 c = mix(vec3(100,60,30),  vec3(160,110,50),  smoothstep(0.0,0.2,t));
-      c = mix(c, vec3(200,160,90),  smoothstep(0.2,0.4,t));
-      c = mix(c, vec3(220,190,130), smoothstep(0.4,0.6,t));
-      c = mix(c, vec3(230,210,170), smoothstep(0.6,0.8,t));
-      c = mix(c, vec3(240,225,200), smoothstep(0.8,1.0,t));
+    uniform float uBandCount;
+    uniform float uPolarLat;
+    uniform float uSaturn;
+    uniform int   uStormCount;
+    uniform vec4  uStorms[6];   // (u, v, radius, strength)
+
+    // Jupiter ramp: belts (dark) → zones (pale). Desaturated tans/browns/creams.
+    vec3 jupRamp(float t){
+      vec3 c = mix(vec3(64.0,68.0,54.0),   vec3(144.0,97.0,77.0),  smoothstep(0.0,0.2,t));
+      c = mix(c, vec3(200.0,139.0,58.0),  smoothstep(0.2,0.4,t));
+      c = mix(c, vec3(211.0,156.0,126.0), smoothstep(0.4,0.6,t));
+      c = mix(c, vec3(167.0,156.0,134.0), smoothstep(0.6,0.8,t));
+      c = mix(c, vec3(210.0,207.0,218.0), smoothstep(0.8,1.0,t));
       return c/255.0;
+    }
+    // Saturn ramp: low-contrast butterscotch family (value-only variation).
+    vec3 satRamp(float t){
+      return mix(vec3(0.62,0.58,0.50), vec3(0.88,0.83,0.72), smoothstep(0.0,1.0,t));
+    }
+
+    // 1D band field: zonal turbulence perturbs the latitude lookup, seeded
+    // varying widths, smoothstep belt/zone edges, per-band value jitter.
+    float bandField(float lat01, vec3 dir){
+      float turb = fbm(vec3(dir.x*0.6, dir.y*0.6, dir.z*3.0), 5, 2.1, 0.55);
+      float l = lat01 + turb * 0.035;
+      float phase = l * uBandCount + 0.55 * sn(vec3(0.0, 0.0, l*3.0));
+      float tri = abs(fract(phase) - 0.5) * 2.0;          // triangle 0..1..0
+      float band = smoothstep(0.22, 0.78, tri);
+      float bandId = floor(phase);
+      band += sn(vec3(bandId*1.7, 0.0, 0.0)) * 0.12;       // per-band value jitter
+      band += fbm(vec3(dir.x*0.8, dir.y*0.8, dir.z*8.0), 4, 2.0, 0.5) * 0.06; // deck detail
+      return clamp(band, 0.0, 1.0);
+    }
+
+    vec3 surfaceColor(vec3 dir, float vLat){
+      float absLat = abs(vLat - 0.5) * 2.0;
+      float bf = bandField(vLat, dir);
+      vec3 col = uSaturn > 0.5 ? satRamp(bf) : jupRamp(bf);
+
+      // Polar cutoff: crossfade bands → muted mottled vortex above ~50°.
+      float polar = smoothstep(uPolarLat, uPolarLat + 0.18, absLat);
+      if (polar > 0.001){
+        float vortex = fbm(dir*6.0, 5, 2.0, 0.5) * 0.5 + 0.5;
+        vec3 polarCol = (uSaturn > 0.5 ? satRamp(0.4) : jupRamp(0.45)) * (0.7 + 0.3*vortex);
+        col = mix(col, polarCol, polar);
+      }
+
+      // Storms — analytic ovals: spiral-warped detail + brick/salmon tint.
+      for (int i = 0; i < 6; i++){
+        if (i >= uStormCount) break;
+        vec4 s = uStorms[i];
+        float du = vUv.x - s.x; du -= floor(du + 0.5);     // longitude wrap [0,1]
+        float dv = vLat - s.y;
+        float d2 = (du*du)*2.4 + dv*dv;                    // elliptical (wider in lon)
+        float infl = exp(-d2 / (s.z*s.z));
+        if (infl > 0.002){
+          float ang = infl * s.w * 5.0;                    // spiral by influence
+          float ca = cos(ang), sa = sin(ang);
+          vec2 rot = vec2(ca*du - sa*dv, sa*du + ca*dv);
+          float swirl = fbm(vec3(rot*38.0, 0.0) + dir*2.0, 4, 2.0, 0.5) * 0.5 + 0.5;
+          vec3 brick = mix(vec3(200.0,139.0,58.0)/255.0, vec3(144.0,97.0,77.0)/255.0, swirl);
+          col = mix(col, brick * (0.85 + 0.3*swirl), smoothstep(0.0, 1.0, infl));
+        }
+      }
+      return col;
     }`,
 
-  // Niflheim — Saturn-like pale blue-gray bands
+  // Niflheim — IceGiant (Uranus-class). Pale greenish-cyan methane haze with
+  // 2–4 barely-visible bands (Irwin 2024: Neptune's cobalt is a Voyager
+  // contrast-stretch artifact — pale is correct). Optional faint zonal
+  // streaks near ~35° lat. docs §2.2.
   niflheim: /* glsl */ `
-    vec3 surfaceColor(vec3 dir, float vLat){
-      float lat = vLat * 3.14159265;
-      float bands = sin(lat*10.0)*0.25 + sin(lat*5.0)*0.15;
-      float swirl = fbm(dir*5.0, 4, 2.0, 0.45) * 0.2;
-      float t = (bands + swirl) * 0.5 + 0.5;
-      vec3 c = mix(vec3(80,100,130),  vec3(120,140,160), smoothstep(0.0,0.2,t));
-      c = mix(c, vec3(150,170,185),  smoothstep(0.2,0.4,t));
-      c = mix(c, vec3(175,190,200),  smoothstep(0.4,0.6,t));
-      c = mix(c, vec3(200,210,215),  smoothstep(0.6,0.8,t));
-      c = mix(c, vec3(215,220,225),  smoothstep(0.8,1.0,t));
+    uniform float uStreak;
+
+    // Uranus photo ramp (#65868B → #93B8BE → #BBE1E4 → #D5FBFC).
+    vec3 uranRamp(float t){
+      vec3 c = mix(vec3(101.0,134.0,139.0), vec3(147.0,184.0,190.0), smoothstep(0.0,0.33,t));
+      c = mix(c, vec3(187.0,225.0,228.0), smoothstep(0.33,0.66,t));
+      c = mix(c, vec3(213.0,251.0,252.0), smoothstep(0.66,1.0,t));
       return c/255.0;
+    }
+
+    vec3 surfaceColor(vec3 dir, float vLat){
+      float absLat = abs(vLat - 0.5) * 2.0;
+      // Barely-visible bands (contrast crushed to ~0.06) under heavy haze.
+      float band = sin(vLat * 3.14159265 * 6.0) * 0.5 + 0.5;
+      band = mix(0.5, band, 0.10);
+      float haze = fbm(dir*2.0, 3, 2.0, 0.5) * 0.06;       // low-pass methane haze
+      float t = clamp(0.62 + (band - 0.5)*0.12 + haze - absLat*0.12, 0.0, 1.0);
+      vec3 col = uranRamp(t);
+
+      // Optional faint bright cloud streak near ~35° latitude (both hemispheres).
+      if (uStreak > 0.5){
+        float s = exp(-pow((absLat - 0.62) / 0.05, 2.0));
+        float sn8 = fbm(vec3(dir.x*0.5, dir.y*0.5, dir.z*8.0), 4, 2.0, 0.5) * 0.5 + 0.5;
+        col = mix(col, vec3(0.95,0.99,1.0), s * smoothstep(0.6,0.9,sn8) * 0.5);
+      }
+      return col;
     }`,
 
   // Helheim — dark blue-gray dwarf with bright ice fractures
@@ -266,7 +340,17 @@ function ensureRig(): void {
   _material = new ShaderMaterial({
     vertexShader: VERTEX,
     fragmentShader: fragmentFor('vulcan'), // replaced per-bake
-    uniforms: { uSeed: { value: [0, 0, 0] } },
+    uniforms: {
+      uSeed: { value: [0, 0, 0] },
+      // Giant/ice-giant structure (Phase 3a). Unused by other recipes —
+      // three skips uniforms the compiled program doesn't reference.
+      uBandCount: { value: 11 },     // visible zonal bands
+      uPolarLat: { value: 0.56 },    // |lat|·2 where bands fade to vortex (~50°)
+      uSaturn: { value: 0 },         // 0 Jupiter-class, 1 Saturn-class
+      uStormCount: { value: 0 },
+      uStorms: { value: new Float32Array(24) }, // vec4[6]: (u, v, radius, strength)
+      uStreak: { value: 0 },         // ice giant: 1 = show faint cloud streaks
+    },
   });
   // Fullscreen clip-space triangle pair (positions ARE clip coords).
   _quad = new Mesh(new PlaneGeometry(2, 2), _material);
@@ -281,6 +365,41 @@ function seedOffset(seed: number): [number, number, number] {
   const b = (Math.sin(seed * 78.233 + 1.0) * 43758.5453) % 1;
   const c = (Math.sin(seed * 39.425 + 2.0) * 43758.5453) % 1;
   return [a * 600 + 100, b * 600 + 100, c * 600 + 100];
+}
+
+// Deterministic [0,1) from an integer seed + salt (avoids Math.random;
+// matches the float-hash style used elsewhere in the project).
+function hash01(seed: number, salt: number): number {
+  const x = Math.sin(seed * 0.0001 + salt * 12.9898) * 43758.5453;
+  return x - Math.floor(x);
+}
+
+// Per-recipe structural uniforms derived from the seed. Only the gas/ice
+// giants consume these; other recipes leave the defaults untouched.
+function applyGiantUniforms(recipeId: PlanetRecipeId, seed: number, u: Record<string, { value: unknown }>): void {
+  // Reset to inert defaults each bake (the material is shared).
+  u.uStormCount!.value = 0;
+  u.uStreak!.value = 0;
+  u.uSaturn!.value = 0;
+
+  if (recipeId === 'jotunheim') {
+    // Jupiter-class: 10–14 bands, polar cutoff ~50°, one GRS-class oval at a
+    // shear latitude (~22°S → vLat 0.62) plus a couple of medium ovals.
+    u.uBandCount!.value = 10 + Math.floor(hash01(seed, 1) * 5); // 10–14
+    u.uPolarLat!.value = 0.55 + hash01(seed, 2) * 0.06;         // ~50–55°
+    u.uSaturn!.value = 0;
+    const storms = u.uStorms!.value as Float32Array;
+    // Great oval: u seeded, v=0.62 (22°S), large radius, strong swirl.
+    const greatV = 0.62;
+    storms.set([hash01(seed, 3), greatV, 0.11, 1.0], 0);
+    // Two medium ovals at other shear latitudes, opposite hemisphere spread.
+    storms.set([hash01(seed, 4), 0.40, 0.055, 0.7], 4);
+    storms.set([hash01(seed, 5), 0.71, 0.05, 0.6], 8);
+    u.uStormCount!.value = 3;
+  } else if (recipeId === 'niflheim') {
+    // Uranus-class ice giant: faint streaks ~30% of seeds (Niflheim's seed decides).
+    u.uStreak!.value = hash01(seed, 7) < 0.35 ? 1 : 0;
+  }
 }
 
 let _lastRecipe: PlanetRecipeId | null = null;
@@ -312,6 +431,7 @@ export function bakeRecipeToCanvas(
     _lastRecipe = recipeId;
   }
   mat.uniforms.uSeed.value = seedOffset(seed);
+  applyGiantUniforms(recipeId, seed, mat.uniforms);
 
   const rt = new WebGLRenderTarget(width, height, {
     format: RGBAFormat,
