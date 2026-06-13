@@ -21,7 +21,13 @@ export function setMaxAnisotropy(val: number): void {
 
 // ── Icon Types ───────────────────────────────────────────────────
 
-export type IconShape = 'diamond' | 'circle' | 'triangle' | 'square' | 'hex' | 'star';
+export type IconShape =
+  | 'diamond' | 'circle' | 'triangle' | 'square' | 'hex' | 'star'
+  // Cosmic object types (regional/galactic map):
+  | 'nebula'  // diffuse cloud
+  | 'dyson'   // Dyson sphere — concentric shell rings
+  | 'swarm'   // Dyson swarm — ring + collector ticks
+  | 'mega';   // generic megastructure — octagon
 
 export type IconInternal = 'station' | 'factory' | 'comms' | 'mine';
 
@@ -292,6 +298,50 @@ function drawShape(
         const rad = i % 2 === 0 ? r : r * 0.45;
         const px = cx + rad * Math.cos(a);
         const py = cy + rad * Math.sin(a);
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.closePath();
+      break;
+    }
+
+    case 'nebula': {
+      // Soft cloud silhouette — three bumps on a flat base (one subpath).
+      const b = cy + r * 0.5;
+      ctx.moveTo(cx - r, b);
+      ctx.quadraticCurveTo(cx - r * 1.05, b - r * 0.85, cx - r * 0.45, b - r * 0.7);
+      ctx.quadraticCurveTo(cx - r * 0.25, b - r * 1.35, cx + r * 0.1, b - r * 0.9);
+      ctx.quadraticCurveTo(cx + r * 0.45, b - r * 1.3, cx + r * 0.68, b - r * 0.6);
+      ctx.quadraticCurveTo(cx + r * 1.05, b - r * 0.75, cx + r, b);
+      ctx.closePath();
+      break;
+    }
+
+    case 'dyson': {
+      // Concentric shell rings (engineered sphere around a star).
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.moveTo(cx + r * 0.5, cy);
+      ctx.arc(cx, cy, r * 0.5, 0, Math.PI * 2);
+      break;
+    }
+
+    case 'swarm': {
+      // Collector ring + radial ticks (partial Dyson swarm).
+      ctx.arc(cx, cy, r * 0.68, 0, Math.PI * 2);
+      for (let i = 0; i < 8; i++) {
+        const a = (Math.PI / 4) * i;
+        ctx.moveTo(cx + Math.cos(a) * r * 0.82, cy + Math.sin(a) * r * 0.82);
+        ctx.lineTo(cx + Math.cos(a) * r, cy + Math.sin(a) * r);
+      }
+      break;
+    }
+
+    case 'mega': {
+      // Octagon — angular artificial silhouette (generic megastructure).
+      for (let i = 0; i < 8; i++) {
+        const a = (Math.PI / 4) * i + Math.PI / 8;
+        const px = cx + r * Math.cos(a);
+        const py = cy + r * Math.sin(a);
         if (i === 0) ctx.moveTo(px, py);
         else ctx.lineTo(px, py);
       }

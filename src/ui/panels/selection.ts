@@ -16,6 +16,7 @@ const TYPE_ICONS: Record<string, string> = {
   star: '✦', planet: '◍', bob: '◇', station: '⬡', comet: '◗',
   moon: '○', gal_system: '✦', system: '✦', phenomenon: '⊕',
   alien: '▵', alien_civ: '▵', bob_transit: '➤', galaxy: '◔',
+  nebula: '☁', dyson_sphere: '◉', dyson_swarm: '◌', megastructure: '⬢',
 };
 
 // ── Buildable Items Per Station Type ─────────────────────────────

@@ -175,6 +175,10 @@ function pixelsForType(type: string): number {
     case 'phenomenon':
     case 'alien':
     case 'alien_civ':
+    case 'nebula':
+    case 'dyson_sphere':
+    case 'dyson_swarm':
+    case 'megastructure':
       return HOVER_SCREEN_PX_LARGE;
     default:
       return HOVER_SCREEN_PX;
@@ -201,7 +205,11 @@ function warpZoomForType(type: string): number | null {
       return ZOOM_STEPS[3].val;  // INNER SYSTEM
     case 'system':         // regional system marker
     case 'gal_system':     // galactic system marker
-      return ZOOM_STEPS[5].val;  // HELIOPAUSE — into the system bubble
+    case 'nebula':         // cosmic objects share the local-map framing
+    case 'dyson_sphere':
+    case 'dyson_swarm':
+    case 'megastructure':
+      return ZOOM_STEPS[5].val;  // HELIOPAUSE — into the local-map bubble
     // Large-scale targets
     case 'alien':
     case 'alien_civ':

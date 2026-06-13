@@ -20,6 +20,7 @@ import { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import { createIcon, createLabel, type IconShape } from './icons';
+import type { CosmicObject } from '../data/cosmic-objects';
 import { createSunSystem, type SunSystem } from './sun';
 import { planetSurfaceVertexShader, planetSurfaceFragmentShader } from './shaders/planet-surface';
 import { planetAtmosphereVertexShader, planetAtmosphereFragmentShader } from './shaders/planet-atmosphere';
@@ -824,6 +825,7 @@ export function createSystemMarker(
   group.userData.planets = planetCount;
   group.userData.bobCount = bobCount;
   group.userData.explored = explored;
+  group.userData.isRegionalMarker = true; // visibility.ts scales/fades/declutters these
 
   // Context-driven STYLE: shape + colour communicate the system's status at a
   // glance, so neighbours read as distinct points of interest rather than a row
@@ -879,6 +881,42 @@ export function createMarkerStem(height: number, color: number): LineSegments {
   const seg = new LineSegments(geo, mat);
   seg.userData.isStemPart = true;
   return seg;
+}
+
+// ── Cosmic Object Marker (nebulae / megastructures) ──────────────
+
+const COSMIC_SHAPE: Record<CosmicObject['type'], IconShape> = {
+  nebula: 'nebula',
+  dyson_sphere: 'dyson',
+  dyson_swarm: 'swarm',
+  megastructure: 'mega',
+};
+
+/** Regional-map marker for a non-system cosmic object — its own glyph + colour
+ *  + label, riding the same pipeline as the star-system markers (screen-constant
+ *  size, swap fade, stem, declutter, selection). */
+export function createCosmicMarker(cfg: CosmicObject): Group {
+  const group = new Group();
+  group.name = `cosmic-${cfg.name}`;
+  group.userData.type = cfg.type;
+  group.userData.name = cfg.name;
+  group.userData.distLy = cfg.distLy;
+  group.userData.subtitle = cfg.subtitle;
+  group.userData.eid = -1; // no ECS entity — selection reads userData directly
+  group.userData.isRegionalMarker = true;
+
+  const col = numToHex(cfg.color);
+  const icon = createIcon({
+    shape: COSMIC_SHAPE[cfg.type] ?? 'circle',
+    color: col,
+    glowColor: col,
+    label: cfg.name.toUpperCase(),
+    sublabel: `${cfg.subtitle} · ${cfg.distLy} LY`,
+    outlineWidth: 3,
+  });
+  icon.userData.isIcon = true;
+  group.add(icon);
+  return group;
 }
 
 // ── Alien Influence Marker ───────────────────────────────────────

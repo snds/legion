@@ -253,7 +253,7 @@ export function updateVisibility(camera?: Camera): void {
   // Regional star-system markers (incl. Sol): screen-constant size + fade-in.
   // Runs whenever the regional layer is visible (heliopause → arm), independent
   // of the local layer (which is off at arm tier).
-  updateRegionalMarkers(Game.data.camDist, swap);
+  updateRegionalMarkers(Game.data.camDist, swap, camera);
 
   // Label DECLUTTER: after the show-logic has set each label's wants-state,
   // prune overlapping labels in screen space so the local map stays readable
@@ -261,19 +261,25 @@ export function updateVisibility(camera?: Camera): void {
   if (camera) declutterLabels(camera);
 }
 
-function updateRegionalMarkers(camDist: number, swap: number): void {
+const _mkPos = new Vector3();
+function updateRegionalMarkers(camDist: number, swap: number, camera?: Camera): void {
   if (!targets) return;
   const regional = targets.layers.regional;
   if (!regional.visible) return;
   const show = swap > 0.005;
   for (const marker of regional.children) {
-    if (marker.userData?.type !== 'system') continue;
+    if (!marker.userData?.isRegionalMarker) continue;
     marker.visible = show;
     if (!show) continue;
+    // Screen-constant sizing must use the TRUE camera→marker distance — markers
+    // are spread far from the focus, so the global camDist would balloon near
+    // ones and shrink far ones.
+    marker.getWorldPosition(_mkPos);
+    const dist = camera ? camera.position.distanceTo(_mkPos) : camDist;
     marker.traverse(c => {
       if (c.userData?.isIcon) {
         const sp = c as Sprite;
-        scaleFixed(sp, camDist, REGIONAL_ICON_PX);
+        scaleFixed(sp, dist, REGIONAL_ICON_PX);
         (sp.material as SpriteMaterial).opacity = swap * 0.95;
       } else if (c.userData?.isLabel) {
         // Name + sublabel ride with the marker; fade in/out with the swap.
