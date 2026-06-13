@@ -415,8 +415,8 @@ async function boot(): Promise<void> {
     // 8c. HUD (domain label, time display, game clock, status)
     updateHUD();
 
-    // 8d. Layer visibility per zoom tier
-    updateVisibility();
+    // 8d. Layer visibility per zoom tier (+ screen-space label declutter)
+    updateVisibility(camera);
 
     // 8d-bis. Sky crossfade (Phase 4): baked-cube intensity fades OUT across
     // camDist 2000→3000 WU exactly as the live volume's uOpacity fades IN

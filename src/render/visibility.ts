@@ -13,7 +13,8 @@ import { Game, type DomainName, getCamDist } from '../core/state';
 import { Events } from '../core/events';
 import { Notifications } from '../ui/notifications';
 import type { LayerGroups } from './scene';
-import type { Group, Points, PointsMaterial, Sprite, SpriteMaterial } from 'three';
+import { Vector3 } from 'three';
+import type { Group, Points, PointsMaterial, Sprite, SpriteMaterial, Camera, Object3D } from 'three';
 import { getGalaxyOffset } from './galaxy';
 import { HELIOPAUSE_RADIUS_WU } from './particles';
 import {
@@ -224,7 +225,7 @@ export function initVisibility(
  * Called each frame. Checks if domain changed and applies visibility.
  * Also applies overlay state and per-object icon scaling.
  */
-export function updateVisibility(): void {
+export function updateVisibility(camera?: Camera): void {
   const domain = Game.data.zoomDomain;
   const overlayOn = Game.data.overlayMode;
 
@@ -253,6 +254,11 @@ export function updateVisibility(): void {
   // Runs whenever the regional layer is visible (heliopause → arm), independent
   // of the local layer (which is off at arm tier).
   updateRegionalMarkers(Game.data.camDist, swap);
+
+  // Label DECLUTTER: after the show-logic has set each label's wants-state,
+  // prune overlapping labels in screen space so the local map stays readable
+  // where bodies cluster (higher-priority — selected / home / nearer — wins).
+  if (camera) declutterLabels(camera);
 }
 
 function updateRegionalMarkers(camDist: number, swap: number): void {
@@ -271,12 +277,89 @@ function updateRegionalMarkers(camDist: number, swap: number): void {
         (sp.material as SpriteMaterial).opacity = swap * 0.95;
       } else if (c.userData?.isLabel) {
         // Name + sublabel ride with the marker; fade in/out with the swap.
-        (c as Sprite).material.opacity = swap;
+        // .visible is the per-frame "wants" state the declutter pass reads.
+        (c as Sprite).visible = swap > 0.05;
+        ((c as Sprite).material as SpriteMaterial).opacity = swap;
       } else if (c.userData?.isStemPart) {
         // Out-of-plane stem line — fade in with the markers, kept dim.
         ((c as unknown as { material: { opacity: number } }).material).opacity = swap * 0.4;
       }
     });
+  }
+}
+
+// ── Label declutter (screen-space collision) ─────────────────────
+// Labels are screen-constant billboards; where their owners cluster on screen
+// the names pile into an unreadable smear. Each frame, after the show-logic has
+// set every label's wants-state, we project the labelled icons to screen space,
+// sort by priority, and greedily keep non-overlapping labels — higher priority
+// (selected → home → your presence → class → nearer) wins the slot; losers hide
+// their label only (the icon glyph stays). Re-evaluated every frame, so it is
+// stable as the camera moves and never leaves a label stuck hidden.
+
+const LABEL_MIN_X = 104; // px — half-keep-out box around a kept label, horizontal
+const LABEL_MIN_Y = 26;  // px — …vertical (labels sit just below their icon)
+const _lblPos = new Vector3();
+const _lblKept: { x: number; y: number }[] = [];
+interface LabelCand { labels: Object3D[]; x: number; y: number; prio: number; }
+
+function labelPriority(ud: Record<string, unknown>): number {
+  let s = 0;
+  if (Game.data.selectedEntity != null && ud.eid === Game.data.selectedEntity) s += 400;
+  if (ud.isHome) s += 80;
+  if (ud.hasBobs) s += 40;
+  const t = ud.type as string | undefined;
+  if (t === 'star' || t === 'system') s += 50;
+  else if (t === 'planet') s += 25;
+  else if (t === 'station') s += 12;
+  else if (t === 'moon') s += 8;
+  if (ud.explored) s += 6;
+  return s;
+}
+
+function declutterLabels(camera: Camera): void {
+  if (!targets) return;
+  const W = window.innerWidth, H = window.innerHeight;
+  const cands: LabelCand[] = [];
+
+  for (const layer of [targets.layers.local, targets.layers.regional]) {
+    if (!layer.visible) continue;
+    layer.traverse(o => {
+      if (!o.userData?.isIcon) return;
+      const icon = o as Sprite;
+      const labels = icon.children.filter(c => c.userData?.isLabel) as Object3D[];
+      if (!labels.length) return;
+      // Only icons whose labels the show-logic wants visible this frame.
+      if (!labels.some(l => l.visible)) return;
+      if (!icon.visible || (icon.material as SpriteMaterial).opacity < 0.1) {
+        for (const l of labels) l.visible = false;
+        return;
+      }
+      icon.getWorldPosition(_lblPos);
+      const dist = camera.position.distanceTo(_lblPos);
+      _lblPos.project(camera);
+      if (_lblPos.z > 1 || _lblPos.z < -1) { for (const l of labels) l.visible = false; return; }
+      const x = (_lblPos.x * 0.5 + 0.5) * W;
+      const y = (1 - (_lblPos.y * 0.5 + 0.5)) * H;
+      const ud = (icon.parent?.userData ?? {}) as Record<string, unknown>;
+      // Class dominates; nearer wins the tie (distance is the fractional part).
+      cands.push({ labels, x, y, prio: labelPriority(ud) * 1e7 - dist });
+    });
+  }
+
+  cands.sort((a, b) => b.prio - a.prio);
+  _lblKept.length = 0;
+  for (const c of cands) {
+    let collide = false;
+    for (const k of _lblKept) {
+      if (Math.abs(k.x - c.x) < LABEL_MIN_X && Math.abs(k.y - c.y) < LABEL_MIN_Y) { collide = true; break; }
+    }
+    if (collide) {
+      for (const l of c.labels) l.visible = false;
+    } else {
+      for (const l of c.labels) l.visible = true;
+      _lblKept.push({ x: c.x, y: c.y });
+    }
   }
 }
 
