@@ -16,7 +16,7 @@ import type { LayerGroups } from './scene';
 import type { Group, Points, PointsMaterial } from 'three';
 import { getGalaxyOffset } from './galaxy';
 import {
-  meshFull_iconOn, meshFading, iconOnly, hideIcons,
+  updateBodyLOD, iconBiasFor,
 } from './icon-system';
 
 // ── Extra Scene References ───────────────────────────────────────
@@ -228,7 +228,7 @@ export function updateVisibility(): void {
 // Iterates local-layer children and applies the Homeworld-style
 // mesh/icon crossfade based on zoom domain and camera distance.
 
-function updateIconStates(domain: DomainName): void {
+function updateIconStates(_domain: DomainName): void {
   if (!targets) return;
   const camDist = Game.data.camDist;
 
@@ -236,47 +236,17 @@ function updateIconStates(domain: DomainName): void {
   const local = targets.layers.local;
   if (!local.visible) return;
 
+  // Apparent-size mesh↔icon handoff with per-entity hysteresis (overlay
+  // Phase 2). Replaces the per-domain camDist half/full-fade: each body now
+  // switches on its OWN on-screen size, so a Dwarf icon-ifies sooner than a
+  // GasGiant at equal distance, and parking at a boundary never flickers.
   for (const child of local.children) {
-    // Only process groups that have icon children
     const hasIcon = child.children?.some(c => c.userData?.isIcon);
     if (!hasIcon) continue;
-
-    switch (domain) {
-      case 'surface':
-      case 'low-orbit':
-      case 'orbit':
-      case 'inner-system':
-        // Close-in tiers — mesh at full opacity, icons as subtle overlays.
-        meshFull_iconOn(child, camDist);
-        break;
-
-      case 'outer-system': {
-        // Slight mesh fade across the outer-system tier so distant bodies
-        // start handing off to icons. Range matches getCamDist (120..1000).
-        const fadeAmt = Math.max(0, Math.min(1, (camDist - 120) / 880));
-        meshFading(child, camDist, fadeAmt * 0.5); // half-fade only
-        break;
-      }
-
-      case 'heliopause': {
-        // Mesh fades out as camera pulls back. Range: camDist 1000..6000.
-        // Labels OFF: local entities collapse to ~the same screen position at
-        // this distance, so legible labels superimpose into a smear. Clustered
-        // labels return with the decluttering pass (zoom-overlay doc Phase 3).
-        const fadeAmt = Math.max(0, Math.min(1, (camDist - 1000) / 5000));
-        meshFading(child, camDist, fadeAmt, false);
-        break;
-      }
-
-      case 'sector':
-        // Mesh gone, icon only. Labels off (same stacking rationale).
-        iconOnly(child, camDist, false);
-        break;
-
-      default:
-        // arm / galaxy — local layer is hidden anyway; belt-and-suspenders.
-        hideIcons(child);
-        break;
-    }
+    const ud = child.userData as Record<string, unknown>;
+    const radiusWU = ((ud.bodyRadius as number) ?? 1) * child.scale.x;
+    const bias = iconBiasFor(ud.type as string | undefined, ud.planetTypeId as number | undefined);
+    const prev = (ud._iconState as number) ?? -1;
+    ud._iconState = updateBodyLOD(child, camDist, radiusWU, bias, prev);
   }
 }
