@@ -27,7 +27,7 @@ import {
   createBackgroundStars,
   createHeliopause,
 } from './render/particles';
-import { bakeGalaxyBackdrop, DEEP_SPACE_BG } from './render/galaxy-backdrop';
+import { bakeGalaxyBackdrop } from './render/galaxy-backdrop';
 import { createAsteroidBelt } from './render/asteroid-belt';
 import {
   createStarMesh, createPlanetMesh, createMoonMesh, createBobMesh,
@@ -67,7 +67,7 @@ import {
   createEclipticGrid,
   STATION_DATA, COMET_DATA, type StationConfig,
 } from './render/scene-objects';
-import { createGalaxy, getGalaxyOffset, updateGalaxyAnimations, updateGalaxyLOD, updateStarStreaks, createSectorOrb } from './render/galaxy';
+import { createGalaxy, getGalaxyOffset, getGalaxyCrossfade, updateGalaxyAnimations, updateGalaxyLOD, updateStarStreaks, createSectorOrb } from './render/galaxy';
 import { createPostProcessing, type PostProcessingContext } from './render/post-processing';
 import { createLensFlare, type LensFlareSystem } from './render/lens-flare';
 import { Debug } from './debug/debug-overlay';
@@ -256,7 +256,9 @@ async function boot(): Promise<void> {
   // night-sky level is set here, once, display-side. Target: band core reads
   // dim-but-visible (~AgX toe) at normal system-tier exposure — invisible
   // against lit planets, present in sky-dominated framings.
-  scene.backgroundIntensity = 0.0025;
+  const BACKDROP_INTENSITY = 0.0025;
+  scene.background = galaxyBackdrop; // always the cube; the crossfade drives intensity
+  scene.backgroundIntensity = BACKDROP_INTENSITY;
 
   // ── 8d. Default focus: home habitable planet ──
   // Without this, the camera starts pointed at the star, making the
@@ -374,15 +376,12 @@ async function boot(): Promise<void> {
     // 8d. Layer visibility per zoom tier
     updateVisibility();
 
-    // 8d-bis. Sky: baked Milky Way cubemap at system tiers; flat deep-space
-    // at sector+ where the live galaxy volume renders against it. (The
-    // Phase-4 crossfade replaces this hard switch.)
-    {
-      const dom = Game.data.zoomDomain;
-      const liveGalaxy = dom === 'sector' || dom === 'arm' || dom === 'galaxy';
-      const want = liveGalaxy ? DEEP_SPACE_BG : galaxyBackdrop;
-      if (scene.background !== want) scene.background = want;
-    }
+    // 8d-bis. Sky crossfade (Phase 4): baked-cube intensity fades OUT across
+    // camDist 2000→3000 WU exactly as the live volume's uOpacity fades IN
+    // (updateGalaxyLOD) — two representations of the same medium handing off,
+    // no hard switch, no pop. At sector+ the cube is black (intensity 0).
+    scene.backgroundIntensity =
+      BACKDROP_INTENSITY * (1 - getGalaxyCrossfade(Game.data.camDist));
 
     // 8e. Selection panels (connection line + production queue tick)
     SelectionPanels.drawConnection(camera);
