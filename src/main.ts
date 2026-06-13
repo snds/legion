@@ -270,7 +270,11 @@ async function boot(): Promise<void> {
   //    centre → aligns with Legion's galactic frame). Brighter LDR ⇒ higher base.
   //  • ANALYTIC — the baked volume cube (positionally coherent with the live
   //    galaxy; the original behaviour). Dim HDR ⇒ tiny base.
-  const PHOTO_INTENSITY = 0.55;
+  // 0.55 read far too bright (the LDR photo + auto-exposure opening up in
+  // sky-dominated framings washed the frame). Halved to ~0.28 so the band is
+  // dim-but-present; the user's 'Milky Way Backdrop' slider (VP.backdropIntensity,
+  // default 1.0) still trims this at runtime.
+  const PHOTO_INTENSITY = 0.28;
   const ANALYTIC_INTENSITY = 0.0025;
   let skyBase = ANALYTIC_INTENSITY;
   let skyTexReady = false;
