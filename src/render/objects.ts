@@ -13,6 +13,7 @@ import {
   MeshBasicMaterial, ShaderMaterial, DoubleSide, BackSide, AdditiveBlending,
   Color, BufferGeometry, Vector3, TextureLoader, SRGBColorSpace,
   Float32BufferAttribute, EllipseCurve, Vector2, CanvasTexture, RepeatWrapping,
+  LineSegments, LineBasicMaterial,
   type WebGLRenderer, type Texture,
 } from 'three';
 import { Line2 } from 'three/examples/jsm/lines/Line2.js';
@@ -841,6 +842,33 @@ export function createSystemMarker(
   group.add(icon);
 
   return group;
+}
+
+/**
+ * Out-of-plane STEM for a regional marker (Solar-System-Scope style): a thin
+ * vertical line from the marker down to the reference plane (y = 0) plus a
+ * small base tick where it meets the plane — reads the marker's height above
+ * (galactic north) or below (south) the plane at a glance.
+ *
+ * Added as a child of the marker GROUP; `height` is the marker's world-space y
+ * (group-local, since the group is unit-scaled). Opacity is driven per frame by
+ * visibility.ts (faded in with the heliopause swap). Tagged userData.isStemPart.
+ */
+export function createMarkerStem(height: number, color: number): LineSegments {
+  const t = 40; // base-tick half-length (WU)
+  const pos = [
+    0, 0, 0,            0, -height, 0,        // vertical stem to the plane
+    -t, -height, 0,     t, -height, 0,        // base tick (X)
+    0, -height, -t,     0, -height, t,        // base tick (Z)
+  ];
+  const geo = new BufferGeometry();
+  geo.setAttribute('position', new Float32BufferAttribute(pos, 3));
+  const mat = new LineBasicMaterial({
+    color: new Color(color), transparent: true, opacity: 0, depthWrite: false,
+  });
+  const seg = new LineSegments(geo, mat);
+  seg.userData.isStemPart = true;
+  return seg;
 }
 
 // ── Alien Influence Marker ───────────────────────────────────────
