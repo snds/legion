@@ -126,62 +126,97 @@ const RECIPE_GLSL: Record<PlanetRecipeId, string> = {
       return c/255.0;
     }`,
 
-  // Ragnarok — Venus-like ochre cloud bands with dark volcanic patches
+  // Ragnarok — Desert (arid Rocky, "Desert-adjacent" per docs §4.3). Wind-
+  // aligned anisotropic dune fields (the anisotropy IS the realism, G3),
+  // broken by ridged rocky uplands + bright salt/playa flats. docs §2.5.
   ragnarok: /* glsl */ `
     vec3 surfaceColor(vec3 dir, float vLat){
-      float wx = sn(dir*3.0) * 0.4;
-      float wy = sn(dir*3.0 + vec3(100.0,0.0,0.0)) * 0.4;
-      float clouds = fbm(dir*5.0 + vec3(wx,wy,0.0), 5, 2.2, 0.5) * 0.5 + 0.5;
-      float volc = sn(dir*8.0) * 0.5 + 0.5;
-      float t = clouds*0.7 + volc*0.3;
-      vec3 c = mix(vec3(80,40,20),   vec3(140,80,30),  smoothstep(0.0,0.2,t));
-      c = mix(c, vec3(190,130,50),  smoothstep(0.2,0.4,t));
-      c = mix(c, vec3(210,160,70),  smoothstep(0.4,0.6,t));
-      c = mix(c, vec3(220,180,100), smoothstep(0.6,0.8,t));
-      c = mix(c, vec3(230,200,130), smoothstep(0.8,1.0,t));
-      return c/255.0;
+      // Dunes: fBm stretched ~5× along a prevailing wind direction (here the
+      // longitudinal x axis), thin in latitude → wind-combed ridges.
+      vec3 wind = vec3(dir.x*0.2, dir.y*1.0, dir.z*1.0);
+      float dunes = fbm(wind*8.0, 5, 2.0, 0.5) * 0.5 + 0.5;
+      float upland = pow(max(0.0, 1.0 - abs(sn(dir*3.0)) - 0.3) / 0.7, 2.0); // ridged uplands
+      float t = clamp(dunes*0.7 + upland*0.3, 0.0, 1.0);
+      // Ochre/tan ramp between Mars and butterscotch.
+      vec3 c = mix(vec3(138.0,98.0,64.0), vec3(168.0,123.0,80.0), smoothstep(0.0,0.3,t));
+      c = mix(c, vec3(194.0,149.0,106.0), smoothstep(0.3,0.6,t));
+      c = mix(c, vec3(212.0,169.0,118.0), smoothstep(0.6,0.85,t));
+      c = mix(c, vec3(224.0,195.0,145.0), smoothstep(0.85,1.0,t));
+      c /= 255.0;
+      // Bright salt/playa flats in low, flat areas.
+      float playa = smoothstep(0.72, 0.88, fbm(dir*2.0, 4, 2.0, 0.5) * 0.5 + 0.5);
+      c = mix(c, vec3(0.86,0.82,0.72), playa * 0.6 * (1.0 - upland));
+      // Thin optional polar frost.
+      float lat = abs(vLat - 0.5) * 2.0;
+      c = mix(c, vec3(0.90,0.92,0.93), smoothstep(0.90, 0.98, lat) * 0.5);
+      return c;
     }`,
 
-  // Romulus — Oceanic: deep blue oceans, teal-green land, polar ice
+  // Romulus — Oceanic (Earth-like). Gaia-Sky-style biome bake: elevation ×
+  // moisture × temperature channels (3D fBm, seamless), depth-graded oceans,
+  // a Whittaker land ramp, and IRREGULAR polar caps driven by the temperature
+  // channel (not a |cos(lat)| cutoff). docs §2.3.
   romulus: /* glsl */ `
+    // Whittaker biome: moisture × temperature × elevation → land color.
+    vec3 whittaker(float moist, float temp, float elevAbove){
+      vec3 arid   = vec3(0.72,0.62,0.42);
+      vec3 grass  = vec3(0.42,0.54,0.27);
+      vec3 forest = vec3(0.20,0.40,0.19);
+      vec3 veg = mix(arid, mix(grass, forest, smoothstep(0.5,0.9,moist)), smoothstep(0.18,0.55,moist));
+      vec3 tundra = vec3(0.46,0.43,0.38);
+      vec3 c = mix(tundra, veg, smoothstep(0.12,0.42,temp));     // cold → tundra
+      c = mix(c, vec3(0.40,0.36,0.33), smoothstep(0.55,0.82,elevAbove)); // high → rock
+      c = mix(c, vec3(0.93,0.95,0.97), smoothstep(0.80,1.0,elevAbove) * smoothstep(0.42,0.12,temp)); // snowcaps
+      return c;
+    }
+
     vec3 surfaceColor(vec3 dir, float vLat){
-      float terrain = fbm(dir*5.0, 6, 2.0, 0.5) * 0.5 + 0.5;
-      float detail = sn(dir*15.0) * 0.1;
-      float elev = terrain + detail;
-      float seaLevel = 0.48;
-      float polar = abs(cos(vLat * 3.14159265));
-      if (polar > 0.85){
-        float ice = (polar - 0.85) / 0.15;
-        vec3 base = elev > seaLevel ? vec3(40,120,80) : vec3(30,80,140);
-        return mix(base, vec3(220,230,240), clamp(ice,0.0,1.0)) / 255.0;
-      }
+      float elev = pow(clamp(fbm(dir*4.0, 6, 2.0, 0.5)*0.5+0.5, 0.0, 1.0), 1.4); // continent shaping
+      elev += sn(dir*15.0) * 0.04;
+      float seaLevel = 0.50;
+      float moist = fbm(dir*3.0 + vec3(50.0,0.0,0.0), 5, 2.0, 0.5) * 0.5 + 0.5;
+      float lat = abs(vLat - 0.5) * 2.0;
+      float temp = (1.0 - lat) - max(0.0, elev - seaLevel) * 0.7 + sn(dir*2.0) * 0.10; // latitude − lapse + noise
+
+      vec3 col;
       if (elev < seaLevel){
-        float depth = elev / seaLevel;
-        vec3 c = mix(vec3(10,25,60),  vec3(20,50,110), smoothstep(0.0,0.4,depth));
-        c = mix(c, vec3(30,70,140),  smoothstep(0.4,0.7,depth));
-        c = mix(c, vec3(40,90,160),  smoothstep(0.7,1.0,depth));
-        return c/255.0;
+        float depth = elev / seaLevel;                            // 0 deep .. 1 shallow
+        col = mix(vec3(11.0,29.0,51.0), vec3(18.0,58.0,94.0), smoothstep(0.0,0.45,depth));
+        col = mix(col, vec3(31.0,93.0,138.0), smoothstep(0.45,0.78,depth));
+        col = mix(col, vec3(58.0,124.0,165.0), smoothstep(0.78,1.0,depth));
+        col /= 255.0;
+        col = mix(col, vec3(0.82,0.88,0.91), smoothstep(0.12,-0.02,temp)); // sea ice over cold water
+      } else {
+        float beach = smoothstep(seaLevel, seaLevel+0.02, elev);
+        float elevAbove = (elev - seaLevel) / (1.0 - seaLevel);
+        vec3 land = whittaker(moist, temp, elevAbove);
+        col = mix(vec3(0.78,0.72,0.55), land, beach);             // thin beach sliver
       }
-      float land = (elev - seaLevel) / (1.0 - seaLevel);
-      vec3 c = mix(vec3(30,100,70),  vec3(50,120,60),  smoothstep(0.0,0.3,land));
-      c = mix(c, vec3(80,110,50),   smoothstep(0.3,0.6,land));
-      c = mix(c, vec3(120,100,60),  smoothstep(0.6,0.8,land));
-      c = mix(c, vec3(160,140,100), smoothstep(0.8,1.0,land));
-      return c/255.0;
+      // Irregular polar caps from the temperature channel.
+      col = mix(col, vec3(0.93,0.95,0.97), smoothstep(0.10, -0.06, temp) * 0.92);
+      return col;
     }`,
 
-  // Pax — Mars-like rust-red desert with dark basalt ridges
+  // Pax — Rocky, thin-atmosphere Mars-class. Photo-anchored rust ramp, dark
+  // basalt provinces (low-freq mask), polar CO₂/water caps from latitude. docs §2.4(b).
   pax: /* glsl */ `
     vec3 surfaceColor(vec3 dir, float vLat){
       float base = fbm(dir*4.0, 6, 2.1, 0.5) * 0.5 + 0.5;
       float ridges = 1.0 - abs(sn(dir*8.0));
-      float t = base*0.7 + ridges*0.3;
-      vec3 c = mix(vec3(80,30,15),   vec3(140,60,25),  smoothstep(0.0,0.2,t));
-      c = mix(c, vec3(180,90,40),   smoothstep(0.2,0.4,t));
-      c = mix(c, vec3(200,120,60),  smoothstep(0.4,0.6,t));
-      c = mix(c, vec3(210,150,90),  smoothstep(0.6,0.8,t));
-      c = mix(c, vec3(220,180,140), smoothstep(0.8,1.0,t));
-      return c/255.0;
+      float t = clamp(base*0.7 + ridges*0.3, 0.0, 1.0);
+      // Rust ramp anchored to Mars photography (#8f4a35 · #a35a3e · #b06b4c · #c98a5e).
+      vec3 c = mix(vec3(108.0,58.0,42.0), vec3(143.0,74.0,53.0), smoothstep(0.0,0.25,t));
+      c = mix(c, vec3(163.0,90.0,62.0),  smoothstep(0.25,0.5,t));
+      c = mix(c, vec3(176.0,107.0,76.0), smoothstep(0.5,0.75,t));
+      c = mix(c, vec3(201.0,138.0,94.0), smoothstep(0.75,1.0,t));
+      c /= 255.0;
+      // Seeded dark basalt provinces.
+      float basalt = smoothstep(0.55, 0.70, fbm(dir*1.5, 4, 2.0, 0.5) * 0.5 + 0.5);
+      c = mix(c, vec3(0.28,0.17,0.13), basalt * 0.55);
+      // Polar CO₂/water caps (latitude proxy for temperature; irregular edge noise).
+      float lat = abs(vLat - 0.5) * 2.0 + sn(dir*3.0) * 0.05;
+      c = mix(c, vec3(0.92,0.90,0.88), smoothstep(0.84, 0.95, lat));
+      return c;
     }`,
 
   // Jotunheim — GasGiant (Jupiter-class). Seeded 1D latitude band profile
