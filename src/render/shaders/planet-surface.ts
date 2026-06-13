@@ -146,11 +146,13 @@ export const planetSurfaceFragmentShader = /* glsl */ `
     // terminator. specMask confines sea-glint to ocean and away from cloud.
     float cloudDensity = 0.0;
     float oceanMask = 1.0;
+    float cityLights = 0.0;
     if (uHasAux) {
       vec2 cloudUv = vUv;
       cloudUv.x += uTime * 0.004 * (0.6 + 0.4 * cos((vUv.y - 0.5) * 6.2831853)); // faster near equator
       cloudDensity = texture2D(uAuxTexture, cloudUv).r;
       oceanMask = texture2D(uAuxTexture, vUv).g;
+      cityLights = texture2D(uAuxTexture, vUv).b;       // night-side emissive
 
       // Sun-direction-offset second tap → cloud shadow, stretching oblique
       // toward the terminator. translation = tangent-plane projection of L.
@@ -192,6 +194,12 @@ export const planetSurfaceFragmentShader = /* glsl */ `
     }
 
     vec3 surfaceColor = mix(nightColor, dayColor, dayFactor);
+
+    // City lights — warm emissive on the unlit (night) hemisphere of inhabited
+    // worlds, occluded by cloud cover. Modest radiance so it blooms gently
+    // through the existing chain without hijacking auto-exposure. (docs §2.3)
+    surfaceColor += vec3(1.0, 0.82, 0.5) * cityLights * (1.0 - cloudDensity)
+                  * (1.0 - dayFactor) * 0.45;
 
     // Gas/ice giant limb darkening (Jónsson): replace the day-side shading
     // with cos(i)^k Lambert shaping plus a per-channel emission-angle falloff.
