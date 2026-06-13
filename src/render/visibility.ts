@@ -155,9 +155,14 @@ function setBackgroundOpacity(starsOp: number, _milkyOp: number): void {
   if (!targets) return;
   targets.layers.background.traverse(child => {
     if ((child as Points).isPoints && (child as Points).material) {
-      const mat = (child as Points).material as PointsMaterial;
+      const mat = (child as Points).material as PointsMaterial & {
+        uniforms?: { uOpacity?: { value: number } };
+      };
       if (child.name === 'background-stars') {
-        mat.opacity = starsOp;
+        // The real-sky field is a ShaderMaterial (uOpacity uniform); the
+        // fallback path keeps PointsMaterial.opacity for any other field.
+        if (mat.uniforms?.uOpacity) mat.uniforms.uOpacity.value = starsOp;
+        else mat.opacity = starsOp;
       }
     }
   });
