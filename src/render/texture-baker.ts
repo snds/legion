@@ -105,6 +105,52 @@ float fbm(vec3 p, int octaves, float lac, float gain){
   }
   return sum;
 }
+
+// ── Crater stamping (Sebastian Lague's profile, in 3D sphere space) ──
+// Shared by airless Rocky (Vulcan) and Dwarf (Helheim). uCraterCount=0 for
+// every other recipe, so craterHeight() short-circuits to 0.
+uniform int  uCraterCount;
+uniform vec4 uCraters[128];   // xyz = unit centre on the sphere, w = chord radius
+
+float sminG(float a, float b, float k){
+  float h = clamp(0.5 + 0.5*(b - a)/k, 0.0, 1.0);
+  return mix(b, a, h) - k*h*(1.0 - h);
+}
+float smaxG(float a, float b, float k){ return -sminG(-a, -b, k); }
+
+// Summed crater relief height at a surface direction (negative = cavity).
+float craterHeight(vec3 dir){
+  float h = 0.0;
+  for (int i = 0; i < 128; i++){
+    if (i >= uCraterCount) break;
+    vec4 cr = uCraters[i];
+    float x = length(dir - cr.xyz) / cr.w;     // chord distance ≈ angular for small craters
+    if (x < 1.6){
+      float cavity = x*x - 1.0;
+      float rimX = min(x - 1.5, 0.0);          // rim just outside x=1
+      float rim = 0.5 * rimX * rimX;
+      float floorH = -0.5 + min(cr.w * 3.0, 0.35); // large craters floor shallower
+      float shape = sminG(smaxG(cavity, floorH, 0.25), rim, 0.25);
+      h += shape * cr.w * 1.2;
+    }
+  }
+  return h;
+}
+
+// Cheap ejecta brightness just outside fresh (large) craters — radial splatter.
+float craterEjecta(vec3 dir){
+  float e = 0.0;
+  for (int i = 0; i < 128; i++){
+    if (i >= uCraterCount) break;
+    vec4 cr = uCraters[i];
+    if (cr.w < 0.06) continue;                 // only large/fresh craters throw rays
+    float x = length(dir - cr.xyz) / cr.w;
+    if (x > 1.0 && x < 2.4){
+      e += smoothstep(2.4, 1.0, x) * (sn(dir*42.0)*0.5 + 0.5) * 0.5;
+    }
+  }
+  return e;
+}
 `;
 
 // ── GLSL: palette + per-recipe surface functions ────────────────────
@@ -113,17 +159,25 @@ float fbm(vec3 p, int octaves, float lac, float gain){
 // SRGBColorSpace readback round-trips to the same bytes the CPU wrote.
 
 const RECIPE_GLSL: Record<PlanetRecipeId, string> = {
-  // Vulcan — Mercury-like cratered gray-brown
+  // Vulcan — Rocky, airless (Mercury/Luna-class). Power-law-sized craters
+  // stamped in 3D (Lague profile): bowl floor, raised rim, ejecta rays, with
+  // a directional relief term pre-shaded into albedo. docs §2.4(a).
   vulcan: /* glsl */ `
     vec3 surfaceColor(vec3 dir, float vLat){
-      float base = fbm(dir*4.0, 6, 2.0, 0.55) * 0.5 + 0.5;
-      float craters = abs(sn(dir*12.0));
-      float t = base*0.8 + craters*0.2;
-      vec3 c = mix(vec3(60,50,45),   vec3(100,90,80),  smoothstep(0.0,0.3,t));
-      c = mix(c, vec3(130,120,105), smoothstep(0.3,0.5,t));
-      c = mix(c, vec3(150,140,125), smoothstep(0.5,0.7,t));
-      c = mix(c, vec3(170,160,145), smoothstep(0.7,1.0,t));
-      return c/255.0;
+      float base = fbm(dir*4.0, 6, 2.0, 0.55) * 0.5 + 0.5;   // regolith mottling
+      float h = craterHeight(dir);
+      // Directional relief: slope of the height field along a tangent → shade.
+      vec3 tang = normalize(cross(dir, vec3(0.0,0.0,1.0)) + vec3(1e-4));
+      float slope = (craterHeight(normalize(dir + tang*0.012)) - h) * 7.0;
+      float shade = clamp(0.78 + slope, 0.35, 1.18);
+      float rimBright = clamp(0.5 + h*1.6, 0.0, 1.0);         // rims bright, floors dark
+      float ejecta = craterEjecta(dir);
+
+      float v = clamp(base*0.5 + rimBright*0.35 + 0.15 + ejecta, 0.0, 1.0);
+      // Gray-brown ramp, value 0.18–0.55, near-zero chroma.
+      vec3 c = mix(vec3(46.0,40.0,36.0), vec3(98.0,88.0,76.0), smoothstep(0.0,0.5,v));
+      c = mix(c, vec3(140.0,128.0,112.0), smoothstep(0.5,1.0,v));
+      return c/255.0 * shade;
     }`,
 
   // Ragnarok — Desert (arid Rocky, "Desert-adjacent" per docs §4.3). Wind-
@@ -324,17 +378,31 @@ const RECIPE_GLSL: Record<PlanetRecipeId, string> = {
       return col;
     }`,
 
-  // Helheim — dark blue-gray dwarf with bright ice fractures
+  // Helheim — Dwarf (Pluto/Ceres-class). Dark blue-gray base + bright ice
+  // fracture network, stamped craters, and one large bright albedo province
+  // (a Sputnik-Planitia-style smooth high-albedo basin). docs §2.6.
   helheim: /* glsl */ `
+    uniform vec4 uProvince;   // xyz = unit centre, w = chord radius
+
     vec3 surfaceColor(vec3 dir, float vLat){
       float base = fbm(dir*5.0, 5, 2.0, 0.5) * 0.5 + 0.5;
       float ridge = 1.0 - abs(sn(dir*10.0));
       float fracture = pow(max(0.0, ridge - 0.6) / 0.4, 2.0);
-      vec3 c = mix(vec3(30,35,50),  vec3(50,55,70),  smoothstep(0.0,0.3,base));
-      c = mix(c, vec3(65,70,85),    smoothstep(0.3,0.6,base));
-      c = mix(c, vec3(80,85,100),   smoothstep(0.6,1.0,base));
-      c = mix(c, vec3(180,200,230), clamp(fracture*0.7, 0.0, 1.0));
-      return c/255.0;
+      float h = craterHeight(dir);
+      float relief = clamp(0.5 + h*1.6, 0.0, 1.0);
+
+      float t = clamp(base*0.7 + relief*0.3, 0.0, 1.0);
+      vec3 c = mix(vec3(30.0,35.0,50.0), vec3(55.0,60.0,75.0), smoothstep(0.0,0.5,t));
+      c = mix(c, vec3(80.0,85.0,100.0), smoothstep(0.5,1.0,t));
+      c /= 255.0;
+      c = mix(c, vec3(0.71,0.78,0.90), clamp(fracture*0.7, 0.0, 1.0)); // bright fractures
+
+      // Sputnik-Planitia-style bright basin: one big smooth high-albedo ellipse
+      // with low-frequency edge noise.
+      float pd = length(dir - uProvince.xyz) / uProvince.w;
+      float prov = smoothstep(1.0, 0.6, pd + sn(dir*4.0)*0.12);
+      c = mix(c, vec3(0.81,0.88,0.92), prov * 0.85);
+      return c;
     }`,
 };
 
@@ -385,6 +453,10 @@ function ensureRig(): void {
       uStormCount: { value: 0 },
       uStorms: { value: new Float32Array(24) }, // vec4[6]: (u, v, radius, strength)
       uStreak: { value: 0 },         // ice giant: 1 = show faint cloud streaks
+      // Crater stamping (airless Rocky + Dwarf, Phase 3c).
+      uCraterCount: { value: 0 },
+      uCraters: { value: new Float32Array(128 * 4) }, // vec4[128]: (cx,cy,cz, chordRadius)
+      uProvince: { value: [0, 0, 1, 0.4] },           // Dwarf bright basin (xyz, radius)
     },
   });
   // Fullscreen clip-space triangle pair (positions ARE clip coords).
@@ -409,13 +481,29 @@ function hash01(seed: number, salt: number): number {
   return x - Math.floor(x);
 }
 
-// Per-recipe structural uniforms derived from the seed. Only the gas/ice
-// giants consume these; other recipes leave the defaults untouched.
+// Seeded power-law crater field stamped on the unit sphere. Most craters
+// small (cumulative ~D⁻²), a few large; centres uniform on the sphere.
+function buildCraters(seed: number, count: number, rMin: number, rMax: number, out: Float32Array): void {
+  for (let i = 0; i < count; i++) {
+    const u = hash01(seed, i * 3 + 10);
+    const v = hash01(seed, i * 3 + 11);
+    const z = 2 * u - 1;
+    const t = 2 * Math.PI * v;
+    const rxy = Math.sqrt(Math.max(0, 1 - z * z));
+    const q = hash01(seed, i * 3 + 12);
+    const r = rMin * Math.pow(rMax / rMin, Math.pow(q, 2.2)); // power-law toward small
+    out.set([rxy * Math.cos(t), rxy * Math.sin(t), z, r], i * 4);
+  }
+}
+
+// Per-recipe structural uniforms derived from the seed. Recipes that don't
+// consume a given uniform leave it at the inert reset value.
 function applyGiantUniforms(recipeId: PlanetRecipeId, seed: number, u: Record<string, { value: unknown }>): void {
   // Reset to inert defaults each bake (the material is shared).
   u.uStormCount!.value = 0;
   u.uStreak!.value = 0;
   u.uSaturn!.value = 0;
+  u.uCraterCount!.value = 0;
 
   if (recipeId === 'jotunheim') {
     // Jupiter-class: 10–14 bands, polar cutoff ~50°, one GRS-class oval at a
@@ -434,6 +522,19 @@ function applyGiantUniforms(recipeId: PlanetRecipeId, seed: number, u: Record<st
   } else if (recipeId === 'niflheim') {
     // Uranus-class ice giant: faint streaks ~30% of seeds (Niflheim's seed decides).
     u.uStreak!.value = hash01(seed, 7) < 0.35 ? 1 : 0;
+  } else if (recipeId === 'vulcan') {
+    // Airless Rocky: dense power-law crater field.
+    buildCraters(seed, 96, 0.015, 0.17, u.uCraters!.value as Float32Array);
+    u.uCraterCount!.value = 96;
+  } else if (recipeId === 'helheim') {
+    // Dwarf: fewer craters + one large bright albedo province (Sputnik-Planitia-style).
+    buildCraters(seed, 52, 0.02, 0.13, u.uCraters!.value as Float32Array);
+    u.uCraterCount!.value = 52;
+    const z = 2 * hash01(seed, 200) - 1;
+    const t = 2 * Math.PI * hash01(seed, 201);
+    const rxy = Math.sqrt(Math.max(0, 1 - z * z));
+    (u.uProvince!.value as number[]).splice(0, 4,
+      rxy * Math.cos(t), rxy * Math.sin(t), z, 0.45 + hash01(seed, 202) * 0.15);
   }
 }
 
