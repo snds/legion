@@ -128,12 +128,14 @@ function makeGlareLayer(pos: Float32Array, mag: Float32Array, bv: Float32Array, 
     uniforms: { uOpacity: { value: 0.85 }, uPixelRatio: { value: pixelRatio } },
     transparent: true,
     depthWrite: false,
+    depthTest: false,         // backdrop — same as the main field
     blending: AdditiveBlending,
   });
 
   const glare = new Points(g, mat);
   glare.name = 'background-stars'; // visibility.ts drives uOpacity by this name
   glare.frustumCulled = false;
+  glare.renderOrder = -9;          // just after the field, still behind everything
   return glare;
 }
 
@@ -153,12 +155,17 @@ export function createCatalogStars(): Points {
     },
     transparent: true,
     depthWrite: false,
+    // The star sphere is an infinity backdrop: NO depth test, drawn first, so
+    // no in-system geometry (Oort shell, heliopause, belt) can ever punch
+    // holes in it. Opaque foreground meshes drawn afterward overwrite it.
+    depthTest: false,
     blending: AdditiveBlending,
   });
 
   const points = new Points(geo, mat);
   points.name = 'background-stars';
   points.frustumCulled = false; // shell surrounds the camera at all tiers
+  points.renderOrder = -10;      // draw before everything else (backdrop)
 
   // Async load — fill the geometry when the packed catalog arrives.
   fetch(asset('star-catalog-v1.bin'))

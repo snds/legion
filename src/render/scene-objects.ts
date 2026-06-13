@@ -10,7 +10,7 @@ import {
   BufferGeometry,
   MeshStandardMaterial, MeshBasicMaterial, PointsMaterial,
   LineBasicMaterial,
-  Float32BufferAttribute, BackSide,
+  Float32BufferAttribute, BackSide, AdditiveBlending,
   EllipseCurve,
 } from 'three';
 import { createIcon } from './icons';
@@ -167,6 +167,12 @@ export function createOortCloud(): Group {
   const pts = new Points(geo, new PointsMaterial({
     size: 1.5, vertexColors: true, sizeAttenuation: true,
     transparent: true, opacity: 0.3,
+    // PointsMaterial defaults depthWrite TRUE — left on, this sparse Oort shell
+    // punched depth holes in the (depth-tested) background star sphere behind
+    // it, reading as a dark bubble that "blocks the starmap". Additive + no
+    // depth-write makes it a faint dust glow that never occludes.
+    depthWrite: false,
+    blending: AdditiveBlending,
   }));
   pts.name = 'oort-particles';
   group.add(pts);
