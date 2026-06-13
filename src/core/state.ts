@@ -209,9 +209,9 @@ export interface GameData {
 class GameState {
   data: GameData = {
     gameTime: 0,
-    timeSpeedIndex: 4,       // default: DAY/S
+    timeSpeedIndex: 1,       // default: 1× (real-time)
     paused: false,
-    _lastSpeed: 4,
+    _lastSpeed: 1,
 
     zoomLevel: 0.26,
     targetZoom: 0.26,
