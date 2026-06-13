@@ -13,12 +13,26 @@ import { Game, type DomainName, getCamDist } from '../core/state';
 import { Events } from '../core/events';
 import { Notifications } from '../ui/notifications';
 import type { LayerGroups } from './scene';
-import type { Group, Points, PointsMaterial } from 'three';
+import type { Group, Points, PointsMaterial, Sprite, SpriteMaterial } from 'three';
 import { getGalaxyOffset } from './galaxy';
 import { HELIOPAUSE_RADIUS_WU } from './particles';
 import {
-  updateBodyLOD, iconBiasFor,
+  updateBodyLOD, iconBiasFor, scaleFixed, setLocalIconTierFade,
 } from './icon-system';
+
+// Heliopause icon-set hand-off ramp: 0 below 1800 WU (local body icons full,
+// regional star-system markers hidden) → 1 above 3200 WU (local icons gone,
+// regional markers full). Spans the heliopause band into early sector so the
+// solar-system icons cross-fade into the star-system markers as one motion.
+const SWAP_IN = 1800;
+const SWAP_OUT = 3200;
+const REGIONAL_ICON_PX = 24; // screen-constant marker size (docs §4.6)
+function heliopauseSwap(camDist: number): number {
+  if (camDist <= SWAP_IN) return 0;
+  if (camDist >= SWAP_OUT) return 1;
+  const t = (camDist - SWAP_IN) / (SWAP_OUT - SWAP_IN);
+  return t * t * (3 - 2 * t);
+}
 
 // ── Extra Scene References ───────────────────────────────────────
 // Set during init — these are groups outside the standard layers
@@ -227,8 +241,36 @@ export function updateVisibility(): void {
   // until the player has zoomed out past it.
   updateHeliopauseGate();
 
+  // Heliopause icon-set hand-off: fade local body icons OUT and the regional
+  // star-system markers IN across the same camDist window, as one cross-fade.
+  const swap = heliopauseSwap(Game.data.camDist);
+  setLocalIconTierFade(1 - swap);
+
   // Per-object icon/mesh state — runs every frame for smooth transitions
   updateIconStates(domain);
+
+  // Regional star-system markers (incl. Sol): screen-constant size + fade-in.
+  // Runs whenever the regional layer is visible (heliopause → arm), independent
+  // of the local layer (which is off at arm tier).
+  updateRegionalMarkers(Game.data.camDist, swap);
+}
+
+function updateRegionalMarkers(camDist: number, swap: number): void {
+  if (!targets) return;
+  const regional = targets.layers.regional;
+  if (!regional.visible) return;
+  const show = swap > 0.005;
+  for (const marker of regional.children) {
+    if (marker.userData?.type !== 'system') continue;
+    marker.visible = show;
+    if (!show) continue;
+    marker.traverse(c => {
+      if (!c.userData?.isIcon) return;
+      const sp = c as Sprite;
+      scaleFixed(sp, camDist, REGIONAL_ICON_PX);
+      (sp.material as SpriteMaterial).opacity = swap * 0.95;
+    });
+  }
 }
 
 let heliopauseMesh: Group | null = null;

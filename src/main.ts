@@ -607,7 +607,10 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol'): WorldExtras {
     const eid = createSystemEntity(sCfg);
     systemEids.push(eid);
 
-    const marker = createSystemMarker(sCfg.name, sCfg.color, sCfg.hasBobs, sCfg.isHome);
+    const marker = createSystemMarker(
+      sCfg.name, sCfg.color, sCfg.hasBobs, sCfg.isHome,
+      sCfg.distanceLy, sCfg.planetCount, sCfg.bobCount,
+    );
 
     // Regional scale chosen so the nearest neighbors land at ~1500-2500 WU
     // (visible inside the heliopause camDist 1000-2800 frustum) and all 16
@@ -618,7 +621,9 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol'): WorldExtras {
       sCfg.y * REGIONAL_SCALE * 0.3,
       sCfg.z * REGIONAL_SCALE,
     );
-    marker.scale.setScalar(450);  // larger so the icons read at sector camDist 3-5k
+    // Marker group stays unit-scale; the icon is sized SCREEN-CONSTANT per frame
+    // by visibility.ts (updateRegionalMarkers → scaleFixed), fixing the old
+    // grow/shrink-with-scene defect (G8) from marker.scale.setScalar(450).
 
     layers.regional.add(marker);
     registerRenderObject(renderObjectMap, eid, marker);

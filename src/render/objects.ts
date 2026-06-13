@@ -809,6 +809,7 @@ export function createBobMesh(
 
 export function createSystemMarker(
   name: string, color: number, hasBobs: boolean, isHome: boolean,
+  distLy = 0, planetCount = 0, bobCount = 0,
 ): Group {
   const group = new Group();
   group.name = `system-${name}`;
@@ -816,6 +817,11 @@ export function createSystemMarker(
   group.userData.name = name;
   group.userData.hasBobs = hasBobs;
   group.userData.isHome = isHome;
+  // Inspector fields read by the selection panel (selection.ts SYSTEM block)
+  // and tooltip — without these the panel showed em-dashes for systems.
+  group.userData.distLy = distLy;
+  group.userData.planets = planetCount;
+  group.userData.bobCount = bobCount;
 
   const shape: IconShape = isHome ? 'star' : (hasBobs ? 'diamond' : 'hex');
   // NO label/sublabel: regional markers currently share placeholder positions
@@ -831,6 +837,7 @@ export function createSystemMarker(
     glowColor: numToHex(color),
     outlineWidth: isHome ? 4 : 3,
   });
+  icon.userData.isIcon = true; // screen-constant sizing + fade driven by visibility.ts
   group.add(icon);
 
   return group;
