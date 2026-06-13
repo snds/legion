@@ -92,6 +92,10 @@ function render(area: HTMLElement): void {
     + `<span style="font-size:10px;opacity:0.65">Anti-aliasing (SMAA)</span>`
     + `<input type="checkbox" id="s-smaa"${VP.get('smaaEnabled') ? ' checked' : ''}>`
     + `</div>`;
+  h += `<div class="settings-row" style="display:flex;align-items:center;justify-content:space-between;margin-top:6px">`
+    + `<span style="font-size:10px;opacity:0.65">Photographic sky (NASA)</span>`
+    + `<input type="checkbox" id="s-photosky"${VP.get('photographicSky') ? ' checked' : ''}>`
+    + `</div>`;
   h += `<div style="font-size:10px;opacity:0.4;margin-top:2px">Drag a slider to 0 to disable it. Backdrop = the Milky Way sky glow.</div>`;
 
   // ── Keyboard Reference ──
@@ -143,6 +147,8 @@ function render(area: HTMLElement): void {
   });
   const smaa = area.querySelector<HTMLInputElement>('#s-smaa');
   if (smaa) smaa.onchange = () => VP.set('smaaEnabled', smaa.checked);
+  const photoSky = area.querySelector<HTMLInputElement>('#s-photosky');
+  if (photoSky) photoSky.onchange = () => VP.set('photographicSky', photoSky.checked);
 
   const resetBtn = area.querySelector<HTMLElement>('#s-reset');
   if (resetBtn) {

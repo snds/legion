@@ -27,6 +27,7 @@ export interface VisualParams {
   chromaticAberration: number;  // corner RGB-split offset; 0 = off
   filmGrainIntensity: number;   // 0 = off
   backdropIntensity: number;    // Milky Way cube backdrop multiplier; 0 = off
+  photographicSky: boolean;     // true = NASA photo Milky Way; false = analytic bake
 
   // ── Sun ──
   sunPerlinRes: number;
@@ -125,6 +126,7 @@ const DEFAULTS: VisualParams = {
   chromaticAberration: 0.0025,
   filmGrainIntensity: 0.035,
   backdropIntensity: 1.0,
+  photographicSky: true,
 
   // Sun
   sunPerlinRes: 512,
@@ -215,6 +217,7 @@ type Listener = (key: keyof VisualParams, value: number | string | boolean) => v
 const PERSIST_KEYS: (keyof VisualParams)[] = [
   'chromaticAberration', 'filmGrainIntensity', 'backdropIntensity',
   'bloomStrength', 'vignetteIntensity', 'smaaEnabled', 'visualScale',
+  'photographicSky',
 ];
 const STORAGE_KEY = 'legion-graphics-settings';
 

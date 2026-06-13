@@ -18,7 +18,8 @@
 // ═══════════════════════════════════════════════════════════════════
 
 import './styles.css';
-import { Vector3 } from 'three';
+import { Vector3, Euler, TextureLoader, EquirectangularReflectionMapping, SRGBColorSpace } from 'three';
+import { asset } from './core/assets';
 
 import { createRenderer, type RendererContext } from './render/renderer';
 import { createScene, registerRenderObject, type SceneContext } from './render/scene';
@@ -261,9 +262,34 @@ async function boot(): Promise<void> {
   // night-sky level is set here, once, display-side. Target: band core reads
   // dim-but-visible (~AgX toe) at normal system-tier exposure — invisible
   // against lit planets, present in sky-dominated framings.
-  const BACKDROP_INTENSITY = 0.0025;
-  scene.background = galaxyBackdrop; // always the cube; the crossfade drives intensity
-  scene.backgroundIntensity = BACKDROP_INTENSITY;
+  // Two backdrop sources (user-switchable, VP.photographicSky):
+  //  • PHOTO  — NASA SVS Deep Star Maps 2020, galactic-coords equirect (real
+  //    Milky Way; band lands on the XZ plane, galactic centre at the image
+  //    centre → aligns with Legion's galactic frame). Brighter LDR ⇒ higher base.
+  //  • ANALYTIC — the baked volume cube (positionally coherent with the live
+  //    galaxy; the original behaviour). Dim HDR ⇒ tiny base.
+  const PHOTO_INTENSITY = 0.55;
+  const ANALYTIC_INTENSITY = 0.0025;
+  let skyBase = ANALYTIC_INTENSITY;
+  let skyTexReady = false;
+  // Galactic centre sits at the image centre → +X in three's equirect mapping;
+  // Legion's galactic centre is also toward +X (HYG equatorial→galactic map), so
+  // no yaw offset is needed. backgroundRotation stays identity.
+  scene.backgroundRotation = new Euler(0, 0, 0);
+  const skyTex = new TextureLoader().load(asset('milkyway-galactic-4k.jpg'), (t) => {
+    t.mapping = EquirectangularReflectionMapping;
+    t.colorSpace = SRGBColorSpace;
+    skyTexReady = true;
+    applySky();
+  });
+  function applySky(): void {
+    const photo = VP.get('photographicSky') && skyTexReady;
+    scene.background = photo ? skyTex : galaxyBackdrop;
+    skyBase = photo ? PHOTO_INTENSITY : ANALYTIC_INTENSITY;
+  }
+  scene.background = galaxyBackdrop; // until the photo loads (or if analytic chosen)
+  scene.backgroundIntensity = skyBase;
+  VP.subscribe((k) => { if (k === 'photographicSky') applySky(); });
 
   // ── 8d. Default focus: home habitable planet ──
   // Without this, the camera starts pointed at the star, making the
@@ -386,7 +412,7 @@ async function boot(): Promise<void> {
     // (updateGalaxyLOD) — two representations of the same medium handing off,
     // no hard switch, no pop. At sector+ the cube is black (intensity 0).
     scene.backgroundIntensity =
-      BACKDROP_INTENSITY * VP.get('backdropIntensity') * (1 - getGalaxyCrossfade(Game.data.camDist));
+      skyBase * VP.get('backdropIntensity') * (1 - getGalaxyCrossfade(Game.data.camDist));
 
     // 8e. Selection panels (connection line + production queue tick)
     SelectionPanels.drawConnection(camera);
