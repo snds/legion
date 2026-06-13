@@ -25,7 +25,7 @@ import { bakeRecipeToCanvas } from './texture-baker';
 
 // ── Constants ────────────────────────────────────────────────────
 
-const TEXTURE_VERSION = 3;  // Bumped: GPU equirect bake replaces CPU loop
+const TEXTURE_VERSION = 4;  // Bumped: Phase 3a giant/ice-giant recipe rewrite
 
 // Master texture resolution — 2K looks great at system zoom; the GPU bake
 // produces it in ~1 frame plus an ~8 MB readback (vs the old 100–300 ms CPU loop).
