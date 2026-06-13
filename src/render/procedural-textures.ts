@@ -25,7 +25,7 @@ import { bakeRecipeToCanvas, bakeRecipeAuxToCanvas } from './texture-baker';
 
 // ── Constants ────────────────────────────────────────────────────
 
-const TEXTURE_VERSION = 7;  // Bumped: Phase 4 cloud/aux channel
+const TEXTURE_VERSION = 8;  // Bumped: Phase 5 flow-aligned giant band filaments
 
 // Master texture resolution — 2K looks great at system zoom; the GPU bake
 // produces it in ~1 frame plus an ~8 MB readback (vs the old 100–300 ms CPU loop).
