@@ -164,15 +164,21 @@ export function taper(R: number): number {
   return 1 - t * t * (3 - 2 * t);
 }
 
-/** Two-major + two-minor log-spiral arm pattern in [0,1]. Arms fade out
- *  inside the bar region (real spirals emerge from the bar ends, they don't
- *  curl into the bulge). */
+/** Spiral features emerge at the BAR TIPS (half-length ~1665 WU): a
+ *  log-spiral winds infinitely tight at small R, so any spiral modulation
+ *  inside the bar region reads as a central curl. Shared by the arm pattern
+ *  AND the dust lane. */
+export function spiralInnerFade(R: number): number {
+  const t = Math.min(1, Math.max(0, (R - 1500) / 600)); // 0 at R≤1500 → 1 at R≥2100
+  return t * t * (3 - 2 * t);
+}
+
+/** Two-major + two-minor log-spiral arm pattern in [0,1]. */
 export function armPattern(R: number, theta: number): number {
   const lnTerm = Math.log(Math.max(R, 50) / ARM_REF_R) / Math.tan(PITCH);
   const p2 = Math.cos(2 * (theta - lnTerm));
   const p4 = Math.cos(4 * (theta - lnTerm));
-  const inner = Math.min(1, Math.max(0, (R - 700) / 500)); // 0 at R≤700 → 1 at R≥1200
-  return Math.max(0, 0.667 * p2 + 0.333 * p4) * inner * inner * (3 - 2 * inner);
+  return Math.max(0, 0.667 * p2 + 0.333 * p4) * spiralInnerFade(R);
 }
 
 /** Dust-lane mask: sharpened crest displaced LANE_OFFSET toward the arm's
@@ -245,7 +251,10 @@ export function sampleGalaxy(px: number, py: number, pz: number): GalaxySample {
   // any visible κ so results are unchanged).
   if (dust > 1e-5) {
     dust *= 0.4 + 1.2 * fbm3(px / CLUMP_SCALE, py / CLUMP_SCALE, pz / CLUMP_SCALE);
-    dust *= 0.25 + dustLane(R, theta);
+    // Lane modulation fades inside the bar (same window as the arms) — an
+    // unfaded lane carves a tight dark curl into the central glow.
+    const lf = spiralInnerFade(R);
+    dust *= (1 - lf) + lf * (0.25 + dustLane(R, theta));
   }
   dust *= tap;
 

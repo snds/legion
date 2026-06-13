@@ -16,7 +16,7 @@ exports[`galaxy density model — sample-table regression lock > matches the rec
       5.25676,
       4.233655,
     ],
-    "kappaV": 0.02546673,
+    "kappaV": 0.0649633,
   },
   {
     "j": [
@@ -24,7 +24,7 @@ exports[`galaxy density model — sample-table regression lock > matches the rec
       0.1058348,
       0.1069781,
     ],
-    "kappaV": 0.001677652,
+    "kappaV": 0.004002744,
   },
   {
     "j": [

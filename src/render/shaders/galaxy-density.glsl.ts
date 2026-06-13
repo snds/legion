@@ -132,12 +132,16 @@ float gdTaper(float R) {
   return 1.0 - t * t * (3.0 - 2.0 * t);
 }
 
+float gdSpiralInnerFade(float R) {
+  float t = clamp((R - 1500.0) / 600.0, 0.0, 1.0); // spiral features start at bar tips
+  return t * t * (3.0 - 2.0 * t);
+}
+
 float gdArmPattern(float R, float theta) {
   float lnTerm = log(max(R, 50.0) / GD_ARM_REF_R) / tan(GD_PITCH);
   float p2 = cos(2.0 * (theta - lnTerm));
   float p4 = cos(4.0 * (theta - lnTerm));
-  float inner = clamp((R - 700.0) / 500.0, 0.0, 1.0); // arms emerge past the bar
-  return max(0.0, 0.667 * p2 + 0.333 * p4) * inner * inner * (3.0 - 2.0 * inner);
+  return max(0.0, 0.667 * p2 + 0.333 * p4) * gdSpiralInnerFade(R);
 }
 
 float gdDustLane(float R, float theta) {
@@ -192,7 +196,8 @@ GalaxySample sampleGalaxy(vec3 p) {
   // Clump fBm only where dust is non-negligible (perf; mirrors TS guard).
   if (dust > 1e-5) {
     dust *= 0.4 + 1.2 * gdFbm3(p / GD_CLUMP_SCALE);
-    dust *= 0.25 + gdDustLane(R, theta);
+    float lf = gdSpiralInnerFade(R);
+    dust *= (1.0 - lf) + lf * (0.25 + gdDustLane(R, theta));
   }
   dust *= tap;
 
