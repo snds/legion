@@ -80,6 +80,21 @@ const vec3 GD_COL_OLD = ${v3(COL_OLD)};
 const vec3 GD_COL_BULGE = ${v3(COL_BULGE)};
 const vec3 GD_COL_HII = ${v3(COL_HII)};
 
+// ── GALAXY LAB live-tuning uniforms (TEMPORARY) ──
+// Promoted from the constants above so the dev panel can nudge the look at
+// the galaxy tier. The host material MUST provide them (galaxy.ts spreads
+// galaxyLabVolumeUniforms() into the disc-volume material); their DEFAULT
+// values equal the corresponding constants, so an untouched panel renders
+// the exact committed model. Only the volume + its bake clone use this chunk.
+uniform float uArmContrast;   // default GD_A_STARS
+uniform float uArmSharp;      // default GD_ARM_SHARP
+uniform float uArmFloor;      // default GD_ARM_FBM_FLOOR
+uniform float uArmScale;      // default GD_ARM_FBM_SCALE
+uniform float uDiscWidth;     // ×GD_HZ_THIN (1.0 = model)
+uniform float uBulgeAmp;      // ×GD_BULGE_AMP (1.0 = model)
+uniform float uDustStrength;  // ×dust κ (1.0 = model)
+uniform float uHiiAmp;        // ×HII knot emission (1.0 = model)
+
 struct RiftCloud { vec3 c; vec3 r; float k; };
 struct HiiKnot { vec3 c; float r; float amp; };
 const RiftCloud GD_RIFT[N_RIFT] = RiftCloud[N_RIFT](
@@ -146,14 +161,14 @@ float gdArmPattern(float R, float theta) {
   // m=2 major + m=4 secondary crest, inter-arm nulls preserved (negative
   // lobes clamp to 0); pow(.,ARM_SHARP) narrows & defines the arms.
   float crest = 0.667 * cos(2.0 * (theta - lnTerm)) + 0.333 * cos(4.0 * (theta - lnTerm));
-  return pow(max(0.0, crest), GD_ARM_SHARP) * gdSpiralInnerFade(R);
+  return pow(max(0.0, crest), uArmSharp) * gdSpiralInnerFade(R);
 }
 
 // Organic 3D-FBM falloff that breaks the smooth arm ridge into clumpy, wispy,
 // star-position-like structure (cloud base-shape × noise). In [FLOOR, 1].
 float gdArmFalloff(vec3 p) {
-  float n = gdFbm3(p / GD_ARM_FBM_SCALE) * 0.5 + 0.5;
-  return GD_ARM_FBM_FLOOR + (1.0 - GD_ARM_FBM_FLOOR) * n;
+  float n = gdFbm3(p / uArmScale) * 0.5 + 0.5;
+  return uArmFloor + (1.0 - uArmFloor) * n;
 }
 
 float gdDustLane(float R, float theta) {
@@ -185,13 +200,13 @@ GalaxySample sampleGalaxy(vec3 p) {
   float tap = gdTaper(R);
 
   // EMISSION
-  float hzT = GD_HZ_THIN * gdFlare(R);
+  float hzT = GD_HZ_THIN * uDiscWidth * gdFlare(R);
   float thin = exp(-R / GD_HR_THIN) * exp(-abs(yw) / hzT);
   float thick = GD_THICK_W * exp(-R / GD_HR_THICK) * exp(-abs(yw) / GD_HZ_THICK);
-  float bulge = GD_BULGE_AMP * gdHernquist(
+  float bulge = GD_BULGE_AMP * uBulgeAmp * gdHernquist(
     length(vec3(p.x, yw * GD_BULGE_SQUASH, p.z)), GD_BULGE_A);
   float bar = GD_BAR_AMP * gdBarField(p.x, yw, p.z);
-  float armS = 1.0 + GD_A_STARS * gdArmPattern(R, theta) * gdArmFalloff(p);
+  float armS = 1.0 + uArmContrast * gdArmPattern(R, theta) * gdArmFalloff(p);
 
   vec3 j = (GD_COL_DISC * (thin * armS) + GD_COL_OLD * thick
             + GD_COL_BULGE * (bulge + bar)) * tap;
@@ -199,7 +214,7 @@ GalaxySample sampleGalaxy(vec3 p) {
   for (int i = 0; i < N_HII; i++) {
     vec3 d = p - GD_HII[i].c;
     float d2 = dot(d, d) / (GD_HII[i].r * GD_HII[i].r);
-    if (d2 < 9.0) j += GD_COL_HII * (GD_HII[i].amp * exp(-d2));
+    if (d2 < 9.0) j += GD_COL_HII * (GD_HII[i].amp * exp(-d2)) * uHiiAmp;
   }
 
   // EXTINCTION
@@ -213,7 +228,7 @@ GalaxySample sampleGalaxy(vec3 p) {
   }
   dust *= tap;
 
-  float kappaV = GD_KAPPA_MID * dust / GD_DUST_NORM;
+  float kappaV = GD_KAPPA_MID * dust / GD_DUST_NORM * uDustStrength;
   for (int i = 0; i < N_RIFT; i++) {
     vec3 d = (p - GD_RIFT[i].c) / GD_RIFT[i].r;
     float d2 = dot(d, d);

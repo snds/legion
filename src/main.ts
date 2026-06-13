@@ -62,6 +62,7 @@ import { initRaycast } from './ui/raycast';
 import { Theme } from './ui/theme';
 import { initDetailPanel } from './ui/panels/detail';
 import { initSettingsPanel } from './ui/panels/settings';
+import { initGalaxyLabPanel } from './ui/galaxy-lab-panel';
 import { initRosterPanel } from './ui/panels/roster';
 import { SelectionPanels } from './ui/panels/selection';
 import { initVisibility, updateVisibility } from './render/visibility';
@@ -192,6 +193,7 @@ async function boot(): Promise<void> {
   Theme.apply();
   initDetailPanel();
   initSettingsPanel();
+  initGalaxyLabPanel(); // TEMPORARY galaxy tuning surface
   initRosterPanel();
   SelectionPanels.init();
   initDock();

@@ -33,6 +33,10 @@ import {
   BAR_ANGLE as M_BAR_ANGLE, PITCH as M_PITCH, ARM_REF_R as M_ARM_REF_R,
   DISC_RADIUS_WU as M_DISC_RADIUS,
 } from './galaxy-density';
+import {
+  GALAXY_TUNE, galaxyLabVolumeUniforms, registerVolumeMat, registerNebula,
+  clearGalaxyLabTargets, applyGalaxyTune,
+} from './galaxy-lab';
 
 // ── Stellar Population Sampling ──────────────────────────────────
 //
@@ -387,9 +391,9 @@ export function updateGalaxyLOD(camDist: number): void {
   if (GALAXY_LOD.starFieldMat) {
     const u = GALAXY_LOD.starFieldMat.uniforms;
     // Stars get bigger when camera is close: scale 1.5× at sector camDist,
-    // back down to 0.8× at galaxy max.
+    // back down to 0.8× at galaxy max. ×GALAXY_TUNE.particleSize (lab).
     const sizeT = smoothRamp(camDist, 4500, 13000);
-    u.uSizeScale.value = (1.5 - sizeT * 0.7) * discPresence;
+    u.uSizeScale.value = (1.5 - sizeT * 0.7) * discPresence * GALAXY_TUNE.particleSize;
   }
 
   // Local Orion Spur detail: SECTOR-tier feature only. Peaks at sector
@@ -410,7 +414,7 @@ export function updateGalaxyLOD(camDist: number): void {
     for (const m of GALAXY_LOD.nebulaMats) {
       const base = (m.userData?._baseOpacity as number | undefined) ?? m.opacity;
       if (m.userData) m.userData._baseOpacity = base;
-      m.opacity = Math.min(0.9, base * boost * discPresence);
+      m.opacity = Math.min(0.95, base * boost * discPresence * GALAXY_TUNE.nebulaOpacity);
     }
   }
 }
@@ -475,6 +479,7 @@ export function createGalaxy(): Group {
   GALAXY_LOD.nebulaMats.length = 0;
   GALAXY_LOD.volumeMat = null;
   GALAXY_LOD.volumeMesh = null;
+  clearGalaxyLabTargets(); // re-registered below (TEMPORARY)
 
   const galaxy = new Group();
   galaxy.name = 'galaxy';
@@ -754,9 +759,11 @@ export function createGalaxy(): Group {
       uBoxMin: { value: boxMin },
       uBoxMax: { value: boxMax },
       uGalaxyOrigin: { value: galaxyWorldCenter.clone() },
-      uEmissionScale: { value: 0.002 },
+      uEmissionScale: { value: GALAXY_TUNE.emission },
       uOpacity: { value: 1.0 }, // pinned — Phase-4 crossfade is the only ramp
       uJitter: { value: 1.0 },  // live: break step banding. Bake sets 0 (smooth).
+      // Galaxy Lab live-tuning uniforms (TEMPORARY) — defaults = model constants.
+      ...galaxyLabVolumeUniforms(),
     },
   });
 
@@ -769,6 +776,7 @@ export function createGalaxy(): Group {
   galaxy.add(discVolume);
   GALAXY_LOD.volumeMat = discVolumeMat;
   GALAXY_LOD.volumeMesh = discVolume;
+  registerVolumeMat(discVolumeMat); // Galaxy Lab live tuning (TEMPORARY)
   // NOT pushed to GALAXY_LOD.discMats: the volume no longer participates in
   // the discPresence opacity ramp — the medium has ONE set of constants
   // (docs/galaxy-visual-redesign.md §4.5); the Phase-4 crossfade will be the
@@ -809,6 +817,7 @@ export function createGalaxy(): Group {
     nebula.position.set(x, y, z);
     galaxy.add(nebula);
     GALAXY_LOD.nebulaMats.push(nebMat);
+    registerNebula(nebula, size); // Galaxy Lab live size tuning (TEMPORARY)
   }
 
   // ── 6. Sagittarius A* ─────────────────────────────────────────
@@ -1487,6 +1496,11 @@ export function createGalaxy(): Group {
     ));
   }
   galaxy.add(reticule);
+
+  // Sync persisted Galaxy Lab values onto the freshly built targets
+  // (volume uniforms get them via galaxyLabVolumeUniforms(); this also
+  // applies persisted nebula sizes + emission). TEMPORARY.
+  applyGalaxyTune();
 
   return galaxy;
 }
