@@ -224,6 +224,11 @@ export function createPlanetMesh(
       uSpecularOffset: { value: VP.get('planetSpecularOffset') },
       uDayTexture: { value: null as Texture | null },
       uHasTexture: { value: false },
+      // Aux channels (Phase 4): R cloud density, G ocean/specular mask. Linear
+      // data texture; uHasAux gates the cloud composite + shadow + drift.
+      uAuxTexture: { value: null as Texture | null },
+      uHasAux: { value: false },
+      uCloudShadowHeight: { value: 0.012 }, // apparent cloud height (shadow offset)
       uTime: { value: 0 },
       uHasAtmosphere: { value: hasAtmosphere },
       // Specular gating: Oceanic(1) = 1.0 (sea glint), IceGiant(4) = 0.55,
@@ -254,6 +259,8 @@ export function createPlanetMesh(
       uLimbK: { value: VP.get('planetLimbK') },
       uLimbCe: { value: VP.get('planetLimbCe') },
     },
+    // Cloud-shadow offset uses dFdx/dFdy for an analytic tangent frame —
+    // always available under WebGL2/GLSL ES 3.0 (no extension flag needed).
   });
 
   // Load day texture if provided (file-based, e.g. Sol textures)
@@ -265,10 +272,15 @@ export function createPlanetMesh(
       surfaceMat.needsUpdate = true;
     });
   } else if (hasProceduralRecipe(name)) {
-    // Generate procedural texture for EE planets
+    // Generate procedural texture for EE planets — albedo + optional aux
+    // (cloud density / ocean mask) for terrestrial worlds.
     generatePlanetTexture(name, (_lod, tex) => {
       surfaceMat.uniforms.uDayTexture.value = tex;
       surfaceMat.uniforms.uHasTexture.value = true;
+      surfaceMat.needsUpdate = true;
+    }, (auxTex) => {
+      surfaceMat.uniforms.uAuxTexture.value = auxTex;
+      surfaceMat.uniforms.uHasAux.value = true;
       surfaceMat.needsUpdate = true;
     });
   }

@@ -19,13 +19,13 @@
 // Texture version is bumped when the algorithm changes to force regen.
 // ═══════════════════════════════════════════════════════════════════
 
-import { CanvasTexture, LinearMipmapLinearFilter, SRGBColorSpace, type Texture } from 'three';
+import { CanvasTexture, LinearMipmapLinearFilter, SRGBColorSpace, NoColorSpace, type Texture } from 'three';
 import { textureDb } from '../persistence/save-db';
-import { bakeRecipeToCanvas } from './texture-baker';
+import { bakeRecipeToCanvas, bakeRecipeAuxToCanvas } from './texture-baker';
 
 // ── Constants ────────────────────────────────────────────────────
 
-const TEXTURE_VERSION = 6;  // Bumped: Phase 3c airless/dwarf crater stamping
+const TEXTURE_VERSION = 7;  // Bumped: Phase 4 cloud/aux channel
 
 // Master texture resolution — 2K looks great at system zoom; the GPU bake
 // produces it in ~1 frame plus an ~8 MB readback (vs the old 100–300 ms CPU loop).
@@ -157,6 +157,7 @@ export interface ProceduralTextureResult {
 export function generatePlanetTexture(
   planetName: string,
   onLodReady: (lod: number, tex: Texture) => void,
+  onAuxReady?: (tex: Texture) => void,
 ): ProceduralTextureResult {
   const recipeId = PLANET_RECIPE_MAP[planetName];
   if (!recipeId) {
@@ -170,7 +171,7 @@ export function generatePlanetTexture(
   };
 
   // Start async pipeline — catch errors so they don't go unhandled
-  _generateAsync(planetName, recipeId, result, onLodReady).catch((e) => {
+  _generateAsync(planetName, recipeId, result, onLodReady, onAuxReady).catch((e) => {
     console.error(`[ProceduralTextures] Failed to generate "${planetName}":`, e);
   });
 
@@ -191,15 +192,29 @@ async function _runQueue(): Promise<void> {
   _genRunning = false;
 }
 
+// Aux textures (clouds/masks) are baked fresh each load — the bake is ~1
+// frame and the data channels don't tolerate JPEG chroma subsampling, so
+// they're deliberately NOT cached (unlike the sRGB albedo).
+function canvasToAuxTexture(canvas: HTMLCanvasElement): Texture {
+  const tex = new CanvasTexture(canvas);
+  tex.minFilter = LinearMipmapLinearFilter;
+  tex.colorSpace = NoColorSpace;     // raw data, no sRGB decode on sample
+  tex.generateMipmaps = true;
+  tex.needsUpdate = true;
+  return tex;
+}
+
 async function _generateAsync(
   planetName: string,
   recipeId: PlanetRecipeId,
   result: ProceduralTextureResult,
   onLodReady: (lod: number, tex: Texture) => void,
+  onAuxReady?: (tex: Texture) => void,
 ): Promise<void> {
   const seed = planetSeed(planetName);
+  const needsAux = !!onAuxReady;
 
-  // Try loading all LODs from cache first
+  // Try loading all albedo LODs from cache first
   let allCached = true;
   for (const lodDef of LOD_DEFS) {
     const cachedBlob = await getCachedBlob(planetName, lodDef.level);
@@ -214,39 +229,44 @@ async function _generateAsync(
     }
   }
 
-  if (allCached) return;
+  // Nothing left to do only if the albedo was fully cached AND there's no
+  // aux to bake (aux is never cached).
+  if (allCached && !needsAux) return;
 
-  // Queue generation to avoid running all 7 planets simultaneously
+  // Queue generation to avoid running all planets simultaneously
   return new Promise<void>((resolve) => {
     _genQueue.push(async () => {
-      console.info(`[ProceduralTextures] Baking ${planetName} (${MASTER_W}x${MASTER_H})...`);
       const t0 = performance.now();
-
-      // GPU equirect bake → master <canvas> (~1 frame). Yield once so the
-      // delivery stays off the critical boot frame, matching the old async
-      // contract that consumers (objects.ts onLodReady) already expect.
+      // Yield once so delivery stays off the critical boot frame.
       await new Promise<void>((r) => requestAnimationFrame(() => r()));
-      const master = bakeRecipeToCanvas(recipeId, seed, MASTER_W, MASTER_H);
 
-      console.info(`[ProceduralTextures] ${planetName} baked in ${(performance.now() - t0) | 0}ms`);
+      if (!allCached) {
+        console.info(`[ProceduralTextures] Baking ${planetName} (${MASTER_W}x${MASTER_H})...`);
+        const master = bakeRecipeToCanvas(recipeId, seed, MASTER_W, MASTER_H);
 
-      // Create LODs from master
-      for (const lodDef of LOD_DEFS) {
-        if (result.textures[lodDef.level]) continue; // already loaded from cache
+        for (const lodDef of LOD_DEFS) {
+          if (result.textures[lodDef.level]) continue; // already from cache
 
-        const lodCanvas = lodDef.w === MASTER_W && lodDef.h === MASTER_H
-          ? master  // LOD 1 IS the master, no downsample needed
-          : downsampleCanvas(master, lodDef.w, lodDef.h);
+          const lodCanvas = lodDef.w === MASTER_W && lodDef.h === MASTER_H
+            ? master  // LOD 1 IS the master, no downsample needed
+            : downsampleCanvas(master, lodDef.w, lodDef.h);
 
-        const tex = canvasToTexture(lodCanvas);
-        result.textures[lodDef.level] = tex;
-        result.currentLod = lodDef.level;
-        onLodReady(lodDef.level, tex);
+          const tex = canvasToTexture(lodCanvas);
+          result.textures[lodDef.level] = tex;
+          result.currentLod = lodDef.level;
+          onLodReady(lodDef.level, tex);
 
-        // Cache in background
-        canvasToBlob(lodCanvas).then(blob => cacheBlob(planetName, lodDef.level, blob));
+          canvasToBlob(lodCanvas).then(blob => cacheBlob(planetName, lodDef.level, blob));
+        }
       }
 
+      // Aux channel bake (clouds + masks) — fresh, uncached.
+      if (needsAux) {
+        const auxCanvas = bakeRecipeAuxToCanvas(recipeId, seed, MASTER_W, MASTER_H);
+        if (auxCanvas) onAuxReady!(canvasToAuxTexture(auxCanvas));
+      }
+
+      console.info(`[ProceduralTextures] ${planetName} ready in ${(performance.now() - t0) | 0}ms`);
       resolve();
     });
     _runQueue();

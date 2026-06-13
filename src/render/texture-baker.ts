@@ -25,7 +25,7 @@
 import {
   WebGLRenderer, WebGLRenderTarget, Scene, OrthographicCamera, Mesh,
   PlaneGeometry, ShaderMaterial, LinearFilter, RGBAFormat, UnsignedByteType,
-  SRGBColorSpace,
+  SRGBColorSpace, NoColorSpace, NoBlending,
 } from 'three';
 import type { PlanetRecipeId } from './procedural-textures';
 
@@ -424,6 +424,48 @@ function fragmentFor(recipeId: PlanetRecipeId): string {
   `;
 }
 
+// ── Aux channel bake (Phase 4): R = cloud density, G = specular/ocean mask,
+// B = emissive (reserved), A = height (reserved). Linear DATA, not color —
+// baked into a NoColorSpace RT and read raw, so the surface shader samples
+// faithful values. Only recipes with an entry here get an aux texture.
+const RECIPE_AUX_GLSL: Partial<Record<PlanetRecipeId, string>> = {
+  romulus: /* glsl */ `
+    vec4 auxColor(vec3 dir, float vLat){
+      // Ocean mask — must mirror the romulus albedo elevation/seaLevel.
+      float elev = pow(clamp(fbm(dir*4.0,6,2.0,0.5)*0.5+0.5, 0.0, 1.0), 1.4) + sn(dir*15.0)*0.04;
+      float ocean = 1.0 - smoothstep(0.49, 0.51, elev);
+      // Clouds: bright ITCZ equatorial band + swirly mid-latitude systems.
+      float itcz = exp(-pow((vLat - 0.5) / 0.05, 2.0));
+      float swirl = fbm(dir*5.0 + vec3(13.0,0.0,0.0), 5, 2.0, 0.5) * 0.5 + 0.5;
+      float midlat = smoothstep(0.45, 0.8, fbm(dir*3.0, 4, 2.0, 0.5) * 0.5 + 0.5);
+      float cloud = clamp(itcz*0.5 + smoothstep(0.5,0.8,swirl)*0.55 + midlat*0.22, 0.0, 1.0) * 0.82;
+      return vec4(cloud, ocean, 0.0, 0.0);
+    }`,
+};
+
+export function recipeHasAux(recipeId: PlanetRecipeId): boolean {
+  return RECIPE_AUX_GLSL[recipeId] !== undefined;
+}
+
+function auxFragmentFor(recipeId: PlanetRecipeId): string {
+  return /* glsl */ `
+    precision highp float;
+    varying vec2 vUv;
+    ${NOISE_GLSL}
+    ${RECIPE_AUX_GLSL[recipeId] ?? 'vec4 auxColor(vec3 d, float v){ return vec4(0.0); }'}
+    void main(){
+      float theta = vUv.x * 6.28318530718;
+      float phi   = vUv.y * 3.14159265359;
+      vec3 dir = vec3(sin(phi)*cos(theta), sin(phi)*sin(theta), cos(phi));
+      vec4 a = clamp(auxColor(dir, vUv.y), 0.0, 1.0);
+      // Force alpha = 1: the readback canvas is a CanvasTexture whose backing
+      // store is PREMULTIPLIED, so an alpha-0 pixel would zero the RGB data
+      // channels (clouds/mask). A-channel "height" is reserved/unused anyway.
+      gl_FragColor = vec4(a.rgb, 1.0);   // raw data — no sRGB encode
+    }
+  `;
+}
+
 const VERTEX = /* glsl */ `
   varying vec2 vUv;
   void main(){ vUv = uv; gl_Position = vec4(position, 1.0); }
@@ -443,6 +485,12 @@ function ensureRig(): void {
   _material = new ShaderMaterial({
     vertexShader: VERTEX,
     fragmentShader: fragmentFor('vulcan'), // replaced per-bake
+    // Raw write — no alpha blend. The aux pass outputs alpha=0 (reserved
+    // B/A channels), which NormalBlending would multiply into the RGB,
+    // zeroing the cloud/mask data. NoBlending overwrites the target verbatim.
+    blending: NoBlending,
+    depthTest: false,
+    depthWrite: false,
     uniforms: {
       uSeed: { value: [0, 0, 0] },
       // Giant/ice-giant structure (Phase 3a). Unused by other recipes —
@@ -538,19 +586,17 @@ function applyGiantUniforms(recipeId: PlanetRecipeId, seed: number, u: Record<st
   }
 }
 
-let _lastRecipe: PlanetRecipeId | null = null;
+let _lastKey: string | null = null;
 
-/**
- * GPU-bake a recipe into an equirect <canvas>. Returns the canvas so the
- * existing LOD/cache/delivery code in procedural-textures.ts is unchanged.
- * Throws if the renderer was never registered (should be impossible —
- * setBakeRenderer runs at boot before any planet is built).
- */
-export function bakeRecipeToCanvas(
+// Core bake: render a recipe into an equirect <canvas>. kind 'albedo' uses an
+// sRGB RT + sRGB-encoding output (matches the old CPU canvas); kind 'aux' uses
+// a linear RT + raw output (faithful R/G/B/A data channels).
+function bakeToCanvas(
   recipeId: PlanetRecipeId,
   seed: number,
   width: number,
   height: number,
+  kind: 'albedo' | 'aux',
 ): HTMLCanvasElement {
   if (!_renderer) {
     throw new Error('[TextureBaker] renderer not registered — call setBakeRenderer() at boot');
@@ -559,12 +605,12 @@ export function bakeRecipeToCanvas(
   const renderer = _renderer;
   const mat = _material!;
 
-  // Recompile the fragment shader only when the recipe changes from the
-  // previous bake (each recipe is a distinct GLSL surfaceColor body).
-  if (_lastRecipe !== recipeId) {
-    mat.fragmentShader = fragmentFor(recipeId);
+  // Recompile the fragment shader only when (recipe, kind) changes.
+  const key = `${recipeId}|${kind}`;
+  if (_lastKey !== key) {
+    mat.fragmentShader = kind === 'aux' ? auxFragmentFor(recipeId) : fragmentFor(recipeId);
     mat.needsUpdate = true;
-    _lastRecipe = recipeId;
+    _lastKey = key;
   }
   mat.uniforms.uSeed.value = seedOffset(seed);
   applyGiantUniforms(recipeId, seed, mat.uniforms);
@@ -575,15 +621,13 @@ export function bakeRecipeToCanvas(
     minFilter: LinearFilter,
     magFilter: LinearFilter,
     depthBuffer: false,
-    colorSpace: SRGBColorSpace,
+    colorSpace: kind === 'aux' ? NoColorSpace : SRGBColorSpace,
   });
 
   const prevTarget = renderer.getRenderTarget();
   renderer.setRenderTarget(rt);
   renderer.render(_scene!, _camera!);
 
-  // Read back the sRGB-encoded bytes (RT is SRGBColorSpace, so the write
-  // re-encoded our linear output back to sRGB).
   const buffer = new Uint8Array(width * height * 4);
   renderer.readRenderTargetPixels(rt, 0, 0, width, height, buffer);
   renderer.setRenderTarget(prevTarget);
@@ -591,7 +635,6 @@ export function bakeRecipeToCanvas(
 
   // WebGL framebuffer rows are bottom-to-top; the equirect convention
   // (and the old CPU canvas) is top-to-bottom (north pole at row 0).
-  // Flip rows while copying into ImageData.
   const canvas = document.createElement('canvas');
   canvas.width = width;
   canvas.height = height;
@@ -604,4 +647,26 @@ export function bakeRecipeToCanvas(
   }
   ctx.putImageData(img, 0, 0);
   return canvas;
+}
+
+/** GPU-bake a recipe's albedo into an equirect <canvas> (sRGB). */
+export function bakeRecipeToCanvas(
+  recipeId: PlanetRecipeId,
+  seed: number,
+  width: number,
+  height: number,
+): HTMLCanvasElement {
+  return bakeToCanvas(recipeId, seed, width, height, 'albedo');
+}
+
+/** GPU-bake a recipe's aux data channels (R cloud, G ocean mask, B/A reserved)
+ *  into a LINEAR equirect <canvas>, or null if the recipe defines no aux. */
+export function bakeRecipeAuxToCanvas(
+  recipeId: PlanetRecipeId,
+  seed: number,
+  width: number,
+  height: number,
+): HTMLCanvasElement | null {
+  if (!recipeHasAux(recipeId)) return null;
+  return bakeToCanvas(recipeId, seed, width, height, 'aux');
 }

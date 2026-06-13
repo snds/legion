@@ -45,6 +45,10 @@ export const planetSurfaceFragmentShader = /* glsl */ `
   uniform float uSpecularOffset;
   uniform sampler2D uDayTexture;
   uniform bool uHasTexture;
+  // Aux data texture (Phase 4): R = cloud density, G = ocean/specular mask.
+  uniform sampler2D uAuxTexture;
+  uniform bool uHasAux;
+  uniform float uCloudShadowHeight;
   uniform float uTime;
   uniform bool uHasAtmosphere;
   uniform float uSpecularScale;   // 0..1, gates specular intensity per planet class
@@ -95,6 +99,19 @@ export const planetSurfaceFragmentShader = /* glsl */ `
     return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
   }
 
+  // Cotangent frame (Mikkelsen) — world-space tangent basis aligned to the
+  // texture UVs, derived from screen-space derivatives. No tangent attribute
+  // needed; convention-agnostic (matches whatever UV the bake used).
+  mat3 cotangentFrame(vec3 N, vec3 p, vec2 uv) {
+    vec3 dp1 = dFdx(p), dp2 = dFdy(p);
+    vec2 duv1 = dFdx(uv), duv2 = dFdy(uv);
+    vec3 dp2perp = cross(dp2, N), dp1perp = cross(N, dp1);
+    vec3 T = dp2perp * duv1.x + dp1perp * duv2.x;
+    vec3 B = dp2perp * duv1.y + dp1perp * duv2.y;
+    float invmax = inversesqrt(max(dot(T, T), dot(B, B)));
+    return mat3(T * invmax, B * invmax, N);
+  }
+
   void main() {
     #include <logdepthbuf_fragment>
 
@@ -111,6 +128,36 @@ export const planetSurfaceFragmentShader = /* glsl */ `
     // Lambert diffuse with smooth terminator
     float NdotL = dot(N, L);
     float dayFactor = smoothstep(uTerminatorOffset, uTerminatorOffset + uTerminatorSoftness, NdotL);
+
+    // ── Clouds (Phase 4) — composite the aux cloud channel into baseColor
+    // before lighting. Differential-rotation drift (pure phase shift of
+    // uTime ⇒ zero smearing under any warp), a sun-offset shadow tap, and a
+    // per-channel terminator warmth so the cloud limb reddens at the
+    // terminator. specMask confines sea-glint to ocean and away from cloud.
+    float cloudDensity = 0.0;
+    float oceanMask = 1.0;
+    if (uHasAux) {
+      vec2 cloudUv = vUv;
+      cloudUv.x += uTime * 0.004 * (0.6 + 0.4 * cos((vUv.y - 0.5) * 6.2831853)); // faster near equator
+      cloudDensity = texture2D(uAuxTexture, cloudUv).r;
+      oceanMask = texture2D(uAuxTexture, vUv).g;
+
+      // Sun-direction-offset second tap → cloud shadow, stretching oblique
+      // toward the terminator. translation = tangent-plane projection of L.
+      mat3 tbn = cotangentFrame(N, vWorldPos, cloudUv);
+      vec3 tanSun = dot(N, L) * N - L;                  // in-plane component of sun dir
+      vec2 shadowOff = (tanSun * tbn).xy * uCloudShadowHeight; // world→tangent (row·mat)
+      float shadowCloud = texture2D(uAuxTexture, cloudUv + shadowOff).r;
+      baseColor *= (1.0 - 0.5 * shadowCloud);
+
+      // Per-channel terminator scattering on the cloud color (reds survive
+      // longest ⇒ warm cloud limb), then composite over the surface.
+      vec3 cloudCol = vec3(0.92) * vec3(
+        clamp(pow(dayFactor, 1.0), 0.2, 1.0),
+        clamp(pow(dayFactor, 1.5), 0.2, 1.0),
+        clamp(pow(dayFactor, 2.0), 0.2, 1.0));
+      baseColor = mix(baseColor, cloudCol, cloudDensity);
+    }
 
     // Day side color
     vec3 dayColor = baseColor * dayFactor;
@@ -165,7 +212,10 @@ export const planetSurfaceFragmentShader = /* glsl */ `
     vec3 H = halfLen > 0.0001 ? halfVec / halfLen : vec3(0.0, 1.0, 0.0);
     float spec = pow(max(dot(N, H), 0.0), uSpecularPower);
     spec *= smoothstep(0.0, uSpecularOffset, NdotL); // only on day side
-    surfaceColor += vec3(spec * 0.35) * uSpecularScale;
+    // Confine sea-glint to open water (aux ocean mask) and kill it under
+    // cloud cover; non-aux planets keep the flat per-class gate.
+    float specMask = uHasAux ? oceanMask * (1.0 - cloudDensity) : 1.0;
+    surfaceColor += vec3(spec * 0.35) * uSpecularScale * specMask;
 
     // Twilight band — warm scattering tint exactly at the terminator.
     // Peaks where the sun grazes the surface; falls off into day and night.
