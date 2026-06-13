@@ -25,9 +25,9 @@ import { createScene, registerRenderObject, type SceneContext } from './render/s
 import { setMaxAnisotropy } from './render/icons';
 import { setBakeRenderer } from './render/texture-baker';
 import {
-  createBackgroundStars,
   createHeliopause,
 } from './render/particles';
+import { createCatalogStars } from './render/star-field';
 import { bakeGalaxyBackdrop } from './render/galaxy-backdrop';
 import { createAsteroidBelt } from './render/asteroid-belt';
 import {
@@ -591,7 +591,10 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol'): WorldExtras {
   // ── Background ──
   // (Legacy createMilkyWay band deleted: the system-tier Milky Way is now the
   // positionally-coherent baked cubemap of the real galaxy model — main boot.)
-  layers.background.add(createBackgroundStars(8000));
+  // The REAL sky — 24.9k HYG-catalogue stars at their true galactic directions
+  // (real constellations), magnitude-sized, B−V-coloured. Replaces the old
+  // random fictional shell. Loads its packed binary asynchronously.
+  layers.background.add(createCatalogStars());
 
   // ── Debris Disk ──
   // ── Asteroid Belt (instanced, flat-shaded) ──
