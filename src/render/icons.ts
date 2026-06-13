@@ -310,8 +310,8 @@ function drawShape(
 // Display target the icon-system scales icons to (mirrors icon-system SCREEN_PX);
 // used only to express label sizes as parent-relative ratios.
 const ICON_TARGET_PX = 28;
-const LABEL_PX = 12;     // label cap height on screen (legibility floor ≥11)
-const SUBLABEL_PX = 9;
+const LABEL_PX = 15;     // label cap height on screen (legibility floor ≥11)
+const SUBLABEL_PX = 11;
 
 export function createIcon(cfg: IconConfig): Sprite {
   const texture = renderIconTexture(cfg);
@@ -336,7 +336,7 @@ export function createIcon(cfg: IconConfig): Sprite {
   // labels rendered ~2 screen px at the 28px icon target — unreadable).
   if (cfg.label) {
     const r = LABEL_PX / ICON_TARGET_PX;
-    const label = createLabel(cfg.label, '#ffffff', 13);
+    const label = createLabel(cfg.label, '#ffffff', 15);
     label.scale.set(8 * r, r, 1);          // label canvas is 8:1
     label.position.set(0, -(0.5 + 0.5 * r + 0.10), 0);
     sprite.add(label);
@@ -344,7 +344,7 @@ export function createIcon(cfg: IconConfig): Sprite {
   if (cfg.sublabel) {
     const r = LABEL_PX / ICON_TARGET_PX;
     const r2 = SUBLABEL_PX / ICON_TARGET_PX;
-    const sub = createLabel(cfg.sublabel, 'rgba(255,255,255,0.55)', 11);
+    const sub = createLabel(cfg.sublabel, 'rgba(255,255,255,0.8)', 13);
     sub.scale.set(8 * r2, r2, 1);
     sub.position.set(0, -(0.5 + (cfg.label ? r : 0) + 0.5 * r2 + 0.16), 0);
     sprite.add(sub);
@@ -369,11 +369,23 @@ export function createLabel(
   canvas.height = H;
   const ctx = canvas.getContext('2d')!;
 
-  ctx.font = `${fontSize * SCALE}px 'JetBrains Mono', monospace`;
-  ctx.fillStyle = color;
+  const fs = fontSize * SCALE;
+  ctx.font = `600 ${fs}px 'JetBrains Mono', monospace`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText(text, W / 2, H / 2, W * 0.95);
+  const maxW = W * 0.95;
+  // Legibility halo: a dark outline + soft glow behind the glyphs so the label
+  // stays readable over ANY background (bright stars, the galaxy band, lit
+  // planets). Drawn first; the crisp fill goes on top with no shadow.
+  ctx.lineJoin = 'round';
+  ctx.strokeStyle = 'rgba(0,0,0,0.9)';
+  ctx.lineWidth = fs * 0.24;
+  ctx.shadowColor = 'rgba(0,0,0,0.95)';
+  ctx.shadowBlur = fs * 0.32;
+  ctx.strokeText(text, W / 2, H / 2, maxW);
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = color;
+  ctx.fillText(text, W / 2, H / 2, maxW);
 
   const texture = new CanvasTexture(canvas);
   texture.minFilter = LinearMipmapLinearFilter;
