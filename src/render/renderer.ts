@@ -41,6 +41,9 @@ export async function createRenderer(
     '3D space visualization — use scroll to zoom, right-drag to orbit',
   );
   canvas.style.display = 'block';
+  // Touch devices: claim all gestures on the canvas (orbit/pinch handled in
+  // input.ts) — prevents iOS page scroll, rubber-banding, and double-tap zoom.
+  canvas.style.touchAction = 'none';
 
   container.prepend(canvas);
 

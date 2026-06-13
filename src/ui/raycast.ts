@@ -269,13 +269,9 @@ export function initRaycast(
   });
 
   // ── Click → Select (single click without drag) ──
-  canvas.addEventListener('mouseup', (e: MouseEvent) => {
-    // Only process if no drag occurred (click, not drag)
-    if (Game.data.dragMoved) return;
-    // Only left or right click
-    if (e.button !== 0 && e.button !== 2) return;
-
-    const hit = getHit(e.clientX, e.clientY);
+  // Shared by mouse click and touch tap.
+  function selectAt(x: number, y: number): void {
+    const hit = getHit(x, y);
     // Orbit lines are hover-only affordances: clicking one neither selects
     // nor deselects (their userData has no entity payload).
     if (hit && (hit.data.type as string) === 'orbit') return;
@@ -292,14 +288,23 @@ export function initRaycast(
       SelectionPanels.close();
       setHoverState(null);
     }
+  }
+
+  canvas.addEventListener('mouseup', (e: MouseEvent) => {
+    // Only process if no drag occurred (click, not drag)
+    if (Game.data.dragMoved) return;
+    // Only left or right click
+    if (e.button !== 0 && e.button !== 2) return;
+    selectAt(e.clientX, e.clientY);
   });
 
   // ── Double-Click → Focus Camera on Object (zoom unchanged) ──
   // Shift+Double-Click → also warp to a zoom level appropriate for the
   // object's class (planet → ORBIT, star → INNER SYSTEM, system →
   // HELIOPAUSE, phenomenon → ARM, etc.).
-  canvas.addEventListener('dblclick', (e: MouseEvent) => {
-    const hit = getHit(e.clientX, e.clientY);
+  // Shared by mouse double-click and touch double-tap.
+  function focusAt(x: number, y: number, fly: boolean): void {
+    const hit = getHit(x, y);
     if (!hit) return;
     if ((hit.data.type as string) === 'orbit') return; // hover-only affordance
 
@@ -308,7 +313,7 @@ export function initRaycast(
     Game.selectEntity(eid, hit.data as unknown as Record<string, unknown>);
     SelectionPanels.open(hit.data);
 
-    if (e.shiftKey) {
+    if (fly) {
       // Shift+dblclick → cinematic FLY to the object. Bezier-eased
       // trajectory (arcs over the disc plane), looks at target throughout,
       // hands back to orbit mode at the appropriate tier camDist on
@@ -324,5 +329,34 @@ export function initRaycast(
       Events.emit('camera:focus-on', { x: worldPos.x, y: worldPos.y, z: worldPos.z });
       Events.emit('camera:focus-object', { obj: hit.object });
     }
+  }
+
+  canvas.addEventListener('dblclick', (e: MouseEvent) => {
+    focusAt(e.clientX, e.clientY, e.shiftKey);
+  });
+
+  // ── Touch: tap = select, double-tap = focus ──
+  // input.ts owns touch ORBIT/PINCH (and preventDefault suppresses Safari's
+  // synthetic mouse events, so these are the only selection path on touch).
+  // A tap is a touchend with no drag/pinch since touchstart (Game.data.
+  // dragMoved, maintained by input.ts). Double-tap = two taps within 320 ms
+  // and 32 px — fires selectAt on the first tap then focusAt, matching the
+  // desktop click→dblclick ordering.
+  let lastTap = { t: -1e9, x: 0, y: 0 };
+  canvas.addEventListener('touchstart', () => {
+    Tooltip.hide();
+    setHoverState(null);
+  }, { passive: true });
+  canvas.addEventListener('touchend', (e: TouchEvent) => {
+    if (e.changedTouches.length !== 1 || e.touches.length > 0) return;
+    if (Game.data.dragMoved) return; // drag or pinch — not a tap
+    const t = e.changedTouches[0];
+    const now = performance.now();
+    const isDouble =
+      now - lastTap.t < 320 &&
+      Math.hypot(t.clientX - lastTap.x, t.clientY - lastTap.y) < 32;
+    lastTap = { t: now, x: t.clientX, y: t.clientY };
+    if (isDouble) focusAt(t.clientX, t.clientY, false);
+    else selectAt(t.clientX, t.clientY);
   });
 }

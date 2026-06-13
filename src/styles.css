@@ -531,3 +531,14 @@ button, select, input { font-family: var(--ui-font); letter-spacing: 0.02em; }
 }
 .ve-select { flex: 1; }
 /* ═══════════════════ END ADMIN VISUAL EDITOR — TEMPORARY ═══════════════════ */
+
+/* ── Touch devices (iPhone/iPad) ─────────────────────────────────── */
+/* No page rubber-banding; HUD taps fire immediately (no 300ms double-
+   tap delay) while the canvas claims all gestures via touch-action:none
+   (set in renderer.ts). */
+html, body {
+  overscroll-behavior: none;
+}
+#hud, #hud * {
+  touch-action: manipulation;
+}
