@@ -44,6 +44,10 @@ export const galacticDiscVolumeFragmentShader = /* glsl */ `
   uniform vec3 uGalaxyOrigin;  // galaxy group's world position (Sgr A* in world)
   uniform float uEmissionScale;
   uniform float uOpacity;      // pinned 1.0; Phase-4 crossfade is the only ramp
+  uniform float uJitter;       // 1 live (breaks step banding); 0 for the bake
+                               // (256 steps need no jitter — and baking the
+                               // per-pixel jitter into static cube texels is
+                               // what produced the grain + cube-face seam)
 
   varying vec3 vWorldPos;
 
@@ -72,7 +76,7 @@ export const galacticDiscVolumeFragmentShader = /* glsl */ `
     // Logarithmic step distribution from just past the camera to the box
     // exit: dense where a step subtends a large angle, coarse far away.
     float t0 = max(tNear, 2.0);
-    float jitter = ign(gl_FragCoord.xy);
+    float jitter = uJitter * ign(gl_FragCoord.xy);
     // STEPS is a material define: 32 live (40 per spec was ~28fps at galaxy
     // tier full-coverage; Phase 6 half-res is the real reserve), 256 for the
     // one-shot system-tier bake (galaxy-backdrop.ts) where there is no frame

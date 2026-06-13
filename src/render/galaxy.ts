@@ -756,6 +756,7 @@ export function createGalaxy(): Group {
       uGalaxyOrigin: { value: galaxyWorldCenter.clone() },
       uEmissionScale: { value: 0.002 },
       uOpacity: { value: 1.0 }, // pinned — Phase-4 crossfade is the only ramp
+      uJitter: { value: 1.0 },  // live: break step banding. Bake sets 0 (smooth).
     },
   });
 
