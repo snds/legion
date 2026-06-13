@@ -46,6 +46,14 @@ const starVertexShader = /* glsl */ `
     vBright = clamp(0.18 + log(flux + 1.0) * 0.22, 0.18, 1.6);
     vec4 mv = modelViewMatrix * vec4(position, 1.0);
     gl_Position = projectionMatrix * mv;
+    // SKYBOX depth pin: the star shell sits at a fixed radius around the ORIGIN,
+    // but the camera is offset by camDist — so the shell toward screen-centre
+    // (through the system) is FARTHER than the shell at the edges. When the
+    // camera far plane fell between them, the central stars were clipped while
+    // edge stars survived → a view-centred dark "bubble". Forcing z = w pins
+    // every star to the far plane, so none are ever near/far-clipped (paired
+    // with depthTest:false, they're a true infinity backdrop).
+    gl_Position.z = gl_Position.w;
     // Fixed pixel size (no attenuation — sky backdrop), scaled by magnitude.
     gl_PointSize = clamp(1.1 + log(flux + 1.0) * 0.85, 1.1, 7.0) * uPixelRatio;
   }
@@ -103,6 +111,7 @@ function makeGlareLayer(pos: Float32Array, mag: Float32Array, bv: Float32Array, 
         float flux = pow(2.512, (3.5 - aMag));         // brightest stars only
         vBright = clamp(0.4 + log(flux + 1.0) * 0.12, 0.4, 1.4);
         gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        gl_Position.z = gl_Position.w;                 // skybox far-plane pin (see field shader)
         gl_PointSize = clamp(16.0 + log(flux + 1.0) * 7.0, 16.0, 72.0) * uPixelRatio;
       }
     `,
