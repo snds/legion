@@ -61,6 +61,11 @@ export function bakeGalaxyBackdrop(
     bakeMat.uniforms = liveMat.uniforms; // share — one set of medium constants
     bakeMat.defines = { ...(bakeMat.defines ?? {}), STEPS: '256' };
     bakeMat.needsUpdate = true;
+    // No jitter for the bake: 256 steps don't band, and baking the per-pixel
+    // jitter into static cube texels produced visible grain + a cube-face
+    // seam in the dim backdrop. Uniforms are shared with liveMat, so restore
+    // it to 1 afterward.
+    if (bakeMat.uniforms.uJitter) bakeMat.uniforms.uJitter.value = 0;
     volumeMesh.material = bakeMat;
   }
 
@@ -81,6 +86,7 @@ export function bakeGalaxyBackdrop(
   // Restore everything exactly.
   scene.background = prevBg;
   if (volumeMesh && liveMat) {
+    if (liveMat.uniforms.uJitter) liveMat.uniforms.uJitter.value = 1; // shared — re-enable for live
     volumeMesh.material = liveMat;
     bakeMat?.dispose();
   }
