@@ -15,6 +15,7 @@ import { Notifications } from '../ui/notifications';
 import type { LayerGroups } from './scene';
 import type { Group, Points, PointsMaterial } from 'three';
 import { getGalaxyOffset } from './galaxy';
+import { HELIOPAUSE_RADIUS_WU } from './particles';
 import {
   updateBodyLOD, iconBiasFor,
 } from './icon-system';
@@ -220,8 +221,25 @@ export function updateVisibility(): void {
 
   applyOverlay(overlayOn, domain);
 
+  // Heliopause orb is external-facing ONLY: show it once the camera is outside
+  // the shell (camDist ≥ radius). Inside the shell a translucent sphere wall
+  // fills the viewport and tints the whole interior, so it must stay hidden
+  // until the player has zoomed out past it.
+  updateHeliopauseGate();
+
   // Per-object icon/mesh state — runs every frame for smooth transitions
   updateIconStates(domain);
+}
+
+let heliopauseMesh: Group | null = null;
+function updateHeliopauseGate(): void {
+  if (!targets) return;
+  const local = targets.layers.local;
+  if (!heliopauseMesh) {
+    heliopauseMesh = local.getObjectByName('heliopause') as Group | null;
+    if (!heliopauseMesh) return;
+  }
+  heliopauseMesh.visible = local.visible && Game.data.camDist >= HELIOPAUSE_RADIUS_WU;
 }
 
 // ── Per-Object Icon State ────────────────────────────────────────

@@ -6,9 +6,14 @@
 
 import {
   Points, BufferGeometry, Float32BufferAttribute, PointsMaterial,
-  Color, Mesh, SphereGeometry, MeshBasicMaterial, DoubleSide,
+  Color, Mesh, SphereGeometry, MeshBasicMaterial, BackSide,
   MathUtils,
 } from 'three';
+
+// Heliopause shell radius in world units (120 AU × AU_SCALE 10). Exported so
+// the per-frame visibility gate (visibility.ts) and the geometry can never
+// drift apart — the orb is shown ONLY when the camera is outside this radius.
+export const HELIOPAUSE_RADIUS_WU = 1200;
 
 // ── Background Starfield ─────────────────────────────────────────
 
@@ -109,14 +114,18 @@ export function createDebrisDisk(
 
 // ── Heliopause Boundary ──────────────────────────────────────────
 
-export function createHeliopause(radiusAU: number): Mesh {
-  const AU_SCALE = 10;
-  const geo = new SphereGeometry(radiusAU * AU_SCALE, 48, 48);
+export function createHeliopause(): Mesh {
+  const geo = new SphereGeometry(HELIOPAUSE_RADIUS_WU, 48, 48);
   const mat = new MeshBasicMaterial({
     color: 0x2244aa,
     transparent: true,
-    opacity: 0.03,
-    side: DoubleSide,
+    opacity: 0.05,
+    // BackSide: from OUTSIDE the shell this renders the far wall, reading as a
+    // faint translucent bubble (the Oort-sphere boundary pattern). The mesh is
+    // gated to camDist >= radius in visibility.ts, so the camera is never
+    // inside it — which is what previously (with DoubleSide) tinted the whole
+    // interior view a uniform blue. It is now an external-facing element only.
+    side: BackSide,
     depthWrite: false,
   });
 

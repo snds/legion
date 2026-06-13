@@ -639,7 +639,7 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol'): WorldExtras {
   layers.local.add(asteroidBelt.group);
 
   // ── Heliopause ──
-  layers.local.add(createHeliopause(120));
+  layers.local.add(createHeliopause());
 
   // ── Oort Cloud (visible at heliopause+) ──
   const oortCloud = createOortCloud();
