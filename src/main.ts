@@ -272,10 +272,15 @@ async function boot(): Promise<void> {
   const ANALYTIC_INTENSITY = 0.0025;
   let skyBase = ANALYTIC_INTENSITY;
   let skyTexReady = false;
-  // Galactic centre sits at the image centre → +X in three's equirect mapping;
-  // Legion's galactic centre is also toward +X (HYG equatorial→galactic map), so
-  // no yaw offset is needed. backgroundRotation stays identity.
-  scene.backgroundRotation = new Euler(0, 0, 0);
+  // Orientation: the photo's galactic centre (image centre) maps to +X. The
+  // live analytic galaxy's Sgr A* sits toward −X (its model places home at +X,
+  // centre at the origin), so a π yaw points the photo's bulge at Sgr A* and
+  // makes the system→galaxy crossfade coherent. (Both disc planes are XZ, so a
+  // pure yaw suffices.) NOTE: the HYG foreground catalogue uses the physically-
+  // correct +X galactic centre, so it now differs from the backdrop+galaxy by
+  // 180° — the live galaxy is the physically-misoriented one; the clean full
+  // fix is to reorient the galaxy model to +X, after which this returns to 0.
+  scene.backgroundRotation = new Euler(0, Math.PI, 0);
   const skyTex = new TextureLoader().load(asset('milkyway-galactic-4k.jpg'), (t) => {
     t.mapping = EquirectangularReflectionMapping;
     t.colorSpace = SRGBColorSpace;
