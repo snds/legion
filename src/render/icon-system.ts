@@ -33,6 +33,15 @@ export function setIconFov(fovDeg: number): void {
   FOV_FACTOR = 2 * Math.tan(MathUtils.degToRad(fovDeg * 0.5));
 }
 
+// Global tier-fade applied to LOCAL body icons (planets/moons/stations/bobs).
+// 1 at system tiers; ramped to 0 across the heliopause band by visibility.ts so
+// the solar-system icons hand off to the regional star-system markers as the
+// camera zooms out (docs/zoom-overlay-patterns.md §4.6).
+let localTierFade = 1;
+export function setLocalIconTierFade(f: number): void {
+  localTierFade = Math.min(1, Math.max(0, f));
+}
+
 // ── Apparent-size mesh↔icon LOD (overlay Phase 2) ────────────────
 // The master signal is the body's APPARENT screen size, not raw camDist — a
 // gas giant and a moon at equal distance have wildly different legibility.
@@ -205,12 +214,13 @@ export function showIcons(
   obj.traverse(child => {
     if (child.userData?.isIcon) {
       const sprite = child as Sprite;
-      sprite.visible = true;
-      (sprite.material as SpriteMaterial).opacity = opacity;
+      const op = opacity * localTierFade; // tier-fade hands local icons off at heliopause
+      sprite.visible = op > 0.005;
+      (sprite.material as SpriteMaterial).opacity = op;
       if (fixedSize) scaleFixed(sprite, camDist, screenPx);
       else scaleWorld(sprite, camDist);
       for (const ch of sprite.children) {
-        if (ch.userData?.isLabel) ch.visible = labels;
+        if (ch.userData?.isLabel) ch.visible = labels && sprite.visible;
       }
     }
   });
