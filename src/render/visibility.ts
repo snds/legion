@@ -269,6 +269,9 @@ function updateRegionalMarkers(camDist: number, swap: number): void {
         const sp = c as Sprite;
         scaleFixed(sp, camDist, REGIONAL_ICON_PX);
         (sp.material as SpriteMaterial).opacity = swap * 0.95;
+      } else if (c.userData?.isLabel) {
+        // Name + sublabel ride with the marker; fade in/out with the swap.
+        (c as Sprite).material.opacity = swap;
       } else if (c.userData?.isStemPart) {
         // Out-of-plane stem line — fade in with the markers, kept dim.
         ((c as unknown as { material: { opacity: number } }).material).opacity = swap * 0.4;

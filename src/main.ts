@@ -609,18 +609,22 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol'): WorldExtras {
 
     const marker = createSystemMarker(
       sCfg.name, sCfg.color, sCfg.hasBobs, sCfg.isHome,
-      sCfg.distanceLy, sCfg.planetCount, sCfg.bobCount,
+      sCfg.distanceLy, sCfg.planetCount, sCfg.bobCount, sCfg.explored,
     );
 
-    // Regional scale chosen so the nearest neighbors land at ~1500-2500 WU
-    // (visible inside the heliopause camDist 1000-2800 frustum) and all 16
-    // systems fit within the sector camDist 2800-5500 viewport.
-    const REGIONAL_SCALE = 250;
-    marker.position.set(
-      sCfg.x * REGIONAL_SCALE,
-      sCfg.y * REGIONAL_SCALE * 0.3,
-      sCfg.z * REGIONAL_SCALE,
-    );
+    // DISTANCE-ACCURATE local map: place each system at its real distance
+    // (distanceLy) along its catalogue direction, so neighbours sit at distinct
+    // points of interest at their true relative ranges — the closest stars are
+    // closest, and the stems land on the plane at meaningful spots. LY_TO_WU is
+    // tuned so the ~4-12 ly neighbours span ~1000-2700 WU (inside the
+    // heliopause→sector frustum). Home (ε Eridani) sits at the origin.
+    const LY_TO_WU = 220;
+    const dir = new Vector3(sCfg.x, sCfg.y, sCfg.z);
+    if (dir.lengthSq() > 1e-6) {
+      marker.position.copy(dir.normalize().multiplyScalar(sCfg.distanceLy * LY_TO_WU));
+    } else {
+      marker.position.set(0, 0, 0);
+    }
     // Marker group stays unit-scale; the icon is sized SCREEN-CONSTANT per frame
     // by visibility.ts (updateRegionalMarkers → scaleFixed), fixing the old
     // grow/shrink-with-scene defect (G8) from marker.scale.setScalar(450).

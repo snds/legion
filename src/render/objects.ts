@@ -810,7 +810,7 @@ export function createBobMesh(
 
 export function createSystemMarker(
   name: string, color: number, hasBobs: boolean, isHome: boolean,
-  distLy = 0, planetCount = 0, bobCount = 0,
+  distLy = 0, planetCount = 0, bobCount = 0, explored = false,
 ): Group {
   const group = new Group();
   group.name = `system-${name}`;
@@ -823,19 +823,29 @@ export function createSystemMarker(
   group.userData.distLy = distLy;
   group.userData.planets = planetCount;
   group.userData.bobCount = bobCount;
+  group.userData.explored = explored;
 
-  const shape: IconShape = isHome ? 'star' : (hasBobs ? 'diamond' : 'hex');
-  // NO label/sublabel: regional markers currently share placeholder positions
-  // (DIST 0.0), so now-legible child labels would superimpose into a smear.
-  // The galactic-tier system markers (galaxy.ts) carry their own labels;
-  // regional marker labels return with the marker-positioning + clustering
-  // pass (docs/zoom-overlay-patterns.md Phases 2-3).
+  // Context-driven STYLE: shape + colour communicate the system's status at a
+  // glance, so neighbours read as distinct points of interest rather than a row
+  // of identical glyphs. Colour-by-context (home / your presence / explored /
+  // uncharted); explored systems keep their spectral colour.
+  let shape: IconShape, col: string, sub: string;
+  if (isHome) {
+    shape = 'star'; col = '#ffd479'; sub = `HOME · ${distLy} LY`;
+  } else if (hasBobs) {
+    shape = 'diamond'; col = '#5ad1ff'; sub = `${bobCount} BOB${bobCount === 1 ? '' : 'S'} · ${distLy} LY`;
+  } else if (explored) {
+    shape = 'hex'; col = numToHex(color); sub = `EXPLORED · ${distLy} LY`;
+  } else {
+    shape = 'circle'; col = '#8a97b5'; sub = `UNCHARTED · ${distLy} LY`;
+  }
+
   const icon = createIcon({
     shape,
-    color: numToHex(color),
-    // Every marker gets a colored glow — readable against the warm
-    // galaxy disc backdrop now that the disc is visible at sector tier.
-    glowColor: numToHex(color),
+    color: col,
+    glowColor: col,
+    label: name.toUpperCase(),
+    sublabel: sub,
     outlineWidth: isHome ? 4 : 3,
   });
   icon.userData.isIcon = true; // screen-constant sizing + fade driven by visibility.ts
