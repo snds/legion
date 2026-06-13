@@ -24,6 +24,9 @@ export interface VisualParams {
   vignetteIntensity: number;
   vignetteDropoff: number;
   smaaEnabled: boolean;
+  chromaticAberration: number;  // corner RGB-split offset; 0 = off
+  filmGrainIntensity: number;   // 0 = off
+  backdropIntensity: number;    // Milky Way cube backdrop multiplier; 0 = off
 
   // ── Sun ──
   sunPerlinRes: number;
@@ -119,6 +122,9 @@ const DEFAULTS: VisualParams = {
   vignetteIntensity: 0.4,
   vignetteDropoff: 0.25,
   smaaEnabled: true,
+  chromaticAberration: 0.0025,
+  filmGrainIntensity: 0.035,
+  backdropIntensity: 1.0,
 
   // Sun
   sunPerlinRes: 512,
@@ -203,12 +209,40 @@ const DEFAULTS: VisualParams = {
 
 type Listener = (key: keyof VisualParams, value: number | string | boolean) => void;
 
+// User-facing graphics settings persisted across reloads (the Settings panel
+// writes these). Only this allowlist is saved — the rest of VP is dev-only
+// admin tuning and must always start from DEFAULTS so code changes take effect.
+const PERSIST_KEYS: (keyof VisualParams)[] = [
+  'chromaticAberration', 'filmGrainIntensity', 'backdropIntensity',
+  'bloomStrength', 'vignetteIntensity', 'smaaEnabled', 'visualScale',
+];
+const STORAGE_KEY = 'legion-graphics-settings';
+
 class VisualParamsStore {
   private data: VisualParams;
   private listeners: Listener[] = [];
 
   constructor() {
     this.data = { ...DEFAULTS };
+    // Restore persisted user graphics settings over the defaults.
+    try {
+      const raw = typeof localStorage !== 'undefined' && localStorage.getItem(STORAGE_KEY);
+      if (raw) {
+        const saved = JSON.parse(raw) as Partial<VisualParams>;
+        for (const k of PERSIST_KEYS) {
+          if (saved[k] !== undefined) (this.data[k] as unknown) = saved[k];
+        }
+      }
+    } catch { /* ignore corrupt storage */ }
+  }
+
+  private persist(): void {
+    try {
+      if (typeof localStorage === 'undefined') return;
+      const out: Partial<VisualParams> = {};
+      for (const k of PERSIST_KEYS) (out[k] as unknown) = this.data[k];
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(out));
+    } catch { /* storage full / denied — non-fatal */ }
   }
 
   get<K extends keyof VisualParams>(key: K): VisualParams[K] {
@@ -221,6 +255,7 @@ class VisualParamsStore {
     for (const fn of this.listeners) {
       fn(key, value as number | string | boolean);
     }
+    if (PERSIST_KEYS.includes(key)) this.persist();
   }
 
   subscribe(fn: Listener): () => void {

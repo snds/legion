@@ -7,7 +7,17 @@
 import { PanelManager } from '../panel-manager';
 import { registerPanel } from '../dock';
 import { Theme, FONTS } from '../theme';
-import { VP } from '../../render/visual-params';
+import { VP, type VisualParams } from '../../render/visual-params';
+
+// ── Visual-effect sliders (UI 0–100% → VP value 0..max; 0 = off) ──
+interface FxDef { id: string; label: string; key: keyof VisualParams; max: number; }
+const FX: FxDef[] = [
+  { id: 's-chroma', label: 'Chromatic Aberration', key: 'chromaticAberration', max: 0.006 },
+  { id: 's-grain',  label: 'Film Grain',           key: 'filmGrainIntensity',  max: 0.12 },
+  { id: 's-bloom',  label: 'Bloom',                key: 'bloomStrength',       max: 0.30 },
+  { id: 's-vig',    label: 'Vignette',             key: 'vignetteIntensity',   max: 1.0 },
+  { id: 's-back',   label: 'Milky Way Backdrop',   key: 'backdropIntensity',   max: 2.0 },
+];
 
 // ── Keyboard Shortcuts ───────────────────────────────────────────
 
@@ -68,6 +78,22 @@ function render(area: HTMLElement): void {
   h += `</div>`;
   h += `<div style="font-size:10px;opacity:0.4;margin-top:2px">Scales planets &amp; star visually (not orbits)</div>`;
 
+  // ── Visual Effects (GPU / post-processing) ──
+  h += `<div class="settings-group-title" style="margin-top:16px">VISUAL EFFECTS</div>`;
+  FX.forEach(f => {
+    const pct = Math.round((VP.get(f.key) as number) / f.max * 100);
+    h += `<div class="settings-row" style="display:flex;align-items:center;gap:8px;margin-top:4px">`
+      + `<span style="font-size:10px;opacity:0.65;flex:0 0 96px">${f.label}</span>`
+      + `<input type="range" id="${f.id}" class="settings-range" min="0" max="100" step="1" value="${pct}" data-max="${f.max}" style="flex:1">`
+      + `<span id="${f.id}-val" style="font-size:10px;min-width:30px;text-align:right;opacity:0.6">${pct === 0 ? 'OFF' : pct + '%'}</span>`
+      + `</div>`;
+  });
+  h += `<div class="settings-row" style="display:flex;align-items:center;justify-content:space-between;margin-top:6px">`
+    + `<span style="font-size:10px;opacity:0.65">Anti-aliasing (SMAA)</span>`
+    + `<input type="checkbox" id="s-smaa"${VP.get('smaaEnabled') ? ' checked' : ''}>`
+    + `</div>`;
+  h += `<div style="font-size:10px;opacity:0.4;margin-top:2px">Drag a slider to 0 to disable it. Backdrop = the Milky Way sky glow.</div>`;
+
   // ── Keyboard Reference ──
   h += `<div class="settings-group-title" style="margin-top:16px">KEYBOARD</div>`;
   SHORTCUTS.forEach(([key, desc]) => {
@@ -103,6 +129,20 @@ function render(area: HTMLElement): void {
       if (scaleVal) scaleVal.textContent = `${v}×`;
     };
   }
+
+  // ── Visual-effect sliders → VP (live; persisted by the store) ──
+  FX.forEach(f => {
+    const slider = area.querySelector<HTMLInputElement>('#' + f.id);
+    const val = area.querySelector<HTMLElement>('#' + f.id + '-val');
+    if (!slider) return;
+    slider.oninput = () => {
+      const pct = parseFloat(slider.value);
+      VP.set(f.key, (pct / 100) * f.max);
+      if (val) val.textContent = pct === 0 ? 'OFF' : pct + '%';
+    };
+  });
+  const smaa = area.querySelector<HTMLInputElement>('#s-smaa');
+  if (smaa) smaa.onchange = () => VP.set('smaaEnabled', smaa.checked);
 
   const resetBtn = area.querySelector<HTMLElement>('#s-reset');
   if (resetBtn) {
