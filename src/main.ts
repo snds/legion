@@ -34,7 +34,7 @@ import { bakeGalaxyBackdrop } from './render/galaxy-backdrop';
 import { createAsteroidBelt } from './render/asteroid-belt';
 import {
   createStarMesh, createPlanetMesh, createMoonMesh, createBobMesh,
-  createSystemMarker, createMarkerStem, createOrbitLine, updateSunSystem,
+  createSystemMarker, createCosmicMarker, createMarkerStem, createOrbitLine, updateSunSystem,
   updatePlanetShaders, updateOrbitLineResolution,
 } from './render/objects';
 import { CameraController } from './core/camera';
@@ -82,6 +82,7 @@ import {
   SOL_STAR, SOL_PLANETS, SOL_MOONS,
   createInitialBobs,
 } from './data/star-catalog';
+import { COSMIC_OBJECTS } from './data/cosmic-objects';
 import { applySolEphemeris } from './data/jpl-ephemeris';
 import { GAME_EPOCH_ET } from './core/time';
 import { PlanetState, Identity, EntityType, BobState, Personality, StarSystem } from './core/components';
@@ -635,6 +636,19 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol'): WorldExtras {
 
     layers.regional.add(marker);
     registerRenderObject(renderObjectMap, eid, marker);
+  }
+
+  // ── Cosmic Objects (nebulae / megastructures — placeholder) ──
+  // Same distance-accurate placement + marker pipeline as the star systems;
+  // each carries its own glyph/colour/label and an out-of-plane stem.
+  for (const cfg of COSMIC_OBJECTS) {
+    const marker = createCosmicMarker(cfg);
+    const dir = new Vector3(cfg.x, cfg.y, cfg.z);
+    if (dir.lengthSq() > 1e-6) {
+      marker.position.copy(dir.normalize().multiplyScalar(cfg.distLy * 220)); // LY_TO_WU (matches systems)
+    }
+    marker.add(createMarkerStem(marker.position.y, cfg.color));
+    layers.regional.add(marker);
   }
 
   buildStarGraph(systemEids, 15);
