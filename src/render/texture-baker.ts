@@ -301,14 +301,19 @@ const RECIPE_GLSL: Record<PlanetRecipeId, string> = {
     // 1D band field: zonal turbulence perturbs the latitude lookup, seeded
     // varying widths, smoothstep belt/zone edges, per-band value jitter.
     float bandField(float lat01, vec3 dir){
-      float turb = fbm(vec3(dir.x*0.6, dir.y*0.6, dir.z*3.0), 5, 2.1, 0.55);
-      float l = lat01 + turb * 0.035;
+      // Anisotropic turbulence: high frequency in latitude (dir.z), low in
+      // longitude (dir.x/y) ⇒ perturbations smear into ZONAL wisps. A finer
+      // second octave adds flow-aligned filaments at the band edges rather
+      // than isotropic fBm mush (docs §2.1 turbulence / Phase 5).
+      float turb = fbm(vec3(dir.x*0.45, dir.y*0.45, dir.z*3.2), 5, 2.1, 0.55);
+      float fil  = fbm(vec3(dir.x*0.30, dir.y*0.30, dir.z*9.0), 3, 2.0, 0.5);
+      float l = lat01 + turb * 0.038 + fil * 0.013;
       float phase = l * uBandCount + 0.55 * sn(vec3(0.0, 0.0, l*3.0));
       float tri = abs(fract(phase) - 0.5) * 2.0;          // triangle 0..1..0
       float band = smoothstep(0.22, 0.78, tri);
       float bandId = floor(phase);
       band += sn(vec3(bandId*1.7, 0.0, 0.0)) * 0.12;       // per-band value jitter
-      band += fbm(vec3(dir.x*0.8, dir.y*0.8, dir.z*8.0), 4, 2.0, 0.5) * 0.06; // deck detail
+      band += fil * 0.05;                                  // filament deck detail
       return clamp(band, 0.0, 1.0);
     }
 

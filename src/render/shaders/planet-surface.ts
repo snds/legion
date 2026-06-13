@@ -119,10 +119,20 @@ export const planetSurfaceFragmentShader = /* glsl */ `
     vec3 L = normalize(uSunDir);
     vec3 V = normalize(vViewDir);
 
-    // Base color — from texture or uniform
+    // Base color — from texture or uniform. Gas/ice giants (uLimbDarken)
+    // get DIFFERENTIAL ROTATION: each latitude's zonal jet drifts the sample
+    // longitude at its own rate (equatorial superrotation + alternating
+    // belts), so bands visibly shear past each other. Pure phase shift of the
+    // bounded wall clock ⇒ zero smearing at any time-warp; fract() wraps the
+    // seam seamlessly. (docs §2.1 cloud plan / §3.3 — the "ships first" step.)
+    vec2 texUv = vUv;
+    if (uLimbDarken > 0.5) {
+      float jet = 0.35 + 0.55 * cos(vUv.y * 6.2831853 * 2.5); // alternating jet profile
+      texUv.x = fract(texUv.x + uTime * 0.0024 * jet);
+    }
     vec3 baseColor = uColor;
     if (uHasTexture) {
-      baseColor = texture2D(uDayTexture, vUv).rgb;
+      baseColor = texture2D(uDayTexture, texUv).rgb;
     }
 
     // Lambert diffuse with smooth terminator
