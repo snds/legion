@@ -18,6 +18,7 @@ const ZOOM_STEP_FAST = 0.04;      // Ctrl/Alt+wheel — coarse tier jumps
 const PHI_MIN = 0.15;             // prevent flipping over top
 const PHI_MAX = Math.PI - 0.15;   // prevent flipping under bottom
 const DRAG_THRESHOLD = 4;         // pixels before drag registers
+const PINCH_ZOOM_K = 0.25;        // pinch: zoom per ln(finger-distance ratio)
 
 export class InputManager {
   private canvas: HTMLElement;
@@ -96,6 +97,80 @@ export class InputManager {
 
     // Context menu prevention
     this.canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+    // ── Touch (iPhone/iPad): 1-finger drag = orbit, 2-finger pinch = zoom ──
+    // Additive layer — the mouse paths above are untouched. preventDefault()
+    // in touchstart stops iOS page scroll/zoom AND suppresses the synthetic
+    // mouse events Safari would otherwise fire, so the two layers never
+    // double-drive the camera. Tap/double-tap selection lives in raycast.ts.
+    const touchDist = (a: Touch, b: Touch): number =>
+      Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+    let pinchDist0 = -1;
+    let pinchZoom0 = 0;
+
+    this.canvas.addEventListener('touchstart', (e: TouchEvent) => {
+      e.preventDefault();
+      if (e.touches.length === 1) {
+        const t = e.touches[0];
+        this.isDragging = true;
+        this.dragButton = 0;
+        this.lastMouse = { x: t.clientX, y: t.clientY };
+        this.dragStart = { x: t.clientX, y: t.clientY };
+        Game.data.dragMoved = false;
+        Game.data.dragButton = 0;
+      } else if (e.touches.length >= 2) {
+        // Entering pinch: stop orbiting, record the baseline.
+        this.isDragging = false;
+        pinchDist0 = touchDist(e.touches[0], e.touches[1]);
+        pinchZoom0 = Game.data.targetZoom;
+        Game.data.dragMoved = true; // a pinch is never a tap
+      }
+    }, { passive: false });
+
+    this.canvas.addEventListener('touchmove', (e: TouchEvent) => {
+      e.preventDefault();
+      if (e.touches.length === 1 && this.isDragging) {
+        const t = e.touches[0];
+        const dx = t.clientX - this.lastMouse.x;
+        const dy = t.clientY - this.lastMouse.y;
+        this.lastMouse = { x: t.clientX, y: t.clientY };
+
+        const totalDx = t.clientX - this.dragStart.x;
+        const totalDy = t.clientY - this.dragStart.y;
+        if (Math.abs(totalDx) + Math.abs(totalDy) > DRAG_THRESHOLD) {
+          Game.data.dragMoved = true;
+        }
+
+        Game.data.targetTheta -= dx * ORBIT_SPEED;
+        Game.data.targetPhi -= dy * ORBIT_SPEED;
+        Game.data.targetPhi = Math.max(PHI_MIN, Math.min(PHI_MAX, Game.data.targetPhi));
+      } else if (e.touches.length >= 2 && pinchDist0 > 0) {
+        // Pinch zoom: log of the finger-distance ratio maps onto the 0..1
+        // zoom axis — doubling the spread zooms in ~0.17 (≈ a tier and a
+        // half), symmetric both directions, position-independent.
+        const d = touchDist(e.touches[0], e.touches[1]);
+        const delta = Math.log(d / pinchDist0) * PINCH_ZOOM_K;
+        Game.data.targetZoom = Math.max(0, Math.min(1, pinchZoom0 - delta));
+      }
+    }, { passive: false });
+
+    const endTouch = (e: TouchEvent): void => {
+      if (e.touches.length === 0) {
+        this.isDragging = false;
+        this.dragButton = -1;
+        Game.data.dragButton = -1;
+        pinchDist0 = -1;
+      } else if (e.touches.length === 1) {
+        // Pinch → single finger: re-anchor the orbit so the camera doesn't jump.
+        const t = e.touches[0];
+        pinchDist0 = -1;
+        this.isDragging = true;
+        this.lastMouse = { x: t.clientX, y: t.clientY };
+        this.dragStart = { x: t.clientX, y: t.clientY };
+      }
+    };
+    this.canvas.addEventListener('touchend', endTouch);
+    this.canvas.addEventListener('touchcancel', endTouch);
   }
 
   // ── Key Actions ──
