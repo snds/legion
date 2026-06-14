@@ -22,6 +22,7 @@ let elTimeCompression: HTMLElement | null = null;
 let elGameClock: HTMLElement | null = null;
 let elBobCount: HTMLElement | null = null;
 let elFleetCount: HTMLElement | null = null;
+let elViewScale: HTMLElement | null = null;
 let lastDomain: DomainName | null = null;
 
 // ── Formatting ───────────────────────────────────────────────────
@@ -57,6 +58,26 @@ function fmtTC(tc: number): string {
 /** Show integer when whole, one decimal otherwise. */
 function fmtNum(n: number): string {
   return n % 1 < 0.05 ? Math.round(n).toString() : n.toFixed(1);
+}
+
+// View-radius readout — the real distance the camera sits from the system
+// centre, so the player understands the scale they are viewing (Solar-System-
+// Scope "DISTANCE …" cue). The zoom tiers use mutually-INCONSISTENT compressed
+// WU scales, so the conversion is per-regime, switching unit at the heliopause
+// (the real edge of the solar system: AU inside, light-years beyond):
+//   • system tiers   1 AU  = 10  WU   (planets placed at sma·10)
+//   • stellar tiers  1 ly  = 220 WU   (star map placed at distLy·220)
+//   • galactic       1 kpc = 333 WU   (KPC_WU)
+const WU_PER_AU = 10, WU_PER_LY = 220, WU_PER_KPC = 333;
+function fmtScale(v: number): string {
+  if (v >= 100) return Math.round(v).toString();
+  if (v >= 10) return v.toFixed(0);
+  return v.toFixed(1);
+}
+function viewScale(domain: DomainName, camDist: number): string {
+  if (domain === 'galaxy') return `${fmtScale(camDist / WU_PER_KPC)} kpc`;
+  if (domain === 'sector' || domain === 'arm') return `${fmtScale(camDist / WU_PER_LY)} ly`;
+  return `${fmtScale(camDist / WU_PER_AU)} AU`; // surface … heliopause
 }
 
 /**
@@ -109,6 +130,22 @@ export function initHUD(): void {
   elGameClock = document.getElementById('game-clock');
   elBobCount = document.getElementById('bob-count');
   elFleetCount = document.getElementById('fleet-count');
+
+  // View-radius readout — created here (no markup dependency), pinned top-centre
+  // just under the date. Updated every frame in updateHUD().
+  if (typeof document !== 'undefined' && !document.getElementById('view-scale')) {
+    elViewScale = document.createElement('div');
+    elViewScale.id = 'view-scale';
+    elViewScale.style.cssText = [
+      'position:fixed', 'top:74px', 'left:50%', 'transform:translateX(-50%)',
+      'font-family:ui-monospace,Menlo,monospace', 'font-size:11px',
+      'letter-spacing:2px', 'color:rgba(170,190,230,0.55)',
+      'pointer-events:none', 'z-index:40', 'white-space:nowrap',
+    ].join(';');
+    document.body.appendChild(elViewScale);
+  } else {
+    elViewScale = document.getElementById('view-scale');
+  }
 }
 
 // ── Per-Frame Update ─────────────────────────────────────────────
@@ -144,4 +181,7 @@ export function updateHUD(): void {
   const status = getDomainStatus(domain);
   if (elBobCount) elBobCount.textContent = status.bobLabel;
   if (elFleetCount) elFleetCount.textContent = status.fleetLabel;
+
+  // View-radius readout — every frame (camDist changes continuously).
+  if (elViewScale) elViewScale.textContent = `◎ ${viewScale(domain, data.camDist)}`;
 }
