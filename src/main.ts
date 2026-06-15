@@ -66,6 +66,7 @@ import { initGalaxyLabPanel } from './ui/galaxy-lab-panel';
 import { initRosterPanel } from './ui/panels/roster';
 import { SelectionPanels } from './ui/panels/selection';
 import { initVisibility, updateVisibility } from './render/visibility';
+import { createReferenceRing, updateReferenceRing } from './render/reference-ring';
 import {
   createStationMesh, createCometMesh, createOortCloud,
   createEclipticGrid,
@@ -419,6 +420,9 @@ async function boot(): Promise<void> {
     // 8d. Layer visibility per zoom tier (+ screen-space label declutter)
     updateVisibility(camera);
 
+    // 8d-i. Reference scale ring (labelled radius on the plane)
+    updateReferenceRing(Game.data.zoomDomain, Game.data.camDist);
+
     // 8d-bis. Sky crossfade (Phase 4): baked-cube intensity fades OUT across
     // camDist 2000→3000 WU exactly as the live volume's uOpacity fades IN
     // (updateGalaxyLOD) — two representations of the same medium handing off,
@@ -679,6 +683,9 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol'): WorldExtras {
   // ── Ecliptic Grid (visible at system+, strategic overlay) ──
   const eclipticGrid = createEclipticGrid();
   scene.add(eclipticGrid);
+
+  // ── Reference Ring (labelled scale ring on the plane) ──
+  scene.add(createReferenceRing());
 
   // ── Galaxy (visible at arm/galaxy tiers) ──
   const galaxyGroup = createGalaxy();
