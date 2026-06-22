@@ -82,7 +82,10 @@ export interface VisualParams {
   asteroidMaxSat: number;
 
   // ── Scale & Zoom ──
-  visualScale: number;
+  // visualInflation: max visual body inflation (1 = always true scale). Reached
+  // at outer-system framing; bodies render 1:1 when close. transitionZone*: the
+  // camDist ramp window in AU (Inner ≤ → 1:1, Outer ≥ → full inflation).
+  visualInflation: number;
   transitionZoneInner: number;
   transitionZoneOuter: number;
 
@@ -182,10 +185,12 @@ const DEFAULTS: VisualParams = {
   asteroidMinSat: 0.18,
   asteroidMaxSat: 0.40,
 
-  // Scale & Zoom
-  visualScale: 1.5,
-  transitionZoneInner: 100,
-  transitionZoneOuter: 140,
+  // Scale & Zoom — inflate from 1:1 (close) to max by ~the Oort/outer-system
+  // seam. Ramp camDist window: 20 AU (200 WU, end of inner-system) → 100 AU
+  // (1000 WU, outer-system/Oort). Max default 1.25× (Sean's decision 2).
+  visualInflation: 1.25,
+  transitionZoneInner: 20,
+  transitionZoneOuter: 100,
 
   // Lens Flare
   lensFlareEnabled: true,
@@ -216,7 +221,7 @@ type Listener = (key: keyof VisualParams, value: number | string | boolean) => v
 // admin tuning and must always start from DEFAULTS so code changes take effect.
 const PERSIST_KEYS: (keyof VisualParams)[] = [
   'chromaticAberration', 'filmGrainIntensity', 'backdropIntensity',
-  'bloomStrength', 'vignetteIntensity', 'smaaEnabled', 'visualScale',
+  'bloomStrength', 'vignetteIntensity', 'smaaEnabled', 'visualInflation',
   'photographicSky',
 ];
 const STORAGE_KEY = 'legion-graphics-settings';

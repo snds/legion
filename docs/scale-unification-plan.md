@@ -43,7 +43,10 @@ galaxy-tier disc live-re-rooted vs baked backdrop.
 |---|---|---|---|
 | 0 | ✅ **shipped** (PR #61) — Collapse all scale constants into `src/core/metrics.ts` (derives the *current* values — byte-identical) | very low | none |
 | 1 | ✅ **shipped** — float64 `galPos` store (`src/data/curated-systems.ts`, `SOL_GAL_PC`); curated systems re-pinned to **real heliocentric pc** from the 25-pc HYG catalogue; **regional tier** placed from real geometry; star-graph link range migrated to WU (`NAV_LINK_WU`). Galactic tier (`GAL_SYSTEMS`/`HOME_POS`) merge **deferred to Phase 2** (moving frozen `HOME_POS` shifts the whole galaxy frame). | medium | yes (decision 1) |
-| 2 | Frame broker (scale-manager becomes it) + per-frame floating origin; camera-relative shaders; new visual-scale model (decision 2) | high | none (jitter gone) + scale UI |
+| 2 | Frame broker + floating origin + galactic merge — **decomposed** (see below) into 2a/2b/2c after the architecture sweep | high | per sub-slice |
+| 2a | ✅ **shipped** — visual-inflation re-model (decision 2): `getEffectiveScale` inverted to **1:1 close → ~1.25× outer-system/Oort**, configurable max + ramp window (`visualInflation` VP key, settings UI), dead `isInSolarSystem` removed | low | yes (scale UI) |
+| 2b | Frame broker + per-frame floating origin, **behaviorally neutral**: float64-pc camera anchor, camera-relative re-root of layer groups, disc-volume AABB/origin → per-frame uniforms, camera-velocity from f64 delta, focus/flight/selection on the f64 store. Current layout/scales preserved | high | none (jitter gone) |
+| 2c | Galactic-tier marker merge onto `galPos()` **through the broker** — `GAL_SYSTEMS` deleted, markers from `CURATED_SYSTEMS`; density model **stays frozen in its own 333-WU/kpc frame** (no `HOME_POS` re-derive — that breaks the CI snapshot/GLSL/RIFT_CLOUDS); `getGalaxyOffset`'s 3 consumers move to the broker atomically | high | real galactic positions |
 | 3 | Re-derive `getCamDist` from real extents; tiers → labels | medium | zoom feel |
 | 4 | Depth partitioning; drop `logarithmicDepthBuffer` | med-high | perf |
 | 5 | Sector tiling + procedural fill keyed off the float64 frame (decision 3) | medium | new far systems |

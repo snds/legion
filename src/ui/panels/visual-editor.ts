@@ -167,9 +167,9 @@ const CATEGORIES: CategoryDef[] = [
     title: 'SCALE & ZOOM',
     collapsed: true,
     controls: [
-      { type: 'slider', key: 'visualScale', label: 'Visual Scale', min: 1, max: 8, step: 0.25 },
-      { type: 'slider', key: 'transitionZoneInner', label: 'Transition Inner (AU)', min: 80, max: 130, step: 5 },
-      { type: 'slider', key: 'transitionZoneOuter', label: 'Transition Outer (AU)', min: 110, max: 160, step: 5 },
+      { type: 'slider', key: 'visualInflation', label: 'Visual Inflation (max)', min: 1, max: 2, step: 0.05 },
+      { type: 'slider', key: 'transitionZoneInner', label: 'Ramp Start (AU, ≤→1:1)', min: 5, max: 60, step: 5 },
+      { type: 'slider', key: 'transitionZoneOuter', label: 'Ramp Full (AU, ≥→max)', min: 60, max: 160, step: 5 },
     ],
   },
   {
