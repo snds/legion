@@ -9,27 +9,30 @@
 
 import type { SystemConfig, PlanetConfig, BobConfig, StarConfig, MoonConfig } from '../core/world';
 import { PlanetType, ExplorationStatus, BobFocus, BobAutonomy } from '../core/components';
+import { CURATED_SYSTEMS, regionalScenePos, distanceLy } from './curated-systems';
 
 // ── Star Systems ─────────────────────────────────────────────────
-
-export const STAR_SYSTEMS: SystemConfig[] = [
-  { name: 'Epsilon Eridani', x: 0, y: 0, z: 0,      distanceLy: 10.5, color: 0xffcc44, planetCount: 7, bobCount: 3, explored: true,  hasBobs: true,  isHome: true },
-  { name: 'Tau Ceti',        x: 8, y: -1, z: 5,      distanceLy: 11.9, color: 0xffd700, planetCount: 5, bobCount: 1, explored: true,  hasBobs: true,  isHome: false },
-  { name: 'Lalande 21185',   x: -3, y: 4, z: -8,     distanceLy: 8.3,  color: 0xff6644, planetCount: 2, bobCount: 0, explored: true,  hasBobs: false, isHome: false },
-  { name: 'Sol',             x: -10, y: 0, z: 3,      distanceLy: 10.5, color: 0xfff4e0, planetCount: 8, bobCount: 0, explored: false, hasBobs: false, isHome: false },
-  { name: 'Alpha Centauri',  x: -6, y: 2, z: -4,     distanceLy: 4.4,  color: 0xfff8cc, planetCount: 3, bobCount: 0, explored: false, hasBobs: false, isHome: false },
-  { name: "Barnard's Star",  x: 5, y: -3, z: -6,     distanceLy: 6.0,  color: 0xff4422, planetCount: 1, bobCount: 0, explored: false, hasBobs: false, isHome: false },
-  { name: 'Wolf 359',        x: -7, y: 5, z: 3,      distanceLy: 7.9,  color: 0xff3322, planetCount: 0, bobCount: 0, explored: false, hasBobs: false, isHome: false },
-  { name: 'Sirius',          x: 4, y: 6, z: -9,      distanceLy: 8.6,  color: 0xaaccff, planetCount: 0, bobCount: 0, explored: false, hasBobs: false, isHome: false },
-  { name: 'Ross 154',        x: -9, y: -4, z: -5,    distanceLy: 9.7,  color: 0xff5533, planetCount: 1, bobCount: 0, explored: false, hasBobs: false, isHome: false },
-  { name: 'Ross 248',        x: 7, y: 8, z: 2,       distanceLy: 10.3, color: 0xff4433, planetCount: 0, bobCount: 0, explored: false, hasBobs: false, isHome: false },
-  { name: 'Luyten 726-8',    x: -4, y: -7, z: 6,     distanceLy: 8.7,  color: 0xff5544, planetCount: 0, bobCount: 0, explored: false, hasBobs: false, isHome: false },
-  { name: '61 Cygni',        x: 10, y: 3, z: -7,     distanceLy: 11.4, color: 0xffaa44, planetCount: 2, bobCount: 0, explored: false, hasBobs: false, isHome: false },
-  { name: 'Procyon',         x: -8, y: -6, z: -8,    distanceLy: 11.5, color: 0xfff8dd, planetCount: 1, bobCount: 0, explored: false, hasBobs: false, isHome: false },
-  { name: 'Epsilon Indi',    x: 6, y: -8, z: 4,      distanceLy: 11.8, color: 0xffbb44, planetCount: 3, bobCount: 0, explored: false, hasBobs: false, isHome: false },
-  { name: 'Groombridge 34',  x: -5, y: 9, z: -3,     distanceLy: 11.6, color: 0xff6644, planetCount: 1, bobCount: 0, explored: false, hasBobs: false, isHome: false },
-  { name: 'YZ Ceti',         x: 3, y: -9, z: -7,     distanceLy: 12.1, color: 0xff3333, planetCount: 3, bobCount: 0, explored: false, hasBobs: false, isHome: false },
-];
+//
+// Derived from the canonical CURATED_SYSTEMS record (curated-systems.ts).
+// x/y/z are now REAL regional scene-WU coordinates — the system's true
+// heliocentric offset from home (ε Eridani), at the legacy regional scale —
+// NOT the prior fictional ±10 direction cube. createSystemEntity stores these
+// into Position (so the star-graph and render-sync read the same real
+// geometry) and main.ts places each marker at exactly this point.
+export const STAR_SYSTEMS: SystemConfig[] = CURATED_SYSTEMS.map((s) => {
+  const p = regionalScenePos(s);
+  return {
+    name: s.name,
+    x: p.x, y: p.y, z: p.z,
+    distanceLy: Math.round(distanceLy(s) * 10) / 10,
+    color: s.color,
+    planetCount: s.planetCount,
+    bobCount: s.bobCount,
+    explored: s.explored,
+    hasBobs: s.hasBobs,
+    isHome: s.isHome,
+  };
+});
 
 // ── Epsilon Eridani Planets ──────────────────────────────────────
 

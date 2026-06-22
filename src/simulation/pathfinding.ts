@@ -11,12 +11,21 @@ import createGraph from 'ngraph.graph';
 import path from 'ngraph.path';
 import { Position, StarSystem, Identity } from '../core/components';
 import { Strings } from '../core/world';
+import { LY_TO_WU_REGIONAL } from '../core/metrics';
 import { globalBoard } from './ai/blackboard';
 
 // ── Graph Instance ───────────────────────────────────────────────
 
+// Navigable jump range, WORLD UNITS in the regional scene frame. Position now
+// holds real regional scene-WU coordinates (scale-unification Phase 1), so the
+// edge threshold must be a WU distance, NOT the old fictional ±10-cube "15".
+// 14 ly is the chosen range: the curated neighbourhood's minimum spanning tree
+// has a 9.3 ly longest edge, so 14 ly keeps the graph connected with margin and
+// yields ~69 edges — matching the prior graph's connectivity density.
+export const NAV_LINK_WU = 14 * LY_TO_WU_REGIONAL; // ≈ 3080 WU
+
 export interface StarEdge {
-  distance: number;        // light years
+  distance: number;        // world units (regional scene frame); routing cost
   danger: number;          // 0-1 threat level
   status: 'open' | 'blockaded' | 'contested';
 }
@@ -30,11 +39,12 @@ const graph = createGraph<{ eid: number; x: number; y: number; z: number }, Star
  * Call once during init and whenever systems are discovered.
  *
  * @param systemEids - Array of star system entity IDs
- * @param maxEdgeDistance - Maximum distance (LY) for edge connections
+ * @param maxEdgeDistance - Maximum distance for edge connections, WORLD UNITS
+ *   (regional scene frame). Defaults to NAV_LINK_WU (14 ly).
  */
 export function buildStarGraph(
   systemEids: number[],
-  maxEdgeDistance = 15,
+  maxEdgeDistance = NAV_LINK_WU,
 ): void {
   graph.clear();
 
@@ -79,7 +89,7 @@ export function buildStarGraph(
  */
 export function addSystemToGraph(
   eid: number,
-  maxEdgeDistance = 15,
+  maxEdgeDistance = NAV_LINK_WU,
 ): void {
   const x = Position.x[eid];
   const y = Position.y[eid];
