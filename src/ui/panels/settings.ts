@@ -68,15 +68,15 @@ function render(area: HTMLElement): void {
     + `<div class="settings-preview-body">The quick brown fox jumps over the lazy dog. 0123456789</div>`
     + `</div>`;
 
-  // ── Visual Scale ──
-  h += `<div class="settings-group-title" style="margin-top:16px">VISUAL SCALE</div>`;
+  // ── Visual Inflation ──
+  h += `<div class="settings-group-title" style="margin-top:16px">VISUAL INFLATION</div>`;
   h += `<div class="settings-row" style="display:flex;align-items:center;gap:8px">`;
   h += `<span style="font-size:11px;opacity:0.6">1×</span>`;
-  h += `<input type="range" id="s-scale" class="settings-range" min="1" max="8" step="0.5" value="${VP.get('visualScale')}">`;
-  h += `<span style="font-size:11px;opacity:0.6">8×</span>`;
-  h += `<span id="s-scale-val" style="font-size:11px;min-width:28px;text-align:right">${VP.get('visualScale')}×</span>`;
+  h += `<input type="range" id="s-scale" class="settings-range" min="1" max="2" step="0.05" value="${VP.get('visualInflation')}">`;
+  h += `<span style="font-size:11px;opacity:0.6">2×</span>`;
+  h += `<span id="s-scale-val" style="font-size:11px;min-width:34px;text-align:right">${VP.get('visualInflation')}×</span>`;
   h += `</div>`;
-  h += `<div style="font-size:10px;opacity:0.4;margin-top:2px">Scales planets &amp; star visually (not orbits)</div>`;
+  h += `<div style="font-size:10px;opacity:0.4;margin-top:2px">Inflates planets &amp; star as you zoom out for legibility (1:1 up close); orbits unchanged</div>`;
 
   // ── Visual Effects (GPU / post-processing) ──
   h += `<div class="settings-group-title" style="margin-top:16px">VISUAL EFFECTS</div>`;
@@ -129,7 +129,7 @@ function render(area: HTMLElement): void {
   if (scaleSlider) {
     scaleSlider.oninput = () => {
       const v = parseFloat(scaleSlider.value);
-      VP.set('visualScale', v);
+      VP.set('visualInflation', v);
       if (scaleVal) scaleVal.textContent = `${v}×`;
     };
   }
