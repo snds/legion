@@ -17,6 +17,10 @@
 // ═══════════════════════════════════════════════════════════════════
 
 import { asset } from '../core/assets';
+import {
+  generateSystem, parseSpectral, classifyByRadius, type GenSystem,
+} from './system-gen';
+import { realPlanetsFor } from './exoplanets';
 
 export interface CatalogStar {
   name: string;    // proper name, else Bayer/Flamsteed, else a catalogue designation
@@ -57,4 +61,32 @@ export function loadStarSystems(): Promise<CatalogStar[]> {
 /** The loaded catalogue (empty until loadStarSystems() resolves). */
 export function getStarSystems(): readonly CatalogStar[] {
   return catalog ?? [];
+}
+
+export interface ResolvedSystem extends GenSystem {
+  real: boolean; // true → planets are real (NASA Exoplanet Archive), false → generated
+}
+
+/** Resolve a catalogue star's system: REAL planets from the archive where the
+ *  host matches (with a known semi-major axis), otherwise the deterministic
+ *  generated set. Requires loadExoplanets() to have resolved for the real path;
+ *  always safe (falls back to generation). */
+export function resolveSystem(star: CatalogStar): ResolvedSystem {
+  const real = realPlanetsFor(star.name, star.desig);
+  const usable = real?.filter((p) => p.smax != null);
+  if (usable && usable.length) {
+    const sp = parseSpectral(star.spect);
+    const hzAu = +Math.sqrt(Math.max(sp.lumSun, 1e-4)).toPrecision(3);
+    const planets = usable
+      .slice()
+      .sort((a, b) => (a.smax as number) - (b.smax as number))
+      .map((p) => {
+        const kind = classifyByRadius(p.rade, p.masse);
+        const au = p.smax as number;
+        const inHZ = au >= hzAu * 0.75 && au <= hzAu * 1.5 && (kind === 'rocky' || kind === 'super-earth');
+        return { kind, au: +au.toPrecision(3), inHZ };
+      });
+    return { star: sp, planets, hzAu, habitableCount: planets.filter((p) => p.inHZ).length, real: true };
+  }
+  return { ...generateSystem(star.name || star.desig, star.spect), real: false };
 }

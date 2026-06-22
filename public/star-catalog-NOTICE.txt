@@ -6,3 +6,7 @@ coordinates, packed as f32 [x,y,z(pc), mag, B−V] per star (little-endian).
 star-systems-v1.json: the navigable nearby catalogue, all stars within
 25 pc (no magnitude cut), with proper name / catalogue designations
 (Gliese/HD/HIP) / spectral type / constellation / distance / position.
+
+exoplanets-v1.json: real confirmed planets for host stars within 30 pc from the
+NASA Exoplanet Archive (https://exoplanetarchive.ipac.caltech.edu), operated by
+Caltech/IPAC under contract with NASA. US Government work — public domain.
