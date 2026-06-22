@@ -100,6 +100,20 @@ export function parseSpectral(spect: string): StellarParams {
   };
 }
 
+/** Classify a planet by measured radius (Earth radii) — the standard exoplanet
+ *  size bins. Used to map real NASA Exoplanet Archive planets into the same
+ *  taxonomy as the generated ones. Falls back to a crude mass→radius if radius
+ *  is unknown, else a sub-Neptune default. */
+export function classifyByRadius(rade: number | null, masse: number | null): PlanetKind {
+  const r = rade ?? (masse != null ? Math.cbrt(masse) : null);
+  if (r == null) return 'neptune';
+  if (r < 1.5) return 'rocky';
+  if (r < 2.5) return 'super-earth';
+  if (r < 6) return 'neptune';
+  if (r < 10) return 'ice-giant';
+  return 'gas-giant';
+}
+
 /** Deterministically generate a system for a star, keyed by a stable id
  *  (its name/designation) + its spectral type. */
 export function generateSystem(idKey: string, spect: string): GenSystem {
