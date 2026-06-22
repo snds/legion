@@ -1,5 +1,8 @@
-star-catalog-v1.bin is derived from the HYG Database v3.8
-(https://github.com/astronexus/HYG-Database) by David Nash / astronexus,
-licensed CC BY-SA 4.0 (https://creativecommons.org/licenses/by-sa/4.0/).
-Filtered to apparent magnitude ≤ 7.5, rotated to galactic coordinates,
-packed as f32 [x,y,z(pc), mag, B−V] per star (little-endian).
+star-catalog-v1.bin and star-systems-v1.json are derived from the HYG
+Database v3.8 (https://github.com/astronexus/HYG-Database) by David Nash /
+astronexus, licensed CC BY-SA 4.0 (https://creativecommons.org/licenses/by-sa/4.0/).
+star-catalog-v1.bin: apparent magnitude ≤ 7.5, rotated to galactic
+coordinates, packed as f32 [x,y,z(pc), mag, B−V] per star (little-endian).
+star-systems-v1.json: the navigable nearby catalogue, all stars within
+25 pc (no magnitude cut), with proper name / catalogue designations
+(Gliese/HD/HIP) / spectral type / constellation / distance / position.
