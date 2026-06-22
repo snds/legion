@@ -10,6 +10,8 @@ import {
   MathUtils,
 } from 'three';
 
+import { AU_TO_WU } from '../core/metrics';
+
 // Heliopause shell radius in world units (120 AU × AU_SCALE 10). Exported so
 // the per-frame visibility gate (visibility.ts) and the geometry can never
 // drift apart — the orb is shown ONLY when the camera is outside this radius.
@@ -76,7 +78,7 @@ export function createBackgroundStars(count: number): Points {
 export function createDebrisDisk(
   innerAU: number, outerAU: number, count: number,
 ): Points {
-  const AU_SCALE = 10;
+  const AU_SCALE = AU_TO_WU;
   const positions = new Float32Array(count * 3);
   const colors = new Float32Array(count * 3);
 

@@ -11,6 +11,7 @@
 // ═══════════════════════════════════════════════════════════════════
 
 import { Game, type DomainName } from '../core/state';
+import { AU_TO_WU as WU_PER_AU, LY_TO_WU_REGIONAL as WU_PER_LY, KPC_TO_WU as WU_PER_KPC } from '../core/metrics';
 import { formatGameClock } from '../core/time';
 
 // ── DOM References ───────────────────────────────────────────────
@@ -68,7 +69,7 @@ function fmtNum(n: number): string {
 //   • system tiers   1 AU  = 10  WU   (planets placed at sma·10)
 //   • stellar tiers  1 ly  = 220 WU   (star map placed at distLy·220)
 //   • galactic       1 kpc = 333 WU   (KPC_WU)
-const WU_PER_AU = 10, WU_PER_LY = 220, WU_PER_KPC = 333;
+// WU_PER_AU / WU_PER_LY / WU_PER_KPC are imported from metrics.ts (single source).
 function fmtScale(v: number): string {
   if (v >= 100) return Math.round(v).toString();
   if (v >= 10) return v.toFixed(0);

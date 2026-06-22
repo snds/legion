@@ -84,6 +84,7 @@ import {
   createInitialBobs,
 } from './data/star-catalog';
 import { COSMIC_OBJECTS } from './data/cosmic-objects';
+import { AU_TO_WU, LY_TO_WU_REGIONAL } from './core/metrics';
 import { applySolEphemeris } from './data/jpl-ephemeris';
 import { GAME_EPOCH_ET } from './core/time';
 import { PlanetState, Identity, EntityType, BobState, Personality, StarSystem } from './core/components';
@@ -569,7 +570,7 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol'): WorldExtras {
       const stationMesh = createStationMesh(sCfg);
       const parentPlanet = planets[sCfg.parentIdx];
       if (parentPlanet) {
-        const AU = 10;
+        const AU = AU_TO_WU;
         const angle = sCfg.orbitOffset * Math.PI * 2;
         const r = parentPlanet.sma * AU + 0.5;
         stationMesh.position.set(
@@ -599,7 +600,7 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol'): WorldExtras {
   for (const cCfg of COMET_DATA) {
     const { body, orbLine } = createCometMesh(cCfg);
     // Position comet near perihelion
-    const AU = 10;
+    const AU = AU_TO_WU;
     const periR = cCfg.sma * (1 - cCfg.ecc) * (AU / 100);
     body.position.set(periR, 0, 0);
     layers.local.add(body);
@@ -623,7 +624,7 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol'): WorldExtras {
     // closest, and the stems land on the plane at meaningful spots. LY_TO_WU is
     // tuned so the ~4-12 ly neighbours span ~1000-2700 WU (inside the
     // heliopause→sector frustum). Home (ε Eridani) sits at the origin.
-    const LY_TO_WU = 220;
+    const LY_TO_WU = LY_TO_WU_REGIONAL;
     const dir = new Vector3(sCfg.x, sCfg.y, sCfg.z);
     if (dir.lengthSq() > 1e-6) {
       marker.position.copy(dir.normalize().multiplyScalar(sCfg.distanceLy * LY_TO_WU));
@@ -649,7 +650,7 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol'): WorldExtras {
     const marker = createCosmicMarker(cfg);
     const dir = new Vector3(cfg.x, cfg.y, cfg.z);
     if (dir.lengthSq() > 1e-6) {
-      marker.position.copy(dir.normalize().multiplyScalar(cfg.distLy * 220)); // LY_TO_WU (matches systems)
+      marker.position.copy(dir.normalize().multiplyScalar(cfg.distLy * LY_TO_WU_REGIONAL)); // matches systems
     }
     marker.add(createMarkerStem(marker.position.y, cfg.color));
     layers.regional.add(marker);

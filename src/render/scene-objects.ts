@@ -14,8 +14,7 @@ import {
   EllipseCurve,
 } from 'three';
 import { createIcon } from './icons';
-
-const AU = 10; // world units per AU (same as objects.ts)
+import { AU_TO_WU as AU } from '../core/metrics';
 
 // ── Station Data ─────────────────────────────────────────────────
 

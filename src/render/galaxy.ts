@@ -33,6 +33,7 @@ import {
   BAR_ANGLE as M_BAR_ANGLE, PITCH as M_PITCH, ARM_REF_R as M_ARM_REF_R,
   DISC_RADIUS_WU as M_DISC_RADIUS,
 } from './galaxy-density';
+import { KPC_TO_WU } from '../core/metrics';
 import {
   GALAXY_TUNE, galaxyLabVolumeUniforms, registerVolumeMat, registerNebula,
   clearGalaxyLabTargets, applyGalaxyTune,
@@ -78,7 +79,7 @@ function sampleHaloPopulation(): [number, number, number, number] {
 // ── Scale Constants ──────────────────────────────────────────────
 
 /** World units per kiloparsec. Galaxy radius ~15 kpc → ~5000 WU. */
-export const KPC = 333;
+export const KPC = KPC_TO_WU;
 
 /** Sol's galactic position: 8.3 kpc from center in the galactic plane. */
 export const SOL_GAL_POS = new Vector3(8.3 * KPC, 0, 0);

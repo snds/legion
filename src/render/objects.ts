@@ -21,6 +21,7 @@ import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import { createIcon, createLabel, type IconShape } from './icons';
 import type { CosmicObject } from '../data/cosmic-objects';
+import { AU_TO_WU } from '../core/metrics';
 import { createSunSystem, type SunSystem } from './sun';
 import { planetSurfaceVertexShader, planetSurfaceFragmentShader } from './shaders/planet-surface';
 import { planetAtmosphereVertexShader, planetAtmosphereFragmentShader } from './shaders/planet-atmosphere';
@@ -982,7 +983,7 @@ export interface OrbitLineElements {
 }
 
 export function createOrbitLine(el: OrbitLineElements, opts: OrbitLineOptions = {}): Line2 {
-  const AU_SCALE = 10;
+  const AU_SCALE = AU_TO_WU;
   const a = el.sma * AU_SCALE;
   const b = a * Math.sqrt(1 - el.ecc * el.ecc);
   // Perifocal-plane ellipse with the focus (star) at the local origin.

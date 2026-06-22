@@ -22,7 +22,8 @@
 // ═══════════════════════════════════════════════════════════════════
 
 // ── Geometry ─────────────────────────────────────────────────────
-export const KPC_WU = 333;                       // must equal galaxy.ts KPC (frozen)
+import { KPC_TO_WU } from '../core/metrics';
+export const KPC_WU = KPC_TO_WU;                  // galaxy: 1 kpc = 333 WU (single source: metrics.ts)
 export const DISC_RADIUS_WU = 4995;              // 15 kpc truncation (smooth taper)
 /** Home system (ε Eridani) in galaxy-local WU: SOL_GAL_POS + GAL_SYSTEMS local
  *  offset (ly→WU). Frozen — marker space depends on it. */

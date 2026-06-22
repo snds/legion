@@ -12,8 +12,7 @@ import {
 } from 'three';
 import { asteroidVertexShader, asteroidFragmentShader } from './shaders/asteroid';
 import { VP } from './visual-params';
-
-const AU_SCALE = 10;
+import { AU_TO_WU as AU_SCALE } from '../core/metrics';
 
 // Kirkwood gap resonance radii (AU) — where asteroids are depleted
 // These are Jupiter resonances adapted to a generic asteroid belt
