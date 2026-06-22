@@ -618,19 +618,13 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol'): WorldExtras {
       sCfg.distanceLy, sCfg.planetCount, sCfg.bobCount, sCfg.explored,
     );
 
-    // DISTANCE-ACCURATE local map: place each system at its real distance
-    // (distanceLy) along its catalogue direction, so neighbours sit at distinct
-    // points of interest at their true relative ranges — the closest stars are
-    // closest, and the stems land on the plane at meaningful spots. LY_TO_WU is
-    // tuned so the ~4-12 ly neighbours span ~1000-2700 WU (inside the
-    // heliopause→sector frustum). Home (ε Eridani) sits at the origin.
-    const LY_TO_WU = LY_TO_WU_REGIONAL;
-    const dir = new Vector3(sCfg.x, sCfg.y, sCfg.z);
-    if (dir.lengthSq() > 1e-6) {
-      marker.position.copy(dir.normalize().multiplyScalar(sCfg.distanceLy * LY_TO_WU));
-    } else {
-      marker.position.set(0, 0, 0);
-    }
+    // TRUE-GEOMETRY local map (scale-unification Phase 1): sCfg.x/y/z are real
+    // regional scene-WU coordinates from the canonical CURATED_SYSTEMS record —
+    // each system's actual heliocentric offset from home (ε Eridani at the
+    // origin), re-pinned from the 25-pc HYG catalogue. Place directly; the
+    // entity Position carries the identical value, so the marker, the
+    // render-sync, and the star-graph all agree on real relative ranges.
+    marker.position.set(sCfg.x, sCfg.y, sCfg.z);
     // Marker group stays unit-scale; the icon is sized SCREEN-CONSTANT per frame
     // by visibility.ts (updateRegionalMarkers → scaleFixed), fixing the old
     // grow/shrink-with-scene defect (G8) from marker.scale.setScalar(450).
@@ -656,7 +650,10 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol'): WorldExtras {
     layers.regional.add(marker);
   }
 
-  buildStarGraph(systemEids, 15);
+  // Link range defaults to NAV_LINK_WU (14 ly in the regional WU frame) — the
+  // entity Positions are now real regional scene-WU coords, so the old fictional
+  // "15"-unit threshold would yield ZERO edges (closest pair is ~352 WU apart).
+  buildStarGraph(systemEids);
 
   // ── Background ──
   // (Legacy createMilkyWay band deleted: the system-tier Milky Way is now the
@@ -697,8 +694,10 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol'): WorldExtras {
   // Sits at the home origin in scene space; visibility system shows/hides
   // it per zoom domain.
   // Sector orb radius matches the regional-system spread — encloses the
-  // ~16 nearest navigable systems comfortably.
-  const sectorOrb = createSectorOrb(3000);
+  // ~16 nearest navigable systems comfortably. Sized to the real geometry:
+  // the farthest from home (Ross 154, ~17.6 ly from ε Eridani) sits at
+  // ~3875 WU, so 4200 keeps the whole neighbourhood inside the bubble.
+  const sectorOrb = createSectorOrb(4200);
   scene.add(sectorOrb);
 
   return { eclipticGrid, oortCloud, galaxyArms: galaxyGroup, sectorOrb, bobEids };

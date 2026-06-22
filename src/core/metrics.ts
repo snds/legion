@@ -26,3 +26,17 @@ export const AU_TO_WU = 10;             // system tier: 1 AU = 10 WU (legacy)
 export const LY_TO_WU_REGIONAL = 220;   // curated regional map: 1 ly = 220 WU (legacy)
 export const KPC_TO_WU = 333;           // galaxy: 1 kpc = 333 WU (legacy)
 export const GAL_LY_TO_WU = KPC_TO_WU / 1000; // galaxy-local ly offset = 0.333 WU/ly (legacy)
+
+// ── Galactocentric frame anchor (Phase 1 — float64 authoritative coords) ──
+// Sol's position in the galaxy, PARSECS, with Sgr A* at the origin (galactic
+// plane = XZ, north galactic pole = +Y). 8.3 kpc = 8300 pc — numerically equal
+// to galaxy.ts SOL_GAL_POS (8.3·KPC_TO_WU WU) under the legacy galaxy scale.
+// This is the authoritative float64 anchor; a curated system's galactocentric
+// position is SOL_GAL_PC + its real heliocentric parsec offset.
+export const SOL_GAL_PC = { x: 8300, y: 0, z: 0 } as const;
+
+// Regional-tier scale expressed PER PARSEC: the legacy 1 ly = 220 WU map,
+// pre-multiplied by ly/pc so real heliocentric parsec offsets place directly.
+// 220 · 3.2615638 = 717.544 WU/pc. (Same regime as LY_TO_WU_REGIONAL — no new
+// scale, just the per-parsec form the real catalogue coordinates consume.)
+export const REGIONAL_WU_PER_PC = LY_TO_WU_REGIONAL * LY_PER_PC;

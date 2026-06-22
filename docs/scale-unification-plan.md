@@ -41,8 +41,8 @@ galaxy-tier disc live-re-rooted vs baked backdrop.
 
 | # | Phase | Risk | Player-visible |
 |---|---|---|---|
-| 0 | Collapse all scale constants into `src/core/metrics.ts` (derives the *current* values — byte-identical) | very low | none |
-| 1 | float64 `galPos` store; merge the two disagreeing curated lists; re-pin curated → real pc | medium | yes (decision 1) |
+| 0 | ✅ **shipped** (PR #61) — Collapse all scale constants into `src/core/metrics.ts` (derives the *current* values — byte-identical) | very low | none |
+| 1 | ✅ **shipped** — float64 `galPos` store (`src/data/curated-systems.ts`, `SOL_GAL_PC`); curated systems re-pinned to **real heliocentric pc** from the 25-pc HYG catalogue; **regional tier** placed from real geometry; star-graph link range migrated to WU (`NAV_LINK_WU`). Galactic tier (`GAL_SYSTEMS`/`HOME_POS`) merge **deferred to Phase 2** (moving frozen `HOME_POS` shifts the whole galaxy frame). | medium | yes (decision 1) |
 | 2 | Frame broker (scale-manager becomes it) + per-frame floating origin; camera-relative shaders; new visual-scale model (decision 2) | high | none (jitter gone) + scale UI |
 | 3 | Re-derive `getCamDist` from real extents; tiers → labels | medium | zoom feel |
 | 4 | Depth partitioning; drop `logarithmicDepthBuffer` | med-high | perf |
