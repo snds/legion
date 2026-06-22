@@ -9,6 +9,7 @@
 
 import { VP } from './visual-params';
 import { Game, getCamDist } from '../core/state';
+import { AU_TO_WU } from '../core/metrics';
 
 /**
  * Get the effective visual scale factor for the current camera position.
@@ -23,7 +24,7 @@ export function getEffectiveScale(): number {
   // Transition zone distances (in world units)
   const innerAU = VP.get('transitionZoneInner');
   const outerAU = VP.get('transitionZoneOuter');
-  const AU_SCALE = 10;
+  const AU_SCALE = AU_TO_WU;
   const innerDist = innerAU * AU_SCALE;
   const outerDist = outerAU * AU_SCALE;
 
@@ -50,6 +51,6 @@ export function getEffectiveScale(): number {
  */
 export function isInSolarSystem(): boolean {
   const outerAU = VP.get('transitionZoneOuter');
-  const AU_SCALE = 10;
+  const AU_SCALE = AU_TO_WU;
   return Game.data.camDist < outerAU * AU_SCALE;
 }

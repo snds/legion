@@ -16,6 +16,7 @@ import {
 import type { Object3D } from 'three';
 import { getEffectiveScale } from '../render/scale-manager';
 import { SECONDS_PER_JULIAN_YEAR } from './time';
+import { AU_TO_WU } from './metrics';
 
 // ── Frame Context ────────────────────────────────────────────────
 
@@ -96,7 +97,7 @@ function orbitalSystem(w: IWorld, ctx: FrameContext): void {
         Position.z[eid] = Position.z[parentEid] + py;
       } else {
         // Primary body: sma in AU, scaled to world units.
-        const AU_SCALE = 10; // 1 AU = 10 world units
+        const AU_SCALE = AU_TO_WU; // 1 AU = 10 world units (legacy; from metrics.ts)
         Position.x[eid] = px * AU_SCALE;
         Position.y[eid] = pz * AU_SCALE;
         Position.z[eid] = py * AU_SCALE;

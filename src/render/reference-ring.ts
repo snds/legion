@@ -19,11 +19,11 @@ import {
 } from 'three';
 import { createLabel } from './icons';
 import type { DomainName } from '../core/state';
+import { AU_TO_WU as WU_PER_AU, LY_TO_WU_REGIONAL as WU_PER_LY } from '../core/metrics';
 
 const SEG = 96;
 const SHOW_DOMAINS: DomainName[] = ['inner-system', 'outer-system', 'heliopause', 'sector'];
-const WU_PER_AU = 10;
-const WU_PER_LY = 220;
+// WU_PER_AU / WU_PER_LY imported from metrics.ts (single source).
 
 let ring: Group | null = null;
 let circle: LineLoop | null = null;
