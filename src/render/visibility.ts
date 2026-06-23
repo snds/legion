@@ -15,7 +15,6 @@ import { Notifications } from '../ui/notifications';
 import type { LayerGroups } from './scene';
 import { Vector3 } from 'three';
 import type { Group, Points, PointsMaterial, Sprite, SpriteMaterial, Camera, Object3D } from 'three';
-import { getGalaxyOffset } from './galaxy';
 import { HELIOPAUSE_RADIUS_WU } from './particles';
 import {
   updateBodyLOD, iconBiasFor, scaleFixed, setLocalIconTierFade,
@@ -49,9 +48,6 @@ interface VisibilityTargets {
 
 let targets: VisibilityTargets | null = null;
 let lastDomain: DomainName | null = null;
-// Pre-galaxy-overview focus (absolute WU), saved when entering the galaxy tier
-// and restored on exit so the dive-in returns to the last-selected system.
-let _focusBeforeGalaxy: { x: number; y: number; z: number } | null = null;
 
 // ── Visibility Rules Per Domain ───────────────────────────────────
 
@@ -149,17 +145,15 @@ function applyDomain(domain: DomainName): void {
       break;
 
     case 'galaxy': {
-      // Full Milky Way disc. At this tier the camera needs both:
-      //   1. focus on the galaxy center (Sgr A*) so the disc is framed
-      //      symmetrically — otherwise it sits off to one side.
-      //   2. a near-top-down polar angle (phi ≈ 0.35 rad ≈ 20° from
-      //      top) so the disc isn't viewed near edge-on. Without this
-      //      the paper-thin disc collapses into a horizontal line.
+      // Full Milky Way disc. The camera KEEPS its current focus (the system you
+      // were in) — it does NOT snap to the galaxy centre, so zooming out leaves
+      // you anchored to your own system in the spur (the centre/bulge sits off to
+      // one side, which is astronomically truthful). Only an explicit selection
+      // re-targets the camera. We still tilt to a near-top-down polar angle
+      // (phi ≈ 0.35) so the paper-thin disc doesn't collapse to an edge-on line.
       layers.galactic.visible = true;
       if (galaxyArms) galaxyArms.visible = true;
       setBackgroundOpacity(0.08, 0.02);
-      const sgr = getGalaxyOffset();
-      Events.emit('camera:focus-on', { x: sgr.x, y: sgr.y, z: sgr.z });
       Game.data.targetPhi = 0.35;
       break;
     }
@@ -233,21 +227,9 @@ export function updateVisibility(camera?: Camera): void {
   const overlayOn = Game.data.overlayMode;
 
   if (domain !== lastDomain) {
-    const prevDomain = lastDomain;
-    // Galaxy-overview focus save/restore (Phase 2c-1). The galaxy tier focuses
-    // Sgr A* to frame the disc symmetrically — but at the unified scale Sgr A*
-    // is ~8.3e6 WU from home, so diving back in would strand the camera at the
-    // galactic centre. Save the pre-overview focus (the last-selected system,
-    // or home) on entry and restore it on exit so the dive-in returns home.
-    // camFocusTarget is stored ABSOLUTE, so it survives the floating-origin
-    // rebase between tiers. (Configurable later; for now: always last-selected.)
-    if (domain === 'galaxy' && prevDomain !== 'galaxy') {
-      const f = Game.data.camFocusTarget;
-      _focusBeforeGalaxy = f ? { x: f.x, y: f.y, z: f.z } : null;
-    } else if (prevDomain === 'galaxy' && domain !== 'galaxy' && _focusBeforeGalaxy) {
-      Game.data.camFocusTarget = _focusBeforeGalaxy;
-      _focusBeforeGalaxy = null;
-    }
+    // The galaxy tier no longer snaps the focus to Sgr A* (it stays on the
+    // current system), so the pre-overview focus save/restore that compensated
+    // for that snap is gone too — focus only changes on explicit selection.
     lastDomain = domain;
     applyDomain(domain);
   }
