@@ -85,6 +85,19 @@ export const KPC = KPC_TO_WU;
 /** Sol's galactic position: 8.3 kpc from center in the galactic plane. */
 export const SOL_GAL_POS = new Vector3(8.3 * KPC, 0, 0);
 
+// ── Galactic disc-volume frame (scale-unification Phase 2b) ──────────
+// The disc volume's world-space AABB + origin are refreshed each frame from the
+// frame broker (updateGalaxyFrame), tracking the galactic tier root rather than a
+// build-time snapshot. Under the 2b identity policy the root is constant
+// (= −HOME_POS), so the per-frame write is idempotent — byte-identical to today;
+// Phase 2c makes the root move per frame (and the AABB follows in lockstep).
+// Half-extents are fixed — they are the disc BoxGeometry's size.
+const DISC_RADIUS_WU = 15 * KPC;   // 5000 WU — disc box half-width/-depth
+const DISC_Y_HALF_WU = 400;        // disc box half-height (~1.2 kpc, warp headroom)
+const _discBoxHalf = new Vector3(DISC_RADIUS_WU, DISC_Y_HALF_WU, DISC_RADIUS_WU);
+const _galCenter = new Vector3();
+let _galaxyGroup: Group | null = null;
+
 // ── Texture Factories ────────────────────────────────────────────
 
 function makeGlowTexture(size = 128): CanvasTexture {
@@ -485,6 +498,7 @@ export function createGalaxy(): Group {
 
   const galaxy = new Group();
   galaxy.name = 'galaxy';
+  _galaxyGroup = galaxy; // tracked for the per-frame frame-broker updater (2b)
 
   const glowTex = makeGlowTexture();
   const nebulaTex = makeNebulaTexture();
@@ -721,11 +735,9 @@ export function createGalaxy(): Group {
   // ~0.3 kpc) to accommodate the galactic warp displacement at the
   // disc edge (~1 kpc) without clipping the volume.
 
-  const DISC_RADIUS_WU = 15 * KPC;   // 5000 WU
-  // Y half-extent ~1.2 kpc — wide enough for ±1 kpc warp + dust thickness,
-  // narrow enough that march steps land within the disc material rather
-  // than skipping over empty space above/below.
-  const DISC_Y_HALF_WU = 400;
+  // DISC_RADIUS_WU (5000 WU) / DISC_Y_HALF_WU (400, ~1.2 kpc — warp + dust
+  // headroom) are module consts now, shared with updateGalaxyFrame so the
+  // per-frame AABB can never drift from the disc BoxGeometry size.
 
   // The galaxy group is positioned at getGalaxyOffset() in scene space
   // (so Sgr A* lands at Sgr's galactic coords = the group's local origin,
@@ -1621,4 +1633,26 @@ export function getGalaxyOffset(): Vector3 {
   // re-pin. Thin facade so its 3 consumers (group position, disc-volume AABB,
   // Sgr A* camera focus) are unchanged.
   return Broker.getTierRoot('galactic');
+}
+
+/**
+ * Per-frame (scale-unification Phase 2b): refresh the galaxy group position and
+ * the disc-volume's WORLD-space AABB/origin uniforms from the frame broker, so
+ * they track the galactic tier root instead of a build-time snapshot. Under the
+ * 2b identity policy the root is constant (−HOME_POS) → the writes are idempotent
+ * and there is no visual change; Phase 2c makes the root move per frame and the
+ * AABB follows in lockstep (fixing the build-time-static uniform the floating
+ * origin would otherwise leave stale). Call once per frame AFTER Broker.beginFrame()
+ * and BEFORE the galaxy is consumed (visibility Sgr A* focus, the render).
+ */
+export function updateGalaxyFrame(): void {
+  if (!_galaxyGroup) return;
+  Broker.getTierRoot('galactic', _galCenter); // galaxy world center this frame
+  _galaxyGroup.position.copy(_galCenter);
+  const mat = GALAXY_LOD.volumeMat;
+  if (mat) {
+    (mat.uniforms.uGalaxyOrigin.value as Vector3).copy(_galCenter);
+    (mat.uniforms.uBoxMin.value as Vector3).copy(_galCenter).sub(_discBoxHalf);
+    (mat.uniforms.uBoxMax.value as Vector3).copy(_galCenter).add(_discBoxHalf);
+  }
 }
