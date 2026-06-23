@@ -14,6 +14,7 @@ import { PerspectiveCamera, Vector3, type Object3D } from 'three';
 import { Game, getCamDist } from './state';
 import { Events } from './events';
 import { setIconFov } from '../render/icon-system';
+import { Broker } from '../render/scale-manager';
 
 // ── Lerp Factors (monolithic prototype values) ──────────────────
 
@@ -97,11 +98,33 @@ export class CameraController {
   // position. Consumers (star streak shader, motion-blur effects) read this
   // each frame to compute per-feature visual response to camera motion.
   private readonly _velocity = new Vector3();
-  private readonly _lastCamPos = new Vector3();
+  private readonly _lastCamPos = new Vector3(); // last AUTHORITATIVE anchor (cam.pos + R)
+  private readonly _anchorPos = new Vector3();
   private _velocityValid = false;
 
   /** World-space camera velocity in units per second, updated each frame. */
   get velocity(): Vector3 { return this._velocity; }
+
+  /**
+   * Update `_velocity` from the float64 AUTHORITATIVE camera anchor (render
+   * position + the frame broker's floating-origin rebase R), not raw cam.position.
+   * Under the Phase-2b identity policy R≡0, so the anchor === cam.position and this
+   * is bit-identical to the prior raw-position velocity; once Phase 2c moves the
+   * camera toward the residual origin, raw cam.position is ~constant and streaks
+   * would read ~0 — the anchor delta is the true motion. Skipped on the first
+   * frame and on implausibly large dt (debug pause / tab-resume) so a near-zero
+   * "velocity" never falsely suppresses streaks.
+   */
+  private _trackVelocity(dt: number): void {
+    Broker.getSceneRebase(this._anchorPos).add(this.cam.position); // anchor = cam.pos + R
+    if (this._velocityValid && dt > 0 && dt < 0.5) {
+      this._velocity.subVectors(this._anchorPos, this._lastCamPos).divideScalar(dt);
+    } else {
+      this._velocity.set(0, 0, 0);
+    }
+    this._lastCamPos.copy(this._anchorPos);
+    this._velocityValid = true;
+  }
 
   // ── Flight-Path State ────────────────────────────────────────────
   // When set, the camera is mid-flight: position and look-at are
@@ -303,14 +326,8 @@ export class CameraController {
       setIconFov(this.cam.fov);
       this.cam.updateProjectionMatrix();
 
-      // Update velocity tracking even during flight (drives star streaks).
-      if (this._velocityValid && dt > 0 && dt < 0.5) {
-        this._velocity.subVectors(this.cam.position, this._lastCamPos).divideScalar(dt);
-      } else {
-        this._velocity.set(0, 0, 0);
-      }
-      this._lastCamPos.copy(this.cam.position);
-      this._velocityValid = true;
+      // Velocity from the f64 authoritative anchor (drives star streaks).
+      this._trackVelocity(dt);
 
       // Arrival: set orbital state to match landing position, hand off.
       if (tRaw >= 1) {
@@ -327,6 +344,12 @@ export class CameraController {
     // If the camera is locked onto an object, refresh focus target from
     // its current world position before the focus lerp runs.
     if (this.trackedObject) {
+      // NOTE (Phase 2c): getWorldPosition() reads the render-graph matrixWorld,
+      // which is fine while everything is in the absolute frame (R≡0). Once the
+      // floating origin is active, a galactic-magnitude target loses float32
+      // precision through matrixWorld — tracking such targets must read the f64
+      // authoritative position from the frame store instead. Local/system targets
+      // (small WU) are unaffected. Re-read live each frame, so no stale-cache risk.
       this.trackedObject.getWorldPosition(this._trackPos);
       data.camFocusTarget = { x: this._trackPos.x, y: this._trackPos.y, z: this._trackPos.z };
     }
@@ -379,17 +402,8 @@ export class CameraController {
 
     this.cam.updateProjectionMatrix();
 
-    // Compute world-space camera velocity. Skipped on the very first
-    // frame (no previous position yet) and on any frame where dt is
-    // implausibly large (debug pause, tab-resume) — that would produce
-    // a near-zero "velocity" and falsely suppress streaks.
-    if (this._velocityValid && dt > 0 && dt < 0.5) {
-      this._velocity.subVectors(this.cam.position, this._lastCamPos).divideScalar(dt);
-    } else {
-      this._velocity.set(0, 0, 0);
-    }
-    this._lastCamPos.copy(this.cam.position);
-    this._velocityValid = true;
+    // Camera velocity from the f64 authoritative anchor (see _trackVelocity).
+    this._trackVelocity(dt);
 
     // Update zoom domain
     Game.updateZoomDomain();
