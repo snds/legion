@@ -31,7 +31,7 @@ import { galacticDiscVolumeVertexShader, galacticDiscVolumeFragmentShader } from
 import {
   armPattern as mArmPattern, taper as mTaper, flare as mFlare, warpY as mWarpY,
   A_STARS as M_A_STARS, HR_THIN as M_HR_THIN, HZ_THIN as M_HZ_THIN,
-  BAR_ANGLE as M_BAR_ANGLE, PITCH as M_PITCH, ARM_REF_R as M_ARM_REF_R,
+  BAR_ANGLE as M_BAR_ANGLE,
   DISC_RADIUS_WU as M_DISC_RADIUS,
 } from './galaxy-density';
 import { KPC_TO_WU, GALAXY_MODEL_SCALE } from '../core/metrics';
@@ -297,7 +297,6 @@ export function updateGalaxyAnimations(t: number): void {
 
 interface GalaxyLODState {
   starFieldMat: ShaderMaterial | null;
-  localArmMat: ShaderMaterial | null;
   dustMat: PointsMaterial | null;
   discMats: ShaderMaterial[];           // stacked disc star layers
   nebulaMats: LineBasicMaterial[]; // nebula wireframe-cube outlines (Phase 2c-1 follow-up)
@@ -307,7 +306,6 @@ interface GalaxyLODState {
 
 const GALAXY_LOD: GalaxyLODState = {
   starFieldMat: null,
-  localArmMat: null,
   dustMat: null,
   discMats: [],
   nebulaMats: [],
@@ -405,16 +403,8 @@ export function updateGalaxyLOD(camDist: number): void {
     u.uSizeScale.value = (1.5 - sizeT * 0.7) * discPresence * GALAXY_TUNE.particleSize;
   }
 
-  // Local Orion Spur detail: arm-tier feature. Prominent while immersed in the
-  // spur (~1e6 WU), falls off as you pull back to the full-galaxy frame so it
-  // doesn't streak as a bright cloud across the disc view.
-  if (GALAXY_LOD.localArmMat) {
-    const closeFade = 1 - smoothRamp(camDist, 1e6, 4e6);
-    const u = GALAXY_LOD.localArmMat.uniforms;
-    u.uSizeScale.value = closeFade * 1.2 * discPresence;
-  }
-
-  // (dust-strand particles deleted; their LOD ramp removed with them)
+  // (Orion-spur detail particles removed — read as a bug-like dense star patch
+  //  when zooming out; the spiral arms + disc volume carry the local structure.)
 
   // Nebula wireframe-cube outlines: thin position/extent markers (Phase 2c-1
   // follow-up — the volumetric sprites were intrusive). Modest opacity, fading
@@ -489,7 +479,6 @@ export function createGalaxy(): Group {
   STREAK_MATS.length = 0;
   TRANSIT_CHEVRONS.length = 0;
   GALAXY_LOD.starFieldMat = null;
-  GALAXY_LOD.localArmMat = null;
   GALAXY_LOD.dustMat = null;
   GALAXY_LOD.discMats.length = 0;
   GALAXY_LOD.nebulaMats.length = 0;
@@ -660,70 +649,6 @@ export function createGalaxy(): Group {
   GALAXY_LOD.starFieldMat = starFieldMat;
   STREAK_MATS.push(starFieldMat);
 
-  // ── 3c. Orion Spur Local Detail (40K) ─────────────────────────
-  // Higher-density particle cloud concentrated around home, oriented
-  // along the local arm tangent. Fades in across the ARM tier so that
-  // when the camera is immersed in the disc, the immediate surrounding
-  // volume has real density and variation rather than the broad-disc
-  // sample. Colors lean blue-white (young arm stars) with a warm minority.
-
-  // Local-arm detail layer is a SECTOR-tier feature only — it represents
-  // the player's immediate stellar neighborhood and should be visually
-  // subtle, not the dominant element at arm tier. Was 80000 which read
-  // as a bright streak across the disc at arm tier.
-  const LOCAL_N = 18000;
-  const localPts: number[] = [];
-  const localCols: number[] = [];
-  const localSizes: number[] = [];
-
-  // Orion Spur tangent at Sol — roughly galactic longitude 80°.
-  const armDirAngle = Math.PI * 80 / 180;
-  const ax = Math.cos(armDirAngle), az = Math.sin(armDirAngle);
-  const px = -az, pz = ax;  // perpendicular in disc plane
-
-  const SPUR_LEN = 3.0;     // kpc along arm
-  const SPUR_WIDTH = 0.7;   // kpc perpendicular
-  const SPUR_HEIGHT = 0.18; // kpc above/below disc
-
-  for (let i = 0; i < LOCAL_N; i++) {
-    // Gaussian-ish along arm via sum of uniforms (cheap CLT)
-    const u = ((Math.random() + Math.random() + Math.random()) / 3 - 0.5) * 2;
-    const v = ((Math.random() + Math.random()) / 2 - 0.5) * 2;
-    const w = (Math.random() - 0.5) * 2;
-    const along = u * SPUR_LEN;
-    const perp = v * SPUR_WIDTH * (1 - Math.abs(u) * 0.25);
-    const up = w * SPUR_HEIGHT * (1 - Math.abs(u) * 0.3);
-
-    // Position is relative to Sol's galactic coords (8.3, 0, 0) kpc.
-    const x = (8.3 + ax * along + px * perp) * KPC;
-    const y = up * KPC;
-    const z = (0   + az * along + pz * perp) * KPC;
-    localPts.push(x, y, z);
-
-    // Orion Spur stellar population — young arm stars, slightly bluer
-    // and more uniform-luminosity than the general disc sample.
-    const [cr, cg, cb, sz] = sampleStellarPopulation();
-    localCols.push(cr, cg, cb);
-    localSizes.push(sz);
-  }
-
-  const localGeo = new BufferGeometry();
-  localGeo.setAttribute('position', new Float32BufferAttribute(localPts, 3));
-  localGeo.setAttribute('color', new Float32BufferAttribute(localCols, 3));
-  localGeo.setAttribute('aSize', new Float32BufferAttribute(localSizes, 1));
-  const localArmMat = new ShaderMaterial({
-    vertexShader: galacticStarsVertexShader,
-    fragmentShader: galacticStarsFragmentShader,
-    uniforms: makeStarUniforms(0.0),  // size driven by LOD updater
-    transparent: true,
-    depthWrite: false,
-    blending: AdditiveBlending,
-  });
-  STREAK_MATS.push(localArmMat);
-  const localArmField = new Points(localGeo, localArmMat);
-  localArmField.name = 'orion-spur-detail';
-  galaxy.add(localArmField);
-  GALAXY_LOD.localArmMat = localArmMat;
 
   // (Dust-lane strand particles deleted — the volume's per-channel dust
   // extinction is the principled version; docs §5.3.)
@@ -811,11 +736,13 @@ export function createGalaxy(): Group {
   // model's Hernquist+bar emission inside the volume — the sprites were a
   // chief cause of the interior tan-wash.)
 
-  // ── 5. Nebula Markers (outlined cubes — position + extent) ────
-  // Phase 2c-1 follow-up: the volumetric nebula sprites were intrusive. Each
-  // star-forming region is now a thin WIREFRAME CUBE marking its position and
-  // size. Shared unit-cube edges; per-nebula scale/colour/material (LOD-faded
-  // by updateGalaxyLOD so they vanish at the neighbourhood tier).
+  // ── 5. Nebula marker helper (outlined cubes) ──────────────────
+  // Only the NAMED nebulae get a marker now (section 12b) — the 50 procedural
+  // arm clusters were dropped as too busy. A nebula is a thin WIREFRAME CUBE
+  // marking its position + extent; shared unit-cube edges, per-cube scale/
+  // colour/material (LOD-faded by updateGalaxyLOD to vanish at neighbourhood
+  // tier). The volumetric-cloud technique that preceded this is the candidate
+  // for per-sector local-neighbourhood generation — see docs (kept in history).
   const nebCubeEdges = new EdgesGeometry(new BoxGeometry(1, 1, 1));
   const addNebulaCube = (cx: number, cy: number, cz: number, size: number, color: number): void => {
     const mat = new LineBasicMaterial({ color, transparent: true, opacity: 0.25, depthWrite: false });
@@ -825,29 +752,6 @@ export function createGalaxy(): Group {
     galaxy.add(cube);
     GALAXY_LOD.nebulaMats.push(mat);
   };
-
-  const NEBULA_COUNT = 50;
-  for (let i = 0; i < NEBULA_COUNT; i++) {
-    // Star-forming regions sit on the MODEL's m=2 arm crests, slightly
-    // DOWNSTREAM of the dust lane (density-wave anatomy), alternating arms.
-    const R = 1400 + Math.random() * 3000;
-    const lnTerm = Math.log(R / M_ARM_REF_R) / Math.tan(M_PITCH);
-    const theta = lnTerm + (i % 2) * Math.PI + 0.10 + (Math.random() - 0.5) * 0.18;
-    const x = R * Math.cos(theta);
-    const z = R * Math.sin(theta);
-    const y = (Math.random() - 0.5) * 100 + mWarpY(x, z);
-
-    const hueShift = Math.random();
-    const nebR = 0.65 + hueShift * 0.3;
-    const nebG = 0.08 + (1 - hueShift) * 0.15;
-    const nebB = 0.55 + (1 - hueShift) * 0.35;
-    const nebColor = (Math.floor(nebR * 255) << 16)
-      | (Math.floor(nebG * 255) << 8)
-      | Math.floor(nebB * 255);
-
-    const size = 400 + Math.random() * 900;
-    addNebulaCube(x, y, z, size, nebColor);
-  }
 
   // ── 6. Sagittarius A* ─────────────────────────────────────────
 
