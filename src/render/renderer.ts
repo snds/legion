@@ -23,7 +23,15 @@ export async function createRenderer(
   container: HTMLElement,
 ): Promise<RendererContext> {
   const renderer = new WebGLRenderer({
-    antialias: true,
+    // GPU hardware acceleration: ask the browser for the discrete / high-perf
+    // GPU rather than the integrated one (the default on dual-GPU laptops). Big
+    // win on MacBook Pro / gaming laptops; no-op on single-GPU machines.
+    powerPreference: 'high-performance',
+    // AA is done by the post chain's SMAAPass (post-processing.ts), and the
+    // scene renders to the EffectComposer's render target — so a multisampled
+    // DEFAULT framebuffer (antialias:true) only AA's the final full-screen quad
+    // (nothing to AA) while costing an MSAA buffer + resolve. Turn it off.
+    antialias: false,
     logarithmicDepthBuffer: true,
   });
 

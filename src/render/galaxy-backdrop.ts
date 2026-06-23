@@ -78,6 +78,10 @@ export function bakeGalaxyBackdrop(
     // seam in the dim backdrop. Uniforms are shared with liveMat, so restore
     // it to 1 afterward.
     if (bakeMat.uniforms.uJitter) bakeMat.uniforms.uJitter.value = 0;
+    // Full 256 active steps for the bake (the live material's motion-adaptive
+    // uSteps defaults to 24; the bake's STEPS=256 loop bound needs uSteps=256 to
+    // actually run them). Shared uniform — updateGalaxyLOD re-drives it live.
+    if (bakeMat.uniforms.uSteps) bakeMat.uniforms.uSteps.value = 256;
     volumeMesh.material = bakeMat;
   }
 

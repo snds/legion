@@ -371,11 +371,30 @@ export function getGalaxyCrossfade(camDist: number): number {
   return smoothRamp(camDist, 6e5, 2e6);
 }
 
+// Motion-adaptive disc-raymarch step count (perf): full when settled, fewer
+// while the camera zooms — the through-disc transition is where frames drop, and
+// the coarser march is hidden by the motion. Eased to avoid a quality pop.
+const DISC_STEPS_SETTLED = 24;
+const DISC_STEPS_MOVING = 12;
+let _discPrevCamDist = 0;
+let _discSteps = DISC_STEPS_SETTLED;
+
 export function updateGalaxyLOD(camDist: number): void {
   // Crossfade the live volume in across the heliopause→sector window; hide
   // the mesh entirely below it so the march cost is zero at system tiers.
   const xf = getGalaxyCrossfade(camDist);
-  if (GALAXY_LOD.volumeMat) GALAXY_LOD.volumeMat.uniforms.uOpacity.value = xf;
+  if (GALAXY_LOD.volumeMat) {
+    GALAXY_LOD.volumeMat.uniforms.uOpacity.value = xf;
+    // Relative camDist change per frame → 0 (settled) .. 1 (fast zoom). The
+    // step count eases between full + reduced so the disc stays band-free when
+    // you stop but the through-disc zoom transition costs ~half the raymarch.
+    const rel = _discPrevCamDist > 0 ? Math.abs(camDist - _discPrevCamDist) / camDist : 0;
+    _discPrevCamDist = camDist;
+    const motion = Math.min(1, rel / 0.015);
+    const target = DISC_STEPS_SETTLED - motion * (DISC_STEPS_SETTLED - DISC_STEPS_MOVING);
+    _discSteps += (target - _discSteps) * 0.3;
+    GALAXY_LOD.volumeMat.uniforms.uSteps.value = Math.round(_discSteps);
+  }
   if (GALAXY_LOD.volumeMesh) GALAXY_LOD.volumeMesh.visible = xf > 0.001;
 
   // Top-level "is the galaxy present at this camera distance" curve (Phase
@@ -710,6 +729,7 @@ export function createGalaxy(): Group {
       uEmissionScale: { value: GALAXY_TUNE.emission },
       uOpacity: { value: 1.0 }, // pinned — Phase-4 crossfade is the only ramp
       uJitter: { value: 1.0 },  // live: break step banding. Bake sets 0 (smooth).
+      uSteps: { value: 24 }, // active raymarch steps (≤ STEPS=24 loop bound); motion-adaptive
       uModelScale: { value: GALAXY_MODEL_SCALE }, // Phase 2c-1: group renders ×S larger;
                                    // the shader divides world rays back into the native-333 model.
       // Galaxy Lab live-tuning uniforms (TEMPORARY) — defaults = model constants.
