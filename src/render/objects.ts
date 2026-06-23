@@ -479,6 +479,7 @@ export function updatePlanetShaders(
   zoomDomain?: string,
 ): void {
   const sunDir = new Vector3();
+  const _planetWorld = new Vector3(); // planet world centre (frame-broker lockstep, 2b)
 
   // Planetshine sources — moons receive a diffuse bounce from their nearest planet.
   const planetEntries = trackedPlanets.filter((e) => e.group.userData?.type === 'planet');
@@ -503,6 +504,14 @@ export function updatePlanetShaders(
 
   for (const entry of trackedPlanets) {
     const pos = entry.group.position;
+    // uPlanetCenter must be the planet's WORLD centre — the same frame as the
+    // shader's vWorldPos / cameraPosition. Under the Phase-2b identity policy this
+    // equals `pos` (local tier at the scene origin) so it is byte-identical today,
+    // but sourcing it from the scene graph keeps it in lockstep with the camera
+    // once Phase 2c re-roots the world (else `ro = cameraPosition − uPlanetCenter`
+    // desyncs). `pos` (local) stays correct for sunDir — a frame-independent
+    // direction toward the star at the local-tier origin.
+    entry.group.getWorldPosition(_planetWorld);
 
     // Sun direction = normalize(origin - planetPos) = normalize(-planetPos)
     sunDir.set(-pos.x, -pos.y, -pos.z).normalize();
@@ -522,13 +531,13 @@ export function updatePlanetShaders(
       const am = entry.atmosMat.uniforms;
       am.uSunDir.value.copy(sunDir);
       // Single-scattering needs the planet centre + world radius each frame.
-      am.uPlanetCenter.value.copy(pos);
+      am.uPlanetCenter.value.copy(_planetWorld);
       am.uPlanetRadius.value = entry.planetRadius * entry.group.scale.x;
     }
 
     if (entry.ringMat) {
       entry.ringMat.uniforms.uSunDir.value.copy(sunDir);
-      entry.ringMat.uniforms.uPlanetCenter.value.copy(pos);
+      entry.ringMat.uniforms.uPlanetCenter.value.copy(_planetWorld);
     }
 
     // Ring shadow cast onto the planet's own surface (ringed planets only).
@@ -538,7 +547,7 @@ export function updatePlanetShaders(
       const s = entry.group.scale.x;
       sm.uHasRingShadow.value = true;
       sm.uRingNormal.value.copy(entry.ringNormal);
-      sm.uPlanetCenter.value.copy(pos);
+      sm.uPlanetCenter.value.copy(_planetWorld);
       sm.uRingInner.value = entry.ringInnerLocal * s;
       sm.uRingOuter.value = entry.ringOuterLocal * s;
       sm.uRingShadowStrength.value = VP.get('ringShadowStrength');
