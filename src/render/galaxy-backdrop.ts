@@ -47,8 +47,10 @@ export function bakeGalaxyBackdrop(
   for (const [c] of saved) c.visible = c === galaxyGroup;
   galaxyGroup.visible = true;
 
-  // Force full LOD presence (star sizes/opacities are camDist-ramped).
-  updateGalaxyLOD(13000);
+  // Force full LOD presence (star sizes/opacities are camDist-ramped). Phase
+  // 2c-1: the disc presence + crossfade ramps now peak at galaxy-scale camDist
+  // (~2e6), so seed past them or the bake captures an empty (transparent) disc.
+  updateGalaxyLOD(1e7);
 
   // Bake the VOLUME ONLY. The galaxy's star Points and (billboard) nebula
   // sprites don't tile seamlessly into a cubemap — sprites orient to each of
@@ -87,7 +89,10 @@ export function bakeGalaxyBackdrop(
     minFilter: LinearFilter,
     magFilter: LinearFilter,
   });
-  const cubeCam = new CubeCamera(1, 1e6, cubeRT);
+  // far 3.6e7: Phase 2c-1 lifts the galaxy to the unified frame (disc radius
+  // ~1.5e7 WU; far disc edge ~2.3e7 from home), so the system-tier Milky Way
+  // bake must reach past it or the band clips to a black hemisphere.
+  const cubeCam = new CubeCamera(1, 3.6e7, cubeRT);
   cubeCam.position.set(0, 0, 0); // the home system's position in the galaxy
   scene.add(cubeCam);
   cubeCam.update(renderer, scene);

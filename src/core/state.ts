@@ -160,13 +160,18 @@ export function getCamDist(z: number): number {
   if (z < T_INNER_SYS) return lerpDist(T_ORBIT,       T_INNER_SYS,  25,     120);
   if (z < T_OUTER_SYS) return lerpDist(T_INNER_SYS,   T_OUTER_SYS,  120,    1000);
   if (z < T_HELIO)     return lerpDist(T_OUTER_SYS,   T_HELIO,      1000,   2800);
-  if (z < T_SECTOR)    return lerpDist(T_HELIO,       T_SECTOR,     2800,   5500);
-  if (z < T_ARM)       return lerpDist(T_SECTOR,      T_ARM,        5500,   9000);
-  // Galaxy max camDist tuned so the 15-kpc (5000 WU) disc fills the
-  // viewport. At camDist 12000, FOV 72° gives disc angular size ~46°
-  // (~65% of viewport vertical), with room around the edges. 24000
-  // was too far — disc looked like a marble.
-  return lerpDist(T_ARM, 1.0, 9000, 12000);
+  // Phase 2c-1: the neighbourhood→galaxy span crosses ~4 orders of magnitude
+  // (2800 WU home bubble → 3.6e7 WU full galaxy frame, the disc now a unified
+  // 1.5e7-WU radius), so a GEOMETRIC (log-uniform) curve — a constant camDist
+  // RATIO per wheel tick — is what makes the continuous-zoom dive-in smooth.
+  // 2800 at z=T_HELIO is C0-continuous with the linear segment above; 3.6e7 at
+  // z=1.0 frames the disc edge-to-edge from outside. Sector ≈ 7.7e4, arm ≈ 2.1e6
+  // fall on this curve. Phase 3 may retune endpoints; the geometric shape is the
+  // point (linear segments across 4 orders felt like jump-cuts).
+  const GAL_NEAR = 2800;  // z = T_HELIO  (home bubble + nearest neighbours)
+  const GAL_FAR = 3.6e7;  // z = 1.0      (full Milky Way disc framed from outside)
+  const tg = (z - T_HELIO) / (1.0 - T_HELIO);
+  return GAL_NEAR * Math.pow(GAL_FAR / GAL_NEAR, tg);
 }
 
 // ── State Shape ──────────────────────────────────────────────────

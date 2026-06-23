@@ -9,14 +9,23 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { Scene, Group, Object3D, PerspectiveCamera, Vector3 } from 'three';
 import { Broker } from './scale-manager';
-import { HOME_POS } from './galaxy-density';
+import { galPos, HOME_SYSTEM } from '../data/curated-systems';
+import { WU_PER_PC } from '../core/metrics';
 
-describe('frame broker — Phase 2b identity policy', () => {
-  it('galactic tier root equals −HOME_POS (byte-identical to legacy getGalaxyOffset)', () => {
+// Phase 2c-1: the galactic tier origin is Sgr A* in the unified metric =
+// −galPos(home)·WU_PER_PC (~8.3e6 WU). Computed from the curated catalogue, the
+// same authoritative source the broker places the galactic tier from.
+const GAL_ORIGIN = (() => {
+  const g = galPos(HOME_SYSTEM);
+  return new Vector3(-g.x * WU_PER_PC, -g.y * WU_PER_PC, -g.z * WU_PER_PC);
+})();
+
+describe('frame broker — tier roots (Phase 2c-1 unified galactic origin)', () => {
+  it('galactic tier root equals −galPos(home)·WU_PER_PC (Sgr A* in the unified metric)', () => {
     const g = Broker.getTierRoot('galactic');
-    expect(g.x).toBe(-HOME_POS[0]);
-    expect(g.y).toBe(-HOME_POS[1]);
-    expect(g.z).toBe(-HOME_POS[2]);
+    expect(g.x).toBeCloseTo(GAL_ORIGIN.x, 3);
+    expect(g.y).toBeCloseTo(GAL_ORIGIN.y, 3);
+    expect(g.z).toBeCloseTo(GAL_ORIGIN.z, 3);
   });
 
   it('local and regional tier roots are the scene origin', () => {
@@ -29,7 +38,7 @@ describe('frame broker — Phase 2b identity policy', () => {
     Broker.beginFrame({ x: 8_300_000, y: -2e6, z: 3e6 }); // a galactic-magnitude focus
     expect(Broker.getSceneRebase().toArray()).toEqual([0, 0, 0]);
     // tier roots are unchanged after beginFrame under the identity policy
-    expect(Broker.getTierRoot('galactic').x).toBe(-HOME_POS[0]);
+    expect(Broker.getTierRoot('galactic').x).toBeCloseTo(GAL_ORIGIN.x, 3);
   });
 
   it('returns fresh vectors (matches the legacy getGalaxyOffset() contract)', () => {
@@ -63,12 +72,12 @@ describe('floating-origin re-parent is a 0-ULP identity (sceneRoot at origin)', 
     return body;
   };
 
-  const G = new Vector3(-HOME_POS[0], -HOME_POS[1], -HOME_POS[2]); // galactic layer offset
+  const G = GAL_ORIGIN.clone(); // galactic layer offset (Sgr A*, unified metric)
   const battery: Array<[Vector3, Vector3]> = [
     [new Vector3(0, 0, 0), new Vector3(12, -3, 47)],          // local body
     [new Vector3(0, 0, 0), new Vector3(1484, 1716, 421)],     // regional marker (Sol scene-WU)
-    [G, new Vector3(2766.9, 0, 0)],                           // galactic: Sol galactic-local WU
-    [G, new Vector3(5000, 400, -5000)],                       // galactic: disc-AABB corner
+    [G, new Vector3(8_300_000, 0, 0)],                        // galactic: Sol galactocentric (unified WU)
+    [G, new Vector3(1.5e7, 4e5, -1.5e7)],                     // galactic: disc-AABB corner (unified WU)
   ];
 
   it('getWorldPosition is bit-identical with and without the origin sceneRoot', () => {
@@ -112,9 +121,9 @@ describe('floating origin ACTIVE — broker rebase (Phase 2c)', () => {
     expect(Broker.getTierRoot('local').toArray()).toEqual([-R.x, -R.y, -R.z]);
     expect(Broker.getTierRoot('regional').toArray()).toEqual([-R.x, -R.y, -R.z]);
     const g = Broker.getTierRoot('galactic');
-    expect(g.x).toBeCloseTo(-HOME_POS[0] - R.x, 2);
-    expect(g.y).toBeCloseTo(-HOME_POS[1] - R.y, 2);
-    expect(g.z).toBeCloseTo(-HOME_POS[2] - R.z, 2);
+    expect(g.x).toBeCloseTo(GAL_ORIGIN.x - R.x, 2);
+    expect(g.y).toBeCloseTo(GAL_ORIGIN.y - R.y, 2);
+    expect(g.z).toBeCloseTo(GAL_ORIGIN.z - R.z, 2);
   });
 
   it('a body at the camera focus renders at a SMALL residual (the float32-safety point)', () => {
@@ -132,9 +141,9 @@ describe('floating origin ACTIVE — broker rebase (Phase 2c)', () => {
   it('modelView is invariant to R (the residual −R cancels)', () => {
     // Build scene→tierGroup→body with the tier at getTierRoot('galactic') and the
     // camera at camAbs−R, for R=0 and R=camAbs; the body's modelView must match.
-    const bodyLocal = new Vector3(5000, 400, -5000);
+    const bodyLocal = new Vector3(1.5e7, 4e5, -1.5e7);
     const camAbs = new Vector3(2.0e7, 5.0e5, -1.0e7);
-    const bodyAbs = new Vector3(-HOME_POS[0] + bodyLocal.x, -HOME_POS[1] + bodyLocal.y, -HOME_POS[2] + bodyLocal.z);
+    const bodyAbs = new Vector3(GAL_ORIGIN.x + bodyLocal.x, GAL_ORIGIN.y + bodyLocal.y, GAL_ORIGIN.z + bodyLocal.z);
     const modelView = (R: Vector3): number[] => {
       Broker.setRebase(R);
       const scene = new Scene();

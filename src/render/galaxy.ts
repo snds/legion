@@ -22,7 +22,7 @@ import {
   LineBasicMaterial,
   Float32BufferAttribute, Vector3, DoubleSide, BackSide, AdditiveBlending, NormalBlending,
   CustomBlending, OneFactor, OneMinusSrcAlphaFactor,
-  CanvasTexture, Color,
+  CanvasTexture, Color, Camera,
 } from 'three';
 import { getStellarRender } from './planet-colors';
 import { galacticStarsVertexShader, galacticStarsFragmentShader } from './shaders/galactic-stars';
@@ -33,7 +33,7 @@ import {
   BAR_ANGLE as M_BAR_ANGLE, PITCH as M_PITCH, ARM_REF_R as M_ARM_REF_R,
   DISC_RADIUS_WU as M_DISC_RADIUS,
 } from './galaxy-density';
-import { KPC_TO_WU } from '../core/metrics';
+import { KPC_TO_WU, GALAXY_MODEL_SCALE } from '../core/metrics';
 import { Broker } from './scale-manager';
 import {
   GALAXY_TUNE, galaxyLabVolumeUniforms, registerVolumeMat, registerNebula,
@@ -92,9 +92,13 @@ export const SOL_GAL_POS = new Vector3(8.3 * KPC, 0, 0);
 // (= −HOME_POS), so the per-frame write is idempotent — byte-identical to today;
 // Phase 2c makes the root move per frame (and the AABB follows in lockstep).
 // Half-extents are fixed — they are the disc BoxGeometry's size.
-const DISC_RADIUS_WU = 15 * KPC;   // 5000 WU — disc box half-width/-depth
+const DISC_RADIUS_WU = 15 * KPC;   // 4995 WU galaxy-LOCAL — disc box half-width/-depth
 const DISC_Y_HALF_WU = 400;        // disc box half-height (~1.2 kpc, warp headroom)
-const _discBoxHalf = new Vector3(DISC_RADIUS_WU, DISC_Y_HALF_WU, DISC_RADIUS_WU);
+// World-space disc half-extents (Phase 2c-1): the BoxGeometry is built at the
+// galaxy-LOCAL size above and rides the group's ×GALAXY_MODEL_SCALE scale, so the
+// world AABB the disc shader ray-clips against is the local half-extent × that scale.
+const _discBoxHalf = new Vector3(DISC_RADIUS_WU, DISC_Y_HALF_WU, DISC_RADIUS_WU)
+  .multiplyScalar(GALAXY_MODEL_SCALE);
 const _galCenter = new Vector3();
 let _galaxyGroup: Group | null = null;
 
@@ -198,6 +202,7 @@ function makeLabelSprite(
     transparent: true, depthTest: false, depthWrite: false,
   }));
   sp.scale.set(600, 150, 1);
+  sp.userData._galSC = true; // screen-constant under the ×S group (Phase 2c-1)
   return sp;
 }
 
@@ -375,7 +380,10 @@ function smoothRamp(x: number, lo: number, hi: number): number {
  *  THE only permitted opacity ramp on the volume; main.ts drives
  *  scene.backgroundIntensity with (1 − this). */
 export function getGalaxyCrossfade(camDist: number): number {
-  return smoothRamp(camDist, 2800, 3800);
+  // Phase 2c-1: the live volume takes over from the home-baked cube backdrop as
+  // you pull back into the galaxy domain (focus shifts to Sgr A* at camDist
+  // ~2.1e6). Below this the cube — a valid snapshot from home — carries the band.
+  return smoothRamp(camDist, 6e5, 2e6);
 }
 
 export function updateGalaxyLOD(camDist: number): void {
@@ -385,12 +393,11 @@ export function updateGalaxyLOD(camDist: number): void {
   if (GALAXY_LOD.volumeMat) GALAXY_LOD.volumeMat.uniforms.uOpacity.value = xf;
   if (GALAXY_LOD.volumeMesh) GALAXY_LOD.volumeMesh.visible = xf > 0.001;
 
-  // Top-level "is the galaxy present at this camera distance" curve.
-  // 0 at sector inner edge (~2500 WU) → 1 by the time we're in arm
-  // range (~5500 WU). Everything galactic-scale (disc shader, particles,
-  // dust, nebulae, phenomena) multiplies through this so the transition
-  // from sector → arm is a smooth fade-in instead of a layer flip.
-  const discPresence = smoothRamp(camDist, 2500, 5500);
+  // Top-level "is the galaxy present at this camera distance" curve (Phase
+  // 2c-1 magnitudes). Fades the whole galactic body in across the spur→galaxy
+  // pull-back (~4e5 → ~2e6 WU) so it's full by the time the focus reaches Sgr A*
+  // and you frame the disc. Everything galactic-scale multiplies through this.
+  const discPresence = smoothRamp(camDist, 4e5, 2e6);
 
   // Disc shader presence — drives uOpacity on every layer of the
   // stacked-thickness disc (each layer has its own ShaderMaterial
@@ -405,33 +412,62 @@ export function updateGalaxyLOD(camDist: number): void {
   // overall presence (so stars fade in along with the disc shader).
   if (GALAXY_LOD.starFieldMat) {
     const u = GALAXY_LOD.starFieldMat.uniforms;
-    // Stars get bigger when camera is close: scale 1.5× at sector camDist,
-    // back down to 0.8× at galaxy max. ×GALAXY_TUNE.particleSize (lab).
-    const sizeT = smoothRamp(camDist, 4500, 13000);
+    // Stars get bigger when camera is close: 1.5× immersed in the spur,
+    // back down to 0.8× at the full-galaxy frame. ×GALAXY_TUNE.particleSize (lab).
+    const sizeT = smoothRamp(camDist, 2e6, 2e7);
     u.uSizeScale.value = (1.5 - sizeT * 0.7) * discPresence * GALAXY_TUNE.particleSize;
   }
 
-  // Local Orion Spur detail: SECTOR-tier feature only. Peaks at sector
-  // camDist 3000–4500, falls off by mid-arm (6500 WU) so it doesn't
-  // appear as a bright stellar cloud streaking through the galaxy view
-  // at arm/galaxy tiers where you're meant to see the whole disc.
+  // Local Orion Spur detail: arm-tier feature. Prominent while immersed in the
+  // spur (~1e6 WU), falls off as you pull back to the full-galaxy frame so it
+  // doesn't streak as a bright cloud across the disc view.
   if (GALAXY_LOD.localArmMat) {
-    const closeFade = 1 - smoothRamp(camDist, 4500, 6500);
+    const closeFade = 1 - smoothRamp(camDist, 1e6, 4e6);
     const u = GALAXY_LOD.localArmMat.uniforms;
     u.uSizeScale.value = closeFade * 1.2 * discPresence;
   }
 
   // (dust-strand particles deleted; their LOD ramp removed with them)
 
-  // Nebulae: prominent at arm scale, fading at galaxy and at sector.
+  // Nebulae: prominent at arm scale, fading toward the full-galaxy frame.
   if (GALAXY_LOD.nebulaMats.length > 0) {
-    const boost = 1 + (1 - smoothRamp(camDist, 6000, 13000)) * 1.8;
+    const boost = 1 + (1 - smoothRamp(camDist, 3e6, 2e7)) * 1.8;
     for (const m of GALAXY_LOD.nebulaMats) {
       const base = (m.userData?._baseOpacity as number | undefined) ?? m.opacity;
       if (m.userData) m.userData._baseOpacity = base;
       m.opacity = Math.min(0.95, base * boost * discPresence * GALAXY_TUNE.nebulaOpacity);
     }
   }
+}
+
+// Reference camDist at which the galaxy markers/labels were authored (the old
+// galaxy-tier framing distance). Screen-constant sizing reproduces the SAME
+// screen fraction each element had then, preserving the visual hierarchy.
+const GAL_SC_REF = 12000;
+const _gscPos = new Vector3();
+
+/**
+ * Screen-constant sizing for galaxy markers, labels, and Sgr A* (Phase 2c-1).
+ * The galaxy group renders ×GALAXY_MODEL_SCALE larger, so every WU-fixed sprite
+ * balloons ×S. Tagged elements (`userData._galSC`) are re-sized each frame to a
+ * constant screen fraction using the TRUE camera→element distance — markers are
+ * spread ~millions of WU apart, so the global camDist would mis-size them. The
+ * `/ GALAXY_MODEL_SCALE` cancels the group scale; `_galSCuniform` scales all
+ * three axes (the Sgr A* sphere) vs sprites' x/aspect. Base scale is captured
+ * lazily on first run (after createGalaxy set each element's authored size).
+ */
+export function updateGalaxyMarkerScale(camera: Camera): void {
+  if (!_galaxyGroup) return;
+  _galaxyGroup.traverse((o) => {
+    if (!o.userData?._galSC) return;
+    if (!o.userData._galSCbase) o.userData._galSCbase = o.scale.clone();
+    const b = o.userData._galSCbase as Vector3;
+    o.getWorldPosition(_gscPos);
+    const dist = camera.position.distanceTo(_gscPos);
+    const lx = (b.x / GAL_SC_REF) * dist / GALAXY_MODEL_SCALE;
+    if (o.userData._galSCuniform) o.scale.setScalar(lx);
+    else o.scale.set(lx, lx * (b.y / b.x), 1);
+  });
 }
 
 // ── Galaxy Data ──────────────────────────────────────────────────
@@ -498,6 +534,13 @@ export function createGalaxy(): Group {
 
   const galaxy = new Group();
   galaxy.name = 'galaxy';
+  // Phase 2c-1: the galaxy is authored in its native 333-WU/kpc local frame;
+  // scaling the GROUP lifts the whole body (particle arms, disc box, nebulae,
+  // grid — every galaxy-local position) to the unified 1000-WU/pc render frame
+  // in one transform. Point/line pixel sizes are unaffected; sprite/label/Sgr-A*
+  // WU sizes balloon ×S and are made screen-constant in Inc 5. The disc density
+  // model stays native-333 and is bridged via the shader's uModelScale (= S).
+  galaxy.scale.setScalar(GALAXY_MODEL_SCALE);
   _galaxyGroup = galaxy; // tracked for the per-frame frame-broker updater (2b)
 
   const glowTex = makeGlowTexture();
@@ -746,8 +789,10 @@ export function createGalaxy(): Group {
   // position. uBoxMin/uBoxMax must be in world coords for the shader's
   // ray-AABB intersection to align with the camera in world space.
   const galaxyWorldCenter = getGalaxyOffset();
-  const boxMin = galaxyWorldCenter.clone().add(new Vector3(-DISC_RADIUS_WU, -DISC_Y_HALF_WU, -DISC_RADIUS_WU));
-  const boxMax = galaxyWorldCenter.clone().add(new Vector3( DISC_RADIUS_WU,  DISC_Y_HALF_WU,  DISC_RADIUS_WU));
+  // World half-extents (= local box × group scale) for frame-0 correctness; the
+  // per-frame updateGalaxyFrame refreshes these from the same scaled _discBoxHalf.
+  const boxMin = galaxyWorldCenter.clone().sub(_discBoxHalf);
+  const boxMax = galaxyWorldCenter.clone().add(_discBoxHalf);
 
   // v2: the shader marches the SHARED analytic galaxy model (galaxy-density
   // chunk — CI-calibrated, band-not-fog proven by vitest). Look uniforms are
@@ -776,8 +821,8 @@ export function createGalaxy(): Group {
       uEmissionScale: { value: GALAXY_TUNE.emission },
       uOpacity: { value: 1.0 }, // pinned — Phase-4 crossfade is the only ramp
       uJitter: { value: 1.0 },  // live: break step banding. Bake sets 0 (smooth).
-      uModelScale: { value: 1.0 }, // Phase 2c-1: 1.0 = no-op; Inc 1 sets GALAXY_MODEL_SCALE
-                                   // when the group scales, bridging world rays → native-333 model.
+      uModelScale: { value: GALAXY_MODEL_SCALE }, // Phase 2c-1: group renders ×S larger;
+                                   // the shader divides world rays back into the native-333 model.
       // Galaxy Lab live-tuning uniforms (TEMPORARY) — defaults = model constants.
       ...galaxyLabVolumeUniforms(),
     },
@@ -848,22 +893,28 @@ export function createGalaxy(): Group {
     name: 'Sagittarius A*',
     subtype: 'Supermassive Black Hole',
     description: 'Galactic core — 4.3 million solar masses',
+    _galSC: true, _galSCuniform: true, // screen-constant point under the ×S group
   };
+  galaxy.add(sgrA);
+  // Glow + labels are SIBLINGS (not children) of the sphere: each is screen-
+  // constant under the ×S group, and a screen-constant element can't ride a
+  // screen-constant parent (the scales would compound). Positions are galaxy-
+  // local at Sgr A* (origin), so they sit at the centre regardless.
   const sgrGlow = new Sprite(new SpriteMaterial({
     map: glowTex, color: 0xffffaa,
     transparent: true, blending: AdditiveBlending,
     depthWrite: false, opacity: 0.35,
   }));
   sgrGlow.scale.set(300, 300, 1);
-  sgrA.add(sgrGlow);
+  sgrGlow.userData._galSC = true;
+  galaxy.add(sgrGlow);
   const sgrLabel = makeLabelSprite('SGR A*', 'rgba(255,255,255,0.35)', 48);
   sgrLabel.position.set(0, 50, 0);
-  sgrA.add(sgrLabel);
+  galaxy.add(sgrLabel);
   const mwLabel = makeLabelSprite('MILKY WAY', 'rgba(255,255,255,0.5)', 56);
   mwLabel.position.set(0, 110, 0);
   mwLabel.scale.set(800, 200, 1);
-  sgrA.add(mwLabel);
-  galaxy.add(sgrA);
+  galaxy.add(mwLabel);
 
   // ── 7. Sector Grid ────────────────────────────────────────────
 
@@ -969,6 +1020,7 @@ export function createGalaxy(): Group {
       depthWrite: false, opacity: isActive ? 0.85 : 0.35,
     }));
     halo.scale.set(haloScale, haloScale, 1);
+    halo.userData._galSC = true; // screen-constant under the ×S group (Phase 2c-1)
     marker.add(halo);
 
     // Crisp white-hot core — small, additive, always on top.
@@ -979,6 +1031,7 @@ export function createGalaxy(): Group {
       depthWrite: false, opacity: isActive ? 1.0 : 0.65,
     }));
     core.scale.set(coreScale, coreScale, 1);
+    core.userData._galSC = true; // screen-constant under the ×S group (Phase 2c-1)
     marker.add(core);
 
     if (isActive) {

@@ -20,8 +20,8 @@
 import { Vector3 } from 'three';
 import { VP } from './visual-params';
 import { Game } from '../core/state';
-import { AU_TO_WU } from '../core/metrics';
-import { HOME_POS } from './galaxy-density';
+import { AU_TO_WU, WU_PER_PC } from '../core/metrics';
+import { galPos, HOME_SYSTEM } from '../data/curated-systems';
 
 /**
  * Effective visual inflation factor for the current camera distance.
@@ -86,13 +86,18 @@ class FrameBroker {
   /** Float64 authoritative camera anchor (galactocentric parsecs). Phase 2c populates. */
   readonly camAnchorPc = new Vector3();
 
-  /** Per-tier scene-WU origin. Galactic carries the home offset (= −HOME_POS),
-   *  byte-identical to the legacy getGalaxyOffset() value; local/regional are at
-   *  the scene origin today. */
+  /** Per-tier scene-WU origin. The galactic group origin is Sgr A* (the
+   *  galactocentric origin); in the home-centric scene that is −galPos(home) in
+   *  the UNIFIED metric (Phase 2c-1: 1 pc = WU_PER_PC), so the curated home lands
+   *  at the residual origin and the galaxy body (scaled ×GALAXY_MODEL_SCALE) frames
+   *  Sgr A* symmetrically. local/regional sit at the scene origin. */
   private readonly tierOriginWU: Record<FrameTier, Vector3> = {
     local: new Vector3(0, 0, 0),
     regional: new Vector3(0, 0, 0),
-    galactic: new Vector3(-HOME_POS[0], -HOME_POS[1], -HOME_POS[2]),
+    galactic: (() => {
+      const g = galPos(HOME_SYSTEM);
+      return new Vector3(-g.x * WU_PER_PC, -g.y * WU_PER_PC, -g.z * WU_PER_PC);
+    })(),
   };
 
   /** The per-frame floating-origin rebase. Identity in 2b. */

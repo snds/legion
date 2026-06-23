@@ -49,6 +49,9 @@ interface VisibilityTargets {
 
 let targets: VisibilityTargets | null = null;
 let lastDomain: DomainName | null = null;
+// Pre-galaxy-overview focus (absolute WU), saved when entering the galaxy tier
+// and restored on exit so the dive-in returns to the last-selected system.
+let _focusBeforeGalaxy: { x: number; y: number; z: number } | null = null;
 
 // ── Visibility Rules Per Domain ───────────────────────────────────
 
@@ -230,6 +233,21 @@ export function updateVisibility(camera?: Camera): void {
   const overlayOn = Game.data.overlayMode;
 
   if (domain !== lastDomain) {
+    const prevDomain = lastDomain;
+    // Galaxy-overview focus save/restore (Phase 2c-1). The galaxy tier focuses
+    // Sgr A* to frame the disc symmetrically — but at the unified scale Sgr A*
+    // is ~8.3e6 WU from home, so diving back in would strand the camera at the
+    // galactic centre. Save the pre-overview focus (the last-selected system,
+    // or home) on entry and restore it on exit so the dive-in returns home.
+    // camFocusTarget is stored ABSOLUTE, so it survives the floating-origin
+    // rebase between tiers. (Configurable later; for now: always last-selected.)
+    if (domain === 'galaxy' && prevDomain !== 'galaxy') {
+      const f = Game.data.camFocusTarget;
+      _focusBeforeGalaxy = f ? { x: f.x, y: f.y, z: f.z } : null;
+    } else if (prevDomain === 'galaxy' && domain !== 'galaxy' && _focusBeforeGalaxy) {
+      Game.data.camFocusTarget = _focusBeforeGalaxy;
+      _focusBeforeGalaxy = null;
+    }
     lastDomain = domain;
     applyDomain(domain);
   }
