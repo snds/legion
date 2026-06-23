@@ -48,6 +48,13 @@ export const galacticDiscVolumeFragmentShader = /* glsl */ `
                                // (256 steps need no jitter — and baking the
                                // per-pixel jitter into static cube texels is
                                // what produced the grain + cube-face seam)
+  uniform float uModelScale;   // galaxy group render-scale (Phase 2c-1). The disc
+                               // density model is calibrated in the native 333-WU/kpc
+                               // frame; the group renders ×uModelScale larger (unified
+                               // 1000 WU/pc). Bridge back: the sample point AND every
+                               // world step length divide by uModelScale → model space.
+                               // 1.0 = no-op (pre-rescale). Miss any one division and
+                               // the disc compiles but goes opaque/blown-out.
 
   varying vec3 vWorldPos;
 
@@ -94,11 +101,15 @@ export const galacticDiscVolumeFragmentShader = /* glsl */ `
       float t  = t0 * pow(tFar / t0, a0);
       float tn = t0 * pow(tFar / t0, a1);
       float dt = max(tn - t, 0.0);
+      // Into the native-333 model frame: ONE shared model-space step length
+      // (uModelScale=1 → identity). dtm drives BOTH emission and extinction so
+      // the three-way coupling (sample point + both dt) can never silently drift.
+      float dtm = dt / uModelScale;
 
-      GalaxySample s = sampleGalaxy(ro + rd * t - uGalaxyOrigin);
+      GalaxySample s = sampleGalaxy((ro + rd * t - uGalaxyOrigin) / uModelScale);
 
-      accum += T * s.j * dt;                  // emission decoupled from alpha
-      T *= exp(-s.kappaV * GD_KAPPA_RGB * dt);
+      accum += T * s.j * dtm;                  // emission decoupled from alpha
+      T *= exp(-s.kappaV * GD_KAPPA_RGB * dtm);
 
       if (max(T.r, max(T.g, T.b)) < 0.005) break;
     }

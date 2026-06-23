@@ -776,6 +776,8 @@ export function createGalaxy(): Group {
       uEmissionScale: { value: GALAXY_TUNE.emission },
       uOpacity: { value: 1.0 }, // pinned — Phase-4 crossfade is the only ramp
       uJitter: { value: 1.0 },  // live: break step banding. Bake sets 0 (smooth).
+      uModelScale: { value: 1.0 }, // Phase 2c-1: 1.0 = no-op; Inc 1 sets GALAXY_MODEL_SCALE
+                                   // when the group scales, bridging world rays → native-333 model.
       // Galaxy Lab live-tuning uniforms (TEMPORARY) — defaults = model constants.
       ...galaxyLabVolumeUniforms(),
     },
