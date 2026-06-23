@@ -21,6 +21,10 @@ export interface LayerGroups {
 
 export interface SceneContext {
   scene: Scene;
+  /** Single container for all renderable tiers (scale-unification Phase 2b).
+   *  Stays at the origin under the 2b identity policy; Phase 2c re-roots tiers
+   *  through the frame broker. Lights remain direct children of `scene`. */
+  sceneRoot: Group;
   camera: PerspectiveCamera;
   layers: LayerGroups;
   renderObjectMap: Map<number, Object3D>;
@@ -99,11 +103,20 @@ export function createScene(): SceneContext {
   const ui = new Group();
   ui.name = 'layer-ui';
 
-  scene.add(local);
-  scene.add(regional);
-  scene.add(galactic);
-  scene.add(background);
-  scene.add(ui);
+  // Scale-unification Phase 2b: all renderable tiers ride a single sceneRoot
+  // container instead of being added straight to the scene. At the 2b identity
+  // policy sceneRoot sits at the origin, so this is a mathematical no-op (the
+  // composed matrixWorld of every child is bit-identical). Phase 2c re-roots
+  // tiers through the frame broker. Lights stay direct children of `scene`.
+  const sceneRoot = new Group();
+  sceneRoot.name = 'scene-root';
+  scene.add(sceneRoot);
+
+  sceneRoot.add(local);
+  sceneRoot.add(regional);
+  sceneRoot.add(galactic);
+  sceneRoot.add(background);
+  sceneRoot.add(ui);
 
   const layers: LayerGroups = { local, regional, galactic, background, ui };
   const renderObjectMap = new Map<number, Object3D>();
@@ -116,5 +129,5 @@ export function createScene(): SceneContext {
   };
   window.addEventListener('resize', onResize);
 
-  return { scene, camera, layers, renderObjectMap, clock };
+  return { scene, sceneRoot, camera, layers, renderObjectMap, clock };
 }
