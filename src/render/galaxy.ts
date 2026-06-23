@@ -24,7 +24,8 @@ import {
   CustomBlending, OneFactor, OneMinusSrcAlphaFactor,
   CanvasTexture, Color, Camera,
 } from 'three';
-import { getStellarRender } from './planet-colors';
+import { getStellarRenderSpect } from './planet-colors';
+import { CURATED_SYSTEMS, galPos, distanceLy, type CuratedSystem } from '../data/curated-systems';
 import { galacticStarsVertexShader, galacticStarsFragmentShader } from './shaders/galactic-stars';
 import { galacticDiscVolumeVertexShader, galacticDiscVolumeFragmentShader } from './shaders/galactic-disc-volume';
 import {
@@ -472,32 +473,9 @@ export function updateGalaxyMarkerScale(camera: Camera): void {
 
 // ── Galaxy Data ──────────────────────────────────────────────────
 
-interface GalSystem {
-  name: string;
-  color: number;
-  hasBobs: boolean;
-  bobCount: number;
-  isHome?: boolean;
-  localX: number;
-  localY: number;
-  localZ: number;
-}
-
-/** Known star systems with local coords (light-years from Sol). */
-export const GAL_SYSTEMS: GalSystem[] = [
-  { name: 'Sol', color: 0xfff4e0, hasBobs: true, bobCount: 1, localX: 0, localY: 0, localZ: 0 },
-  { name: 'Epsilon Eridani', color: 0xffc77d, hasBobs: true, bobCount: 4, isHome: true, localX: 3.7, localY: -7.8, localZ: 5.0 },
-  { name: 'Proxima Centauri', color: 0xffaa88, hasBobs: true, bobCount: 1, localX: -1.6, localY: -1.2, localZ: -3.5 },
-  { name: 'Tau Ceti', color: 0xffecc0, hasBobs: true, bobCount: 1, localX: 5.0, localY: -8.5, localZ: -5.0 },
-  { name: 'Ross 128', color: 0xffa070, hasBobs: true, bobCount: 1, localX: -6.0, localY: 4.0, localZ: 7.0 },
-  { name: 'TRAPPIST-1', color: 0xff7040, hasBobs: false, bobCount: 0, localX: -20.0, localY: -5.0, localZ: -32.0 },
-  { name: 'Sirius', color: 0xd0e0ff, hasBobs: false, bobCount: 0, localX: -3.0, localY: -4.0, localZ: -6.0 },
-  { name: 'Procyon', color: 0xfff0cc, hasBobs: false, bobCount: 0, localX: 5.0, localY: 2.0, localZ: -8.0 },
-  { name: 'Wolf 359', color: 0xff9060, hasBobs: false, bobCount: 0, localX: -4.0, localY: 5.0, localZ: 2.0 },
-  { name: 'Luyten', color: 0xffbb80, hasBobs: false, bobCount: 0, localX: -8.0, localY: -3.0, localZ: -5.0 },
-  { name: 'Lacaille 9352', color: 0xffaa70, hasBobs: false, bobCount: 0, localX: 2.0, localY: -6.0, localZ: 8.0 },
-  { name: '61 Cygni', color: 0xffc080, hasBobs: false, bobCount: 0, localX: 6.0, localY: 3.0, localZ: -7.0 },
-];
+// Galactic-tier star markers now come from CURATED_SYSTEMS (real galactocentric
+// positions) — see the marker loop in createGalaxy. The fictional GAL_SYSTEMS
+// list + GalSystem type were retired in Phase 2c-1 Inc 4.
 
 const ALIEN_CIVS = [
   { name: 'Others', color: 0xef4444, localX: -45, localY: 2, localZ: -60, influenceRadius: 35 },
@@ -505,6 +483,10 @@ const ALIEN_CIVS = [
   { name: 'Pav', color: 0xf4c430, localX: 55, localY: 6, localZ: -20, influenceRadius: 22 },
 ];
 
+// from/to are looked up in CURATED_SYSTEMS. TRAPPIST-1 (iconic Bobiverse lore,
+// kept in the roster) isn't in the 25-pc curated catalogue, so this transit's
+// galaxy line silently doesn't draw (graceful skip below) — the roster narrative
+// is preserved. To restore the visual, add TRAPPIST-1's real position.
 const TRANSIT_BOBS = [
   { name: 'Magellan', color: 0xddaa44, from: 'Epsilon Eridani', to: 'TRAPPIST-1', progress: 0.35 },
 ];
@@ -990,14 +972,20 @@ export function createGalaxy(): Group {
 
   const lyToWu = KPC / 1000;
 
-  GAL_SYSTEMS.forEach(sys => {
-    const pos = new Vector3(
-      SOL_GAL_POS.x + sys.localX * lyToWu,
-      sys.localY * lyToWu,
-      SOL_GAL_POS.z + sys.localZ * lyToWu,
-    );
+  // Galaxy-LOCAL position (WU) of a curated system from its REAL galactocentric
+  // parsecs (Phase 2c-1 Inc 4): galPos()·(KPC/1000) = the native 0.333 WU/pc
+  // frame; the galaxy group's ×GALAXY_MODEL_SCALE lifts it to the unified
+  // 1000 WU/pc. Sol lands at SOL_GAL_POS; home (ε Eri) sits just off it in the spur.
+  const pcToWuNative = KPC / 1000; // 0.333 WU/pc in the native-333 frame (galPos is PARSECS)
+  const galLocalPos = (sys: CuratedSystem): Vector3 => {
+    const g = galPos(sys);
+    return new Vector3(g.x * pcToWuNative, g.y * pcToWuNative, g.z * pcToWuNative);
+  };
 
-    const stellar = getStellarRender(sys.name);
+  CURATED_SYSTEMS.forEach(sys => {
+    const pos = galLocalPos(sys);
+
+    const stellar = getStellarRenderSpect(sys.spect);
     const isActive = sys.hasBobs;
 
     // Visible bloom halo sizes the hit target — at galactic camera distances
@@ -1010,7 +998,13 @@ export function createGalaxy(): Group {
       new MeshBasicMaterial({ color: stellar.core, transparent: true, opacity: 0.0001, depthWrite: false }),
     );
     marker.position.copy(pos);
-    marker.userData = { type: 'gal_system', ...sys, _pos: pos };
+    // Alias the curated fields to the keys the tooltip/selection panels read
+    // (designation/spectralType/distLy) so galactic markers show real data.
+    marker.userData = {
+      type: 'gal_system', ...sys,
+      designation: sys.desig, spectralType: sys.spect, distLy: distanceLy(sys),
+      _pos: pos,
+    };
     galaxy.add(marker);
 
     // Colored bloom halo — larger for active systems so eye is drawn to them.
@@ -1072,13 +1066,9 @@ export function createGalaxy(): Group {
 
   // ── 10. Bob Space Overlay (dashed) ────────────────────────────
 
-  const bobSystems = GAL_SYSTEMS.filter(s => s.hasBobs);
+  const bobSystems = CURATED_SYSTEMS.filter(s => s.hasBobs);
   if (bobSystems.length > 1) {
-    const positions = bobSystems.map(s => new Vector3(
-      SOL_GAL_POS.x + s.localX * lyToWu,
-      s.localY * lyToWu,
-      SOL_GAL_POS.z + s.localZ * lyToWu,
-    ));
+    const positions = bobSystems.map(s => galLocalPos(s));
     for (let i = 0; i < positions.length; i++) {
       for (let j = i + 1; j < positions.length; j++) {
         galaxy.add(dashedLine([positions[i], positions[j]], {
@@ -1137,20 +1127,12 @@ export function createGalaxy(): Group {
   // ── 12. Transit Lines + Chevron Tokens ─────────────────────────
 
   TRANSIT_BOBS.forEach((tb, i) => {
-    const fromSys = GAL_SYSTEMS.find(s => s.name === tb.from);
-    const toSys = GAL_SYSTEMS.find(s => s.name === tb.to);
+    const fromSys = CURATED_SYSTEMS.find(s => s.name === tb.from);
+    const toSys = CURATED_SYSTEMS.find(s => s.name === tb.to);
     if (!fromSys || !toSys) return;
 
-    const fromPos = new Vector3(
-      SOL_GAL_POS.x + fromSys.localX * lyToWu,
-      fromSys.localY * lyToWu,
-      SOL_GAL_POS.z + fromSys.localZ * lyToWu,
-    );
-    const toPos = new Vector3(
-      SOL_GAL_POS.x + toSys.localX * lyToWu,
-      toSys.localY * lyToWu,
-      SOL_GAL_POS.z + toSys.localZ * lyToWu,
-    );
+    const fromPos = galLocalPos(fromSys);
+    const toPos = galLocalPos(toSys);
 
     // Animated dashed transit path
     galaxy.add(dashedLine([fromPos, toPos], {

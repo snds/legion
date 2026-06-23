@@ -11,7 +11,7 @@ import {
   type CuratedSystem,
 } from './curated-systems';
 import { STAR_SYSTEMS } from './star-catalog';
-import { SOL_GAL_PC, REGIONAL_WU_PER_PC } from '../core/metrics';
+import { SOL_GAL_PC, WU_PER_PC } from '../core/metrics';
 
 const byName = (n: string): CuratedSystem => {
   const s = CURATED_SYSTEMS.find((c) => c.name === n);
@@ -94,11 +94,10 @@ describe('curated systems — single source of truth (de-dup)', () => {
   });
 
   it('provides exactly one canonical record per star shared with the galactic tier', () => {
-    // These names also appear in galaxy.ts GAL_SYSTEMS — the galactic-tier list,
-    // which is STILL on fictional coordinates after this PR (its re-point onto
-    // galPos() is deferred to Phase 2's frame broker, see curated-systems.ts).
-    // This does NOT claim the two lists are reconciled; it only asserts the merge
-    // TARGET is well-formed: one canonical record per shared star.
+    // Phase 2c-1 Inc 4 RECONCILED the tiers: galaxy.ts now renders its markers
+    // straight from CURATED_SYSTEMS at galPos(), so this catalogue is the single
+    // source for both the regional and galactic tiers. Asserts it stays well-
+    // formed: one canonical record per star (no duplicate galactic/regional rows).
     const sharedWithGalacticTier = ['Sol', 'Epsilon Eridani', 'Tau Ceti', 'Sirius', 'Procyon', 'Wolf 359', '61 Cygni'];
     for (const n of sharedWithGalacticTier) {
       expect(CURATED_SYSTEMS.filter((s) => s.name === n)).toHaveLength(1);
@@ -118,27 +117,29 @@ describe('curated systems — regional scene frame', () => {
     expect(CURATED_SYSTEMS.filter((s) => s.isHome)).toHaveLength(1);
   });
 
-  it('regional positions are the real home-relative offset × the regional scale', () => {
+  it('regional positions are the real home-relative offset × the unified scale', () => {
     const sol = byName('Sol');
     const p = regionalScenePos(sol);
-    // Sol−home offset (pc) × WU/pc, component-wise
-    expect(p.x).toBeCloseTo((sol.solPc.x - HOME_SYSTEM.solPc.x) * REGIONAL_WU_PER_PC, 6);
-    expect(p.y).toBeCloseTo((sol.solPc.y - HOME_SYSTEM.solPc.y) * REGIONAL_WU_PER_PC, 6);
-    expect(p.z).toBeCloseTo((sol.solPc.z - HOME_SYSTEM.solPc.z) * REGIONAL_WU_PER_PC, 6);
-    // Sol is ~10.49 ly from ε Eridani → ×220 ≈ 2308 WU
-    expect(p.length()).toBeCloseTo(2308, -1);
+    // Sol−home offset (pc) × WU_PER_PC (unified 1000 WU/pc), component-wise
+    expect(p.x).toBeCloseTo((sol.solPc.x - HOME_SYSTEM.solPc.x) * WU_PER_PC, 6);
+    expect(p.y).toBeCloseTo((sol.solPc.y - HOME_SYSTEM.solPc.y) * WU_PER_PC, 6);
+    expect(p.z).toBeCloseTo((sol.solPc.z - HOME_SYSTEM.solPc.z) * WU_PER_PC, 6);
+    // Sol is ~10.49 ly = 3.216 pc from ε Eridani → ×1000 WU/pc ≈ 3216 WU
+    expect(p.length()).toBeCloseTo(3216, -1);
   });
 
-  it('the whole neighbourhood fits inside the 4200-WU sector orb', () => {
+  it('the whole neighbourhood is a compact bubble at the unified scale', () => {
+    // Phase 2c-1 Inc 6: the neighbourhood rides 1000 WU/pc, so the farthest
+    // curated system sits ~5400 WU from home (was ~3875 at the retired ×220).
     let farthest = { name: '', wu: 0 };
     for (const s of CURATED_SYSTEMS) {
       const wu = regionalScenePos(s).length();
-      expect(wu).toBeLessThan(4200);
+      expect(wu).toBeLessThan(6000);
       if (wu > farthest.wu) farthest = { name: s.name, wu };
     }
-    // Ross 154 is the most distant from ε Eridani (~17.6 ly → ~3875 WU)
+    // Ross 154 is the most distant from ε Eridani (~17.6 ly → ~5400 WU)
     expect(farthest.name).toBe('Ross 154');
-    expect(farthest.wu).toBeGreaterThan(3000);
+    expect(farthest.wu).toBeGreaterThan(5000);
   });
 });
 

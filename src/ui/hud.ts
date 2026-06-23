@@ -11,7 +11,10 @@
 // ═══════════════════════════════════════════════════════════════════
 
 import { Game, type DomainName } from '../core/state';
-import { AU_TO_WU as WU_PER_AU, LY_TO_WU_REGIONAL as WU_PER_LY, KPC_TO_WU as WU_PER_KPC } from '../core/metrics';
+// Phase 2c-1 Inc 6: the neighbourhood + galaxy now ride the unified metric, so
+// the ly/kpc readouts divide by the unified scales (1 ly = LY_TO_WU ≈ 306.6 WU;
+// 1 kpc = 1e6 WU) — was the legacy 220 / 333 which read "108108 kpc" at galaxy.
+import { AU_TO_WU as WU_PER_AU, LY_TO_WU as WU_PER_LY, KPC_TO_WU_UNIFIED as WU_PER_KPC } from '../core/metrics';
 import { formatGameClock } from '../core/time';
 
 // ── DOM References ───────────────────────────────────────────────
@@ -63,12 +66,13 @@ function fmtNum(n: number): string {
 
 // View-radius readout — the real distance the camera sits from the system
 // centre, so the player understands the scale they are viewing (Solar-System-
-// Scope "DISTANCE …" cue). The zoom tiers use mutually-INCONSISTENT compressed
-// WU scales, so the conversion is per-regime, switching unit at the heliopause
-// (the real edge of the solar system: AU inside, light-years beyond):
-//   • system tiers   1 AU  = 10  WU   (planets placed at sma·10)
-//   • stellar tiers  1 ly  = 220 WU   (star map placed at distLy·220)
-//   • galactic       1 kpc = 333 WU   (KPC_WU)
+// Scope "DISTANCE …" cue). The conversion is per-regime, switching unit at the
+// heliopause (the real edge of the solar system: AU inside, light-years beyond).
+// Post Phase 2c-1 the neighbourhood + galaxy ride the unified metric; only the
+// system tier is still the legacy compressed AU scale:
+//   • system tiers   1 AU  = 10 WU      (legacy; planets at sma·10)
+//   • stellar tiers  1 ly  ≈ 306.6 WU   (unified LY_TO_WU; neighbourhood)
+//   • galactic       1 kpc = 1e6 WU     (unified KPC_TO_WU_UNIFIED)
 // WU_PER_AU / WU_PER_LY / WU_PER_KPC are imported from metrics.ts (single source).
 function fmtScale(v: number): string {
   if (v >= 100) return Math.round(v).toString();

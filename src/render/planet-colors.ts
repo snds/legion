@@ -99,39 +99,25 @@ export const STELLAR_CLASS_HALO: Record<StellarClass, number> = {
 };
 
 /**
- * Best-effort classify a star name → MK class. The catalog uses real
- * stars whose classes are well known; anything unknown falls back to G.
+ * Classify from an MK SPECTRAL TYPE string (e.g. 'K2V', 'sdM4', 'dM5.5e') —
+ * the real HYG class carried by the curated catalogue. Picks the first main
+ * O/B/A/F/G/K/M letter (skipping luminosity/subdwarf prefixes like sd-, d-),
+ * falling back to G. Preferred over name-lookup when a spectral type is on hand.
  */
-const KNOWN_CLASSES: Record<string, StellarClass> = {
-  'Sol': 'G',
-  'Epsilon Eridani': 'K',
-  'Proxima Centauri': 'M',
-  'Tau Ceti': 'G',
-  'Ross 128': 'M',
-  'TRAPPIST-1': 'M',
-  'Sirius': 'A',
-  'Procyon': 'F',
-  'Wolf 359': 'M',
-  'Luyten': 'M',
-  'Lacaille 9352': 'M',
-  '61 Cygni': 'K',
-};
+export function classifyStarSpect(spect: string): StellarClass {
+  const m = spect.toUpperCase().match(/[OBAFGKM]/);
+  const c = m?.[0];
+  return (c && c in STELLAR_CLASS_COLOR ? c : 'G') as StellarClass;
+}
 
-export function classifyStar(name: string): StellarClass {
-  return KNOWN_CLASSES[name] ?? 'G';
+/** StellarRender from a spectral type (see classifyStarSpect). */
+export function getStellarRenderSpect(spect: string): StellarRender {
+  const cls = classifyStarSpect(spect);
+  return { core: STELLAR_CLASS_COLOR[cls], halo: STELLAR_CLASS_HALO[cls], cls };
 }
 
 export interface StellarRender {
   core: number;
   halo: number;
   cls: StellarClass;
-}
-
-export function getStellarRender(name: string): StellarRender {
-  const cls = classifyStar(name);
-  return {
-    core: STELLAR_CLASS_COLOR[cls],
-    halo: STELLAR_CLASS_HALO[cls],
-    cls,
-  };
 }

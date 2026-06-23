@@ -11,21 +11,21 @@ import createGraph from 'ngraph.graph';
 import path from 'ngraph.path';
 import { Position, StarSystem, Identity } from '../core/components';
 import { Strings } from '../core/world';
-import { LY_TO_WU_REGIONAL } from '../core/metrics';
+import { LY_TO_WU } from '../core/metrics';
 import { globalBoard } from './ai/blackboard';
 
 // ── Graph Instance ───────────────────────────────────────────────
 
-// Navigable jump range, WORLD UNITS in the regional scene frame. Position now
-// holds real regional scene-WU coordinates (scale-unification Phase 1), so the
-// edge threshold must be a WU distance, NOT the old fictional ±10-cube "15".
-// 14 ly is the chosen range: the curated neighbourhood's minimum spanning tree
-// has a 9.3 ly longest edge, so 14 ly keeps the graph connected with margin and
-// yields ~69 edges — matching the prior graph's connectivity density.
-export const NAV_LINK_WU = 14 * LY_TO_WU_REGIONAL; // ≈ 3080 WU
+// Navigable jump range, WORLD UNITS. Position holds real neighbourhood scene-WU
+// coordinates; Phase 2c-1 Inc 6 re-expresses both the positions (regionalScenePos
+// → ×WU_PER_PC) and this threshold on the UNIFIED metric (1 ly = LY_TO_WU ≈ 306.6
+// WU), scaling both by the SAME 1.394× so the graph topology is preserved.
+// 14 ly: the curated neighbourhood's MST has a 9.3 ly longest edge, so 14 ly
+// keeps the graph connected with margin (~69 edges, matching prior density).
+export const NAV_LINK_WU = 14 * LY_TO_WU; // ≈ 4292 WU (unified)
 
 export interface StarEdge {
-  distance: number;        // world units (regional scene frame); routing cost
+  distance: number;        // world units (unified frame, 1000 WU/pc); routing cost
   danger: number;          // 0-1 threat level
   status: 'open' | 'blockaded' | 'contested';
 }
@@ -40,7 +40,7 @@ const graph = createGraph<{ eid: number; x: number; y: number; z: number }, Star
  *
  * @param systemEids - Array of star system entity IDs
  * @param maxEdgeDistance - Maximum distance for edge connections, WORLD UNITS
- *   (regional scene frame). Defaults to NAV_LINK_WU (14 ly).
+ *   (unified frame, 1000 WU/pc). Defaults to NAV_LINK_WU (14 ly).
  */
 export function buildStarGraph(
   systemEids: number[],

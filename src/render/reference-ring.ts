@@ -19,7 +19,7 @@ import {
 } from 'three';
 import { createLabel } from './icons';
 import type { DomainName } from '../core/state';
-import { AU_TO_WU as WU_PER_AU, LY_TO_WU_REGIONAL as WU_PER_LY } from '../core/metrics';
+import { AU_TO_WU as WU_PER_AU, LY_TO_WU as WU_PER_LY } from '../core/metrics'; // Inc 6: ly unified (306.6); AU still legacy (10)
 
 const SEG = 96;
 const SHOW_DOMAINS: DomainName[] = ['inner-system', 'outer-system', 'heliopause', 'sector'];

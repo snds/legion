@@ -21,11 +21,15 @@ export const LY_TO_WU = WU_PER_PC / LY_PER_PC;      // 306.6 WU/ly (true)
 export const AU_TO_WU_TRUE = WU_PER_PC / AU_PER_PC; // 0.004848 WU/AU (true)
 
 // ── LEGACY compressed scales — CURRENT behaviour (byte-identical) ──
-// The three mutually-inconsistent scales the migration replaces (~10⁶× apart).
+// System tier (AU_TO_WU) and galaxy-local native frame (KPC_TO_WU) are still
+// legacy; the regional ×220 frame was RETIRED in Phase 2c-1 Inc 6 (the
+// neighbourhood now rides the unified 1000 WU/pc metric, see regionalScenePos).
 export const AU_TO_WU = 10;             // system tier: 1 AU = 10 WU (legacy)
-export const LY_TO_WU_REGIONAL = 220;   // curated regional map: 1 ly = 220 WU (legacy)
-export const KPC_TO_WU = 333;           // galaxy: 1 kpc = 333 WU (legacy)
-export const GAL_LY_TO_WU = KPC_TO_WU / 1000; // galaxy-local ly offset = 0.333 WU/ly (legacy)
+export const KPC_TO_WU = 333;           // galaxy-local native frame: 1 kpc = 333 WU
+export const GAL_LY_TO_WU = KPC_TO_WU / 1000; // galaxy-local ly offset = 0.333 WU/ly
+// Unified-frame kpc for UI distance readouts (the galaxy group renders ×
+// GALAXY_MODEL_SCALE, lifting it to 1 pc = WU_PER_PC, so 1 kpc = 1e6 WU).
+export const KPC_TO_WU_UNIFIED = WU_PER_PC * 1000; // 1e6 WU/kpc
 
 // Galaxy RENDER-frame rescale (scale-unification Phase 2c-1). The galaxy is
 // built in its legacy galaxy-local frame (1 kpc = KPC_TO_WU WU = 0.333 WU/pc);
@@ -43,8 +47,3 @@ export const GALAXY_MODEL_SCALE = (WU_PER_PC * 1000) / KPC_TO_WU;
 // position is SOL_GAL_PC + its real heliocentric parsec offset.
 export const SOL_GAL_PC = { x: 8300, y: 0, z: 0 } as const;
 
-// Regional-tier scale expressed PER PARSEC: the legacy 1 ly = 220 WU map,
-// pre-multiplied by ly/pc so real heliocentric parsec offsets place directly.
-// 220 · 3.2615638 = 717.544 WU/pc. (Same regime as LY_TO_WU_REGIONAL — no new
-// scale, just the per-parsec form the real catalogue coordinates consume.)
-export const REGIONAL_WU_PER_PC = LY_TO_WU_REGIONAL * LY_PER_PC;
