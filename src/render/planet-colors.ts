@@ -121,6 +121,24 @@ export function classifyStar(name: string): StellarClass {
   return KNOWN_CLASSES[name] ?? 'G';
 }
 
+/**
+ * Classify from an MK SPECTRAL TYPE string (e.g. 'K2V', 'sdM4', 'dM5.5e') —
+ * the real HYG class carried by the curated catalogue. Picks the first main
+ * O/B/A/F/G/K/M letter (skipping luminosity/subdwarf prefixes like sd-, d-),
+ * falling back to G. Preferred over name-lookup when a spectral type is on hand.
+ */
+export function classifyStarSpect(spect: string): StellarClass {
+  const m = spect.toUpperCase().match(/[OBAFGKM]/);
+  const c = m?.[0];
+  return (c && c in STELLAR_CLASS_COLOR ? c : 'G') as StellarClass;
+}
+
+/** StellarRender from a spectral type (see classifyStarSpect). */
+export function getStellarRenderSpect(spect: string): StellarRender {
+  const cls = classifyStarSpect(spect);
+  return { core: STELLAR_CLASS_COLOR[cls], halo: STELLAR_CLASS_HALO[cls], cls };
+}
+
 export interface StellarRender {
   core: number;
   halo: number;
