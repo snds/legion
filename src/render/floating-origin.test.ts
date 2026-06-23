@@ -6,7 +6,7 @@
 // can't be built headlessly here: createScene needs window, createGalaxy needs
 // document, and the runner is bare node).
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { Scene, Group, Object3D, PerspectiveCamera, Vector3 } from 'three';
 import { Broker } from './scale-manager';
 import { HOME_POS } from './galaxy-density';
@@ -96,5 +96,60 @@ describe('floating-origin re-parent is a 0-ULP identity (sceneRoot at origin)', 
       const b = cam.matrixWorldInverse.clone().multiply(build(false, lp, bp).matrixWorld).elements.slice();
       expect(a).toEqual(b);
     }
+  });
+});
+
+// Phase 2c-0b: the floating origin is ACTIVE. The camera sets R = its absolute
+// world position via Broker.setRebase() each frame; these drive the REAL broker
+// (not a hand-injected tier root) so the rebase math can't silently break.
+describe('floating origin ACTIVE — broker rebase (Phase 2c)', () => {
+  afterEach(() => Broker.setRebase(new Vector3(0, 0, 0))); // restore identity for other suites
+
+  it('setRebase drives R; getTierRoot(tier) = tierOrigin − R for every tier', () => {
+    const R = new Vector3(8_300_000, 1_000_000, -2_000_000);
+    Broker.setRebase(R);
+    expect(Broker.getSceneRebase().toArray()).toEqual([R.x, R.y, R.z]);
+    expect(Broker.getTierRoot('local').toArray()).toEqual([-R.x, -R.y, -R.z]);
+    expect(Broker.getTierRoot('regional').toArray()).toEqual([-R.x, -R.y, -R.z]);
+    const g = Broker.getTierRoot('galactic');
+    expect(g.x).toBeCloseTo(-HOME_POS[0] - R.x, 2);
+    expect(g.y).toBeCloseTo(-HOME_POS[1] - R.y, 2);
+    expect(g.z).toBeCloseTo(-HOME_POS[2] - R.z, 2);
+  });
+
+  it('a body at the camera focus renders at a SMALL residual (the float32-safety point)', () => {
+    // Camera orbits a focus at galactic magnitude; with R = the camera world pos,
+    // the focus (and bodies near it) render within ~camDist of the origin — NOT at
+    // 8e6 WU — so float32 GPU coords stay precise.
+    const focusAbs = new Vector3(8_300_000, 0, 0);                  // home-ish, galactic WU
+    const camAbs = focusAbs.clone().add(new Vector3(0, 0, 3000));   // orbit dist 3000
+    Broker.setRebase(camAbs);                                       // R = camera world pos
+    const focusRender = focusAbs.clone().sub(Broker.getSceneRebase()); // = focusAbs − camAbs
+    expect(focusRender.length()).toBeCloseTo(3000, 0);              // ≈ camDist, small
+    expect(focusRender.length()).toBeLessThan(1e4);
+  });
+
+  it('modelView is invariant to R (the residual −R cancels)', () => {
+    // Build scene→tierGroup→body with the tier at getTierRoot('galactic') and the
+    // camera at camAbs−R, for R=0 and R=camAbs; the body's modelView must match.
+    const bodyLocal = new Vector3(5000, 400, -5000);
+    const camAbs = new Vector3(2.0e7, 5.0e5, -1.0e7);
+    const bodyAbs = new Vector3(-HOME_POS[0] + bodyLocal.x, -HOME_POS[1] + bodyLocal.y, -HOME_POS[2] + bodyLocal.z);
+    const modelView = (R: Vector3): number[] => {
+      Broker.setRebase(R);
+      const scene = new Scene();
+      const tier = new Group(); tier.position.copy(Broker.getTierRoot('galactic'));
+      const body = new Object3D(); body.position.copy(bodyLocal);
+      scene.add(tier); tier.add(body);
+      const cam = new PerspectiveCamera(55, 1.6, 0.01, 2e8);
+      cam.position.copy(camAbs).sub(R);                 // camera at residual
+      cam.lookAt(bodyAbs.x - R.x, bodyAbs.y - R.y, bodyAbs.z - R.z);
+      scene.add(cam);
+      scene.updateMatrixWorld(true); cam.updateMatrixWorld(true);
+      return cam.matrixWorldInverse.clone().multiply(body.matrixWorld).elements.slice();
+    };
+    const mv0 = modelView(new Vector3(0, 0, 0));
+    const mvR = modelView(camAbs.clone());              // R = camAbs ⇒ camera → origin
+    mv0.forEach((v, i) => expect(mvR[i]).toBeCloseTo(v, 1)); // float64 cancels; ~exact
   });
 });

@@ -100,6 +100,7 @@ export class CameraController {
   private readonly _velocity = new Vector3();
   private readonly _lastCamPos = new Vector3(); // last AUTHORITATIVE anchor (cam.pos + R)
   private readonly _anchorPos = new Vector3();
+  private readonly _r = new Vector3(); // scratch: floating-origin rebase R
   private _velocityValid = false;
 
   /** World-space camera velocity in units per second, updated each frame. */
@@ -124,6 +125,24 @@ export class CameraController {
     }
     this._lastCamPos.copy(this._anchorPos);
     this._velocityValid = true;
+  }
+
+  /**
+   * Floating origin (Phase 2c): rebase the just-computed ABSOLUTE camera pose to
+   * the residual render frame. Sets R = the camera's absolute world position on
+   * the broker, then shifts cam.position AND the look target by −R so the camera
+   * renders near the origin (float32-safe at galactic magnitudes). It is a global
+   * −R translation, so the rendered image is pixel-identical; it just keeps GPU
+   * coordinates small. No-op when the floating origin is inactive (R≡0). Must run
+   * after near/far + velocity-independent math and before _trackVelocity (which
+   * reads the residual cam.position so its anchor = R + residual = the absolute
+   * position). `tx,ty,tz` is the ABSOLUTE look target.
+   */
+  private _rebaseToResidual(tx: number, ty: number, tz: number): void {
+    Broker.setRebase(this.cam.position);          // R := absolute cam world pos (or 0 if inactive)
+    const r = Broker.getSceneRebase(this._r);
+    this.cam.position.sub(r);                      // → residual (≈0 when active)
+    this.cam.lookAt(tx - r.x, ty - r.y, tz - r.z); // re-aim in the residual frame
   }
 
   // ── Flight-Path State ────────────────────────────────────────────
@@ -165,7 +184,13 @@ export class CameraController {
     /** Animation duration in seconds. Auto-derives from distance if omitted. */
     duration?: number;
   } = {}): void {
-    const startPos = this.cam.position.clone();
+    // Inputs (targetPos from a raycast hit, cam.position) are in the residual
+    // render frame under the floating origin; convert to ABSOLUTE so the Bezier
+    // endpoints + focus stay consistent. The per-frame _rebaseToResidual re-
+    // residualises during the flight. R≡0 when inactive ⇒ identity.
+    const r = Broker.getSceneRebase(this._r);
+    const target = targetPos.clone().add(r);
+    const startPos = this.cam.position.clone().add(r);
     const targetCamDist = opts.targetCamDist ?? Game.data.camDist;
     const targetZoomLevel = opts.targetZoomLevel ?? Game.data.targetZoom;
 
@@ -178,9 +203,9 @@ export class CameraController {
     const sinTheta = Math.sin(this.theta);
     const cosTheta = Math.cos(this.theta);
     const endPos = new Vector3(
-      targetPos.x + targetCamDist * sinPhi * cosTheta,
-      targetPos.y + targetCamDist * cosPhi,
-      targetPos.z + targetCamDist * sinPhi * sinTheta,
+      target.x + targetCamDist * sinPhi * cosTheta,
+      target.y + targetCamDist * cosPhi,
+      target.z + targetCamDist * sinPhi * sinTheta,
     );
 
     // Control point: midpoint of start/end, lifted along +Y by 30% of the
@@ -202,13 +227,13 @@ export class CameraController {
       endPos,
       controlPoint,
       startLook: new Vector3(this.focus.x, this.focus.y, this.focus.z),
-      endLook: targetPos.clone(),
+      endLook: target.clone(),
       endZoomLevel: targetZoomLevel,
     };
 
     // Set the orbit-mode focus target immediately so when the flight ends
     // and hands back to orbit math, the focus is already where we want.
-    Game.data.camFocusTarget = { x: targetPos.x, y: targetPos.y, z: targetPos.z };
+    Game.data.camFocusTarget = { x: target.x, y: target.y, z: target.z };
     // Drop any active object tracking during flight (the destination is
     // a position, not an object; if the user wants to lock on, they can
     // dblclick after landing).
@@ -233,9 +258,13 @@ export class CameraController {
     const fx = Game.data.camFocusTarget?.x ?? 0;
     const fy = Game.data.camFocusTarget?.y ?? 0;
     const fz = Game.data.camFocusTarget?.z ?? 0;
-    const dx = this.cam.position.x - fx;
-    const dy = this.cam.position.y - fy;
-    const dz = this.cam.position.z - fz;
+    // cam.position is in the residual render frame; focus is absolute. Reconstruct
+    // the absolute camera position (camAbs = cam.position + R) before deriving the
+    // orbit angles/distance. R≡0 when the floating origin is inactive.
+    const r = Broker.getSceneRebase(this._r);
+    const dx = (this.cam.position.x + r.x) - fx;
+    const dy = (this.cam.position.y + r.y) - fy;
+    const dz = (this.cam.position.z + r.z) - fz;
     const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
     const phi = Math.acos(Math.max(-1, Math.min(1, dy / dist)));
     const theta = Math.atan2(dz, dx);
@@ -264,7 +293,10 @@ export class CameraController {
   focusOn(x: number, y: number, z: number): void {
     this.trackedObject = null;
     this.focusScale = 1.0;
-    Game.data.camFocusTarget = { x, y, z };
+    // Callers pass a re-rooted render-frame position (from a raycast hit); store
+    // it ABSOLUTE so the orbit math + rebase stay consistent. R≡0 when inactive.
+    const r = Broker.getSceneRebase(this._r);
+    Game.data.camFocusTarget = { x: x + r.x, y: y + r.y, z: z + r.z };
   }
 
   /**
@@ -278,7 +310,12 @@ export class CameraController {
       // Seed the focus target immediately so the first frame doesn't
       // lurch from wherever the camera previously was.
       obj.getWorldPosition(this._trackPos);
-      Game.data.camFocusTarget = { x: this._trackPos.x, y: this._trackPos.y, z: this._trackPos.z };
+      // Un-residual the render-frame position to ABSOLUTE (floating origin; see
+      // the tracking refresh in update()). R≡0 when inactive.
+      const rb = Broker.getSceneRebase(this._r);
+      Game.data.camFocusTarget = {
+        x: this._trackPos.x + rb.x, y: this._trackPos.y + rb.y, z: this._trackPos.z + rb.z,
+      };
       // Derive close-tier scale factor from the body's geometry radius.
       const r = (obj.userData?.bodyRadius as number | undefined) ?? FOCUS_REFERENCE_RADIUS;
       this.focusScale = Math.max(0.1, r / FOCUS_REFERENCE_RADIUS);
@@ -326,6 +363,10 @@ export class CameraController {
       setIconFov(this.cam.fov);
       this.cam.updateProjectionMatrix();
 
+      // Floating origin: rebase the absolute Bezier pose to the residual render
+      // frame (see _rebaseToResidual). Before _trackVelocity and the arrival snap.
+      this._rebaseToResidual(this._flightTmp.x, this._flightTmp.y, this._flightTmp.z);
+
       // Velocity from the f64 authoritative anchor (drives star streaks).
       this._trackVelocity(dt);
 
@@ -344,14 +385,17 @@ export class CameraController {
     // If the camera is locked onto an object, refresh focus target from
     // its current world position before the focus lerp runs.
     if (this.trackedObject) {
-      // NOTE (Phase 2c): getWorldPosition() reads the render-graph matrixWorld,
-      // which is fine while everything is in the absolute frame (R≡0). Once the
-      // floating origin is active, a galactic-magnitude target loses float32
-      // precision through matrixWorld — tracking such targets must read the f64
-      // authoritative position from the frame store instead. Local/system targets
-      // (small WU) are unaffected. Re-read live each frame, so no stale-cache risk.
+      // getWorldPosition() is in the RE-ROOTED render frame (shifted by −R under
+      // the floating origin); add R back so camFocusTarget is ABSOLUTE — the frame
+      // the orbit math + the rebase work in. The R that re-rooted the graph last
+      // frame cancels exactly, so a tracked camera does NOT oscillate. (three.js
+      // composes matrixWorld in JS float64, and the residual is small, so the
+      // read is precise.) R≡0 when inactive ⇒ identity.
       this.trackedObject.getWorldPosition(this._trackPos);
-      data.camFocusTarget = { x: this._trackPos.x, y: this._trackPos.y, z: this._trackPos.z };
+      const r = Broker.getSceneRebase(this._r);
+      data.camFocusTarget = {
+        x: this._trackPos.x + r.x, y: this._trackPos.y + r.y, z: this._trackPos.z + r.z,
+      };
     }
 
     // ── Orbit Angle Interpolation (lerp 0.1) ──
@@ -401,6 +445,11 @@ export class CameraController {
     setIconFov(this.cam.fov);
 
     this.cam.updateProjectionMatrix();
+
+    // Floating origin: rebase the absolute pose to the residual render frame
+    // (camera → ≈origin; world translated −R). Pixel-identical; keeps GPU coords
+    // small. Before _trackVelocity so the anchor reads the absolute position.
+    this._rebaseToResidual(this.focus.x, this.focus.y, this.focus.z);
 
     // Camera velocity from the f64 authoritative anchor (see _trackVelocity).
     this._trackVelocity(dt);

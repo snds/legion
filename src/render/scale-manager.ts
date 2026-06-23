@@ -75,8 +75,10 @@ export function getEffectiveScale(): number {
 // ordering is irrelevant (R is constant), but the contract is fixed up front.
 // ═══════════════════════════════════════════════════════════════════
 
-/** Phase 2c flips this to true (and makes beginFrame set R := camera anchor). */
-const FLOATING_ORIGIN_ACTIVE = false;
+/** Phase 2c-0b: ACTIVE. R = the camera's float64 world position each frame
+ *  (set by CameraController via setRebase, inside camCtrl.update), so the GPU
+ *  only ever sees small residuals around the camera. */
+const FLOATING_ORIGIN_ACTIVE = true;
 
 export type FrameTier = 'local' | 'regional' | 'galactic';
 
@@ -97,15 +99,23 @@ class FrameBroker {
   private readonly _R = new Vector3(0, 0, 0);
 
   /**
-   * Per-frame: compute the floating-origin rebase R. 2b policy = identity.
-   * (Phase 2c: `this._R.copy(camera authoritative WU)` when FLOATING_ORIGIN_ACTIVE.)
+   * Per-frame hook. When the floating origin is ACTIVE, R is owned by the camera
+   * (set via setRebase inside camCtrl.update, BEFORE the tier-root consumers run),
+   * so this is a no-op. When inactive, it pins R = (0,0,0).
    */
   beginFrame(_focusWU?: { x: number; y: number; z: number }): void {
-    if (FLOATING_ORIGIN_ACTIVE) {
-      // Phase 2c — set R from the camera's float64 anchor. Inert in 2b.
-    } else {
-      this._R.set(0, 0, 0);
-    }
+    if (!FLOATING_ORIGIN_ACTIVE) this._R.set(0, 0, 0);
+  }
+
+  /**
+   * Set the floating-origin rebase R to the camera's ABSOLUTE world position for
+   * this frame. Called by CameraController.update once the absolute camera pose is
+   * computed, immediately before it rebases itself to the residual origin. No-op
+   * (pins R=0) when the floating origin is disabled.
+   */
+  setRebase(worldCamPos: Vector3): void {
+    if (FLOATING_ORIGIN_ACTIVE) this._R.copy(worldCamPos);
+    else this._R.set(0, 0, 0);
   }
 
   /** The global floating-origin rebase for this frame (0,0,0 under the 2b policy). */
