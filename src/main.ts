@@ -73,6 +73,7 @@ import {
   STATION_DATA, COMET_DATA, type StationConfig,
 } from './render/scene-objects';
 import { createGalaxy, getGalaxyOffset, getGalaxyCrossfade, updateGalaxyAnimations, updateGalaxyLOD, updateGalaxyMarkerScale, updateGalaxyFrame, updateStarStreaks, createSectorOrb } from './render/galaxy';
+import { createSectorPrototype, updateSectorPrototype } from './render/sector/sector-prototype';
 import { Broker } from './render/scale-manager';
 import { createPostProcessing, type PostProcessingContext } from './render/post-processing';
 import { createLensFlare, type LensFlareSystem } from './render/lens-flare';
@@ -430,6 +431,7 @@ async function boot(): Promise<void> {
     Broker.getTierRoot('regional', _regionalRoot);
     layers.regional.position.copy(_regionalRoot);
     worldExtras.sectorOrb.position.copy(_regionalRoot);
+    updateSectorPrototype(); // sector-cloud prototype: re-root per frame (no-op if off)
 
     // 7. Audio
     Audio.updateMix(frameTime);
@@ -723,6 +725,10 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol'): WorldExtras {
   const galaxyGroup = createGalaxy();
   galaxyGroup.position.copy(getGalaxyOffset());
   sceneRoot.add(galaxyGroup);
+
+  // Sector-cloud prototype (Inc 1) — flag-gated (?proto-sector), null when off.
+  const protoSector = createSectorPrototype();
+  if (protoSector) sceneRoot.add(protoSector.group);
 
   // ── Sector orb (Homeworld-style sensor bubble, visible at sector tier) ──
   // Sits at the home origin in scene space; visibility system shows/hides

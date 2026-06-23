@@ -133,6 +133,15 @@ class FrameBroker {
   getTierRoot(tier: FrameTier, out = new Vector3()): Vector3 {
     return out.copy(this.tierOriginWU[tier]).sub(this._R);
   }
+
+  /** Residual scene position of an ABSOLUTE scene-WU point this frame = absWU − R.
+   *  For DYNAMIC content whose origin isn't a fixed tier (e.g. streamed sectors):
+   *  author the absolute float64 position, get the float32-safe residual here. It
+   *  rides the SAME per-frame R as every tier, so adjacent sectors stay seam-
+   *  consistent (a point on a shared face renders identically from either side). */
+  getResidual(absoluteWU: Vector3, out = new Vector3()): Vector3 {
+    return out.copy(absoluteWU).sub(this._R);
+  }
 }
 
 /** The process-wide frame broker (scale-unification Phase 2b). */
