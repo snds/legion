@@ -22,7 +22,7 @@ import {
   LineBasicMaterial,
   Float32BufferAttribute, Vector3, DoubleSide, BackSide, AdditiveBlending, NormalBlending,
   CustomBlending, OneFactor, OneMinusSrcAlphaFactor,
-  CanvasTexture, Color,
+  CanvasTexture, Color, Camera,
 } from 'three';
 import { getStellarRender } from './planet-colors';
 import { galacticStarsVertexShader, galacticStarsFragmentShader } from './shaders/galactic-stars';
@@ -202,6 +202,7 @@ function makeLabelSprite(
     transparent: true, depthTest: false, depthWrite: false,
   }));
   sp.scale.set(600, 150, 1);
+  sp.userData._galSC = true; // screen-constant under the ×S group (Phase 2c-1)
   return sp;
 }
 
@@ -437,6 +438,36 @@ export function updateGalaxyLOD(camDist: number): void {
       m.opacity = Math.min(0.95, base * boost * discPresence * GALAXY_TUNE.nebulaOpacity);
     }
   }
+}
+
+// Reference camDist at which the galaxy markers/labels were authored (the old
+// galaxy-tier framing distance). Screen-constant sizing reproduces the SAME
+// screen fraction each element had then, preserving the visual hierarchy.
+const GAL_SC_REF = 12000;
+const _gscPos = new Vector3();
+
+/**
+ * Screen-constant sizing for galaxy markers, labels, and Sgr A* (Phase 2c-1).
+ * The galaxy group renders ×GALAXY_MODEL_SCALE larger, so every WU-fixed sprite
+ * balloons ×S. Tagged elements (`userData._galSC`) are re-sized each frame to a
+ * constant screen fraction using the TRUE camera→element distance — markers are
+ * spread ~millions of WU apart, so the global camDist would mis-size them. The
+ * `/ GALAXY_MODEL_SCALE` cancels the group scale; `_galSCuniform` scales all
+ * three axes (the Sgr A* sphere) vs sprites' x/aspect. Base scale is captured
+ * lazily on first run (after createGalaxy set each element's authored size).
+ */
+export function updateGalaxyMarkerScale(camera: Camera): void {
+  if (!_galaxyGroup) return;
+  _galaxyGroup.traverse((o) => {
+    if (!o.userData?._galSC) return;
+    if (!o.userData._galSCbase) o.userData._galSCbase = o.scale.clone();
+    const b = o.userData._galSCbase as Vector3;
+    o.getWorldPosition(_gscPos);
+    const dist = camera.position.distanceTo(_gscPos);
+    const lx = (b.x / GAL_SC_REF) * dist / GALAXY_MODEL_SCALE;
+    if (o.userData._galSCuniform) o.scale.setScalar(lx);
+    else o.scale.set(lx, lx * (b.y / b.x), 1);
+  });
 }
 
 // ── Galaxy Data ──────────────────────────────────────────────────
@@ -862,22 +893,28 @@ export function createGalaxy(): Group {
     name: 'Sagittarius A*',
     subtype: 'Supermassive Black Hole',
     description: 'Galactic core — 4.3 million solar masses',
+    _galSC: true, _galSCuniform: true, // screen-constant point under the ×S group
   };
+  galaxy.add(sgrA);
+  // Glow + labels are SIBLINGS (not children) of the sphere: each is screen-
+  // constant under the ×S group, and a screen-constant element can't ride a
+  // screen-constant parent (the scales would compound). Positions are galaxy-
+  // local at Sgr A* (origin), so they sit at the centre regardless.
   const sgrGlow = new Sprite(new SpriteMaterial({
     map: glowTex, color: 0xffffaa,
     transparent: true, blending: AdditiveBlending,
     depthWrite: false, opacity: 0.35,
   }));
   sgrGlow.scale.set(300, 300, 1);
-  sgrA.add(sgrGlow);
+  sgrGlow.userData._galSC = true;
+  galaxy.add(sgrGlow);
   const sgrLabel = makeLabelSprite('SGR A*', 'rgba(255,255,255,0.35)', 48);
   sgrLabel.position.set(0, 50, 0);
-  sgrA.add(sgrLabel);
+  galaxy.add(sgrLabel);
   const mwLabel = makeLabelSprite('MILKY WAY', 'rgba(255,255,255,0.5)', 56);
   mwLabel.position.set(0, 110, 0);
   mwLabel.scale.set(800, 200, 1);
-  sgrA.add(mwLabel);
-  galaxy.add(sgrA);
+  galaxy.add(mwLabel);
 
   // ── 7. Sector Grid ────────────────────────────────────────────
 
@@ -983,6 +1020,7 @@ export function createGalaxy(): Group {
       depthWrite: false, opacity: isActive ? 0.85 : 0.35,
     }));
     halo.scale.set(haloScale, haloScale, 1);
+    halo.userData._galSC = true; // screen-constant under the ×S group (Phase 2c-1)
     marker.add(halo);
 
     // Crisp white-hot core — small, additive, always on top.
@@ -993,6 +1031,7 @@ export function createGalaxy(): Group {
       depthWrite: false, opacity: isActive ? 1.0 : 0.65,
     }));
     core.scale.set(coreScale, coreScale, 1);
+    core.userData._galSC = true; // screen-constant under the ×S group (Phase 2c-1)
     marker.add(core);
 
     if (isActive) {

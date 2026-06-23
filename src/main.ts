@@ -72,7 +72,7 @@ import {
   createEclipticGrid,
   STATION_DATA, COMET_DATA, type StationConfig,
 } from './render/scene-objects';
-import { createGalaxy, getGalaxyOffset, getGalaxyCrossfade, updateGalaxyAnimations, updateGalaxyLOD, updateGalaxyFrame, updateStarStreaks, createSectorOrb } from './render/galaxy';
+import { createGalaxy, getGalaxyOffset, getGalaxyCrossfade, updateGalaxyAnimations, updateGalaxyLOD, updateGalaxyMarkerScale, updateGalaxyFrame, updateStarStreaks, createSectorOrb } from './render/galaxy';
 import { Broker } from './render/scale-manager';
 import { createPostProcessing, type PostProcessingContext } from './render/post-processing';
 import { createLensFlare, type LensFlareSystem } from './render/lens-flare';
@@ -481,6 +481,10 @@ async function boot(): Promise<void> {
     // 9e. Galaxy LOD — fades local-arm detail / dust / nebula presence
     // by current camera distance so each zoom tier has the right density.
     updateGalaxyLOD(Game.data.camDist);
+
+    // 9e-bis. Screen-constant sizing for galaxy markers/labels/Sgr A* — they
+    // ride the ×GALAXY_MODEL_SCALE group, so without this they balloon ×3003.
+    updateGalaxyMarkerScale(camera);
 
     // 9f. Velocity-aware micro-streak on galactic stars. Gated below
     // ~6000 WU/s — invisible during normal orbiting/zooming; ramps in
