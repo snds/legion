@@ -340,7 +340,6 @@ async function boot(): Promise<void> {
   // decoupled from the variable render rate: the sim advances in FIXED_DT quanta
   // so physics/AI are deterministic and reproducible regardless of frame rate or
   // display refresh, while rendering and cosmetic shader clocks run per frame.
-  const starOrigin = new Vector3(0, 0, 0); // Star is always at origin
   const _localRoot = new Vector3();    // scratch: local-tier root (frame broker, 2c)
   const _regionalRoot = new Vector3(); // scratch: regional-tier root
   const FIXED_DT = 1 / 60;   // simulation quantum, seconds of real time
@@ -472,7 +471,9 @@ async function boot(): Promise<void> {
     updatePlanetShaders(Game.data.gameTime, shaderTime, camera.position, focusTarget, Game.data.zoomDomain);
 
     // 9c. Lens flare update (star position → screen space)
-    lensFlare.update(starOrigin, camera, frameTime);
+    // Star world position = the local-tier root (the sun sits at the local-tier
+    // origin), so the flare stays glued to the sun once the floating origin floats.
+    lensFlare.update(_localRoot, camera, frameTime);
 
     // 9d. Galaxy animations (dashed lines, chevron pulses) — bounded shader clock
     updateGalaxyAnimations(shaderTime);
