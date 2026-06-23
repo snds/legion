@@ -17,9 +17,11 @@
 // angular size (per-body legibility) — see docs/scale-unification-plan.md.
 // ═══════════════════════════════════════════════════════════════════
 
+import { Vector3 } from 'three';
 import { VP } from './visual-params';
 import { Game } from '../core/state';
 import { AU_TO_WU } from '../core/metrics';
+import { HOME_POS } from './galaxy-density';
 
 /**
  * Effective visual inflation factor for the current camera distance.
@@ -47,3 +49,76 @@ export function getEffectiveScale(): number {
   const smooth = t * t * (3 - 2 * t);
   return 1.0 + (maxInflation - 1.0) * smooth;
 }
+
+// ═══════════════════════════════════════════════════════════════════
+// FRAME BROKER — float64 authoritative frame + per-frame floating origin
+// (scale-unification Phase 2b). docs/scale-unification-plan.md.
+//
+// The broker owns the per-frame floating-origin REBASE `R` and the per-tier
+// scene-WU origins. Renderables ride a tier group whose scene position is
+// `getTierRoot(tier) = tierOrigin − R`; consumers that need the global shift
+// read `getSceneRebase() = R`.
+//
+// PHASE 2b POLICY = IDENTITY. `R ≡ (0,0,0)` and FLOATING_ORIGIN_ACTIVE = false,
+// so every value the broker emits is byte-identical to the pre-broker code
+// (getTierRoot('galactic') === the old hand-computed getGalaxyOffset() = −HOME_POS).
+// The broker is the transform PATH; 2b ships the machinery and proves no visual
+// change. Phase 2c flips the policy (R := the camera's float64 authoritative
+// position) so the galactic tier can hold real galPos (home ≈ 8.3e6 WU) without
+// float32 jitter — a one-line change here plus the GAL_SYSTEMS→galPos data swap.
+//
+// FRAME-ORDERING CONTRACT (pinned now so 2c inherits a coherent single-R frame):
+// once `beginFrame()` is wired into the loop (Phase 2b-2), it MUST run once per
+// frame immediately AFTER the camera update and BEFORE any world-space consumer
+// (tier group positions, disc-volume uniforms, planet-shader uniforms, camera
+// velocity) reads getSceneRebase()/getTierRoot(). Under the 2b identity policy
+// ordering is irrelevant (R is constant), but the contract is fixed up front.
+// ═══════════════════════════════════════════════════════════════════
+
+/** Phase 2c flips this to true (and makes beginFrame set R := camera anchor). */
+const FLOATING_ORIGIN_ACTIVE = false;
+
+export type FrameTier = 'local' | 'regional' | 'galactic';
+
+class FrameBroker {
+  /** Float64 authoritative camera anchor (galactocentric parsecs). Phase 2c populates. */
+  readonly camAnchorPc = new Vector3();
+
+  /** Per-tier scene-WU origin. Galactic carries the home offset (= −HOME_POS),
+   *  byte-identical to the legacy getGalaxyOffset() value; local/regional are at
+   *  the scene origin today. */
+  private readonly tierOriginWU: Record<FrameTier, Vector3> = {
+    local: new Vector3(0, 0, 0),
+    regional: new Vector3(0, 0, 0),
+    galactic: new Vector3(-HOME_POS[0], -HOME_POS[1], -HOME_POS[2]),
+  };
+
+  /** The per-frame floating-origin rebase. Identity in 2b. */
+  private readonly _R = new Vector3(0, 0, 0);
+
+  /**
+   * Per-frame: compute the floating-origin rebase R. 2b policy = identity.
+   * (Phase 2c: `this._R.copy(camera authoritative WU)` when FLOATING_ORIGIN_ACTIVE.)
+   */
+  beginFrame(_focusWU?: { x: number; y: number; z: number }): void {
+    if (FLOATING_ORIGIN_ACTIVE) {
+      // Phase 2c — set R from the camera's float64 anchor. Inert in 2b.
+    } else {
+      this._R.set(0, 0, 0);
+    }
+  }
+
+  /** The global floating-origin rebase for this frame (0,0,0 under the 2b policy). */
+  getSceneRebase(out = new Vector3()): Vector3 {
+    return out.copy(this._R);
+  }
+
+  /** Scene-WU origin of a tier's group this frame = tierOrigin − R. A fresh
+   *  Vector3 by default (matches the legacy getGalaxyOffset() contract). */
+  getTierRoot(tier: FrameTier, out = new Vector3()): Vector3 {
+    return out.copy(this.tierOriginWU[tier]).sub(this._R);
+  }
+}
+
+/** The process-wide frame broker (scale-unification Phase 2b). */
+export const Broker = new FrameBroker();

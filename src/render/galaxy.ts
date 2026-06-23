@@ -34,6 +34,7 @@ import {
   DISC_RADIUS_WU as M_DISC_RADIUS,
 } from './galaxy-density';
 import { KPC_TO_WU } from '../core/metrics';
+import { Broker } from './scale-manager';
 import {
   GALAXY_TUNE, galaxyLabVolumeUniforms, registerVolumeMat, registerNebula,
   clearGalaxyLabTargets, applyGalaxyTune,
@@ -1613,10 +1614,11 @@ export function createSectorOrb(radius = 8000): Group {
  * aligns with the scene origin (0,0,0).
  */
 export function getGalaxyOffset(): Vector3 {
-  const home = GAL_SYSTEMS.find(s => s.isHome);
-  const lyToWu = KPC / 1000;
-  const homeGalX = SOL_GAL_POS.x + (home ? home.localX * lyToWu : 0);
-  const homeGalY = home ? home.localY * lyToWu : 0;
-  const homeGalZ = SOL_GAL_POS.z + (home ? home.localZ * lyToWu : 0);
-  return new Vector3(-homeGalX, -homeGalY, -homeGalZ);
+  // Scale-unification Phase 2b: the galactic tier root now comes from the frame
+  // broker (the single float64 source). Under the 2b identity policy this returns
+  // exactly −HOME_POS — byte-identical to the prior hand-computed offset from
+  // GAL_SYSTEMS' home entry — and Phase 2c re-roots it per frame for the galPos()
+  // re-pin. Thin facade so its 3 consumers (group position, disc-volume AABB,
+  // Sgr A* camera focus) are unchanged.
+  return Broker.getTierRoot('galactic');
 }

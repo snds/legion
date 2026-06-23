@@ -505,7 +505,9 @@ interface WorldExtras {
 }
 
 function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol'): WorldExtras {
-  const { scene, layers, renderObjectMap } = ctx;
+  // Phase 2b: loose top-level objects (oort/grid/ring/galaxy/sector-orb) ride
+  // sceneRoot, not the bare scene, so the frame broker can re-root them in 2c.
+  const { sceneRoot, layers, renderObjectMap } = ctx;
 
   const isSol = systemId === 'sol';
   const star = isSol ? SOL_STAR : EPS_ERI_STAR;
@@ -676,19 +678,19 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol'): WorldExtras {
 
   // ── Oort Cloud (visible at heliopause+) ──
   const oortCloud = createOortCloud();
-  scene.add(oortCloud);
+  sceneRoot.add(oortCloud);
 
   // ── Ecliptic Grid (visible at system+, strategic overlay) ──
   const eclipticGrid = createEclipticGrid();
-  scene.add(eclipticGrid);
+  sceneRoot.add(eclipticGrid);
 
   // ── Reference Ring (labelled scale ring on the plane) ──
-  scene.add(createReferenceRing());
+  sceneRoot.add(createReferenceRing());
 
   // ── Galaxy (visible at arm/galaxy tiers) ──
   const galaxyGroup = createGalaxy();
   galaxyGroup.position.copy(getGalaxyOffset());
-  scene.add(galaxyGroup);
+  sceneRoot.add(galaxyGroup);
 
   // ── Sector orb (Homeworld-style sensor bubble, visible at sector tier) ──
   // Sits at the home origin in scene space; visibility system shows/hides
@@ -698,7 +700,7 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol'): WorldExtras {
   // the farthest from home (Ross 154, ~17.6 ly from ε Eridani) sits at
   // ~3875 WU, so 4200 keeps the whole neighbourhood inside the bubble.
   const sectorOrb = createSectorOrb(4200);
-  scene.add(sectorOrb);
+  sceneRoot.add(sectorOrb);
 
   return { eclipticGrid, oortCloud, galaxyArms: galaxyGroup, sectorOrb, bobEids };
 }
