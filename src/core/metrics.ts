@@ -27,6 +27,14 @@ export const LY_TO_WU_REGIONAL = 220;   // curated regional map: 1 ly = 220 WU (
 export const KPC_TO_WU = 333;           // galaxy: 1 kpc = 333 WU (legacy)
 export const GAL_LY_TO_WU = KPC_TO_WU / 1000; // galaxy-local ly offset = 0.333 WU/ly (legacy)
 
+// Galaxy RENDER-frame rescale (scale-unification Phase 2c-1). The galaxy is
+// built in its legacy galaxy-local frame (1 kpc = KPC_TO_WU WU = 0.333 WU/pc);
+// scaling the galaxy GROUP by this factor lifts it to the unified 1000 WU/pc
+// render frame so the neighbourhood becomes a true speck in the disc. The
+// disc-volume density model stays native-333 and is bridged back via the
+// shader's `uModelScale` uniform (= this value). = 1e6 / 333 = 3003.003.
+export const GALAXY_MODEL_SCALE = (WU_PER_PC * 1000) / KPC_TO_WU;
+
 // ── Galactocentric frame anchor (Phase 1 — float64 authoritative coords) ──
 // Sol's position in the galaxy, PARSECS, with Sgr A* at the origin (galactic
 // plane = XZ, north galactic pole = +Y). 8.3 kpc = 8300 pc — numerically equal
