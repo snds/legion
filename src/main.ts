@@ -72,7 +72,8 @@ import {
   createEclipticGrid,
   STATION_DATA, COMET_DATA, type StationConfig,
 } from './render/scene-objects';
-import { createGalaxy, getGalaxyOffset, getGalaxyCrossfade, updateGalaxyAnimations, updateGalaxyLOD, updateStarStreaks, createSectorOrb } from './render/galaxy';
+import { createGalaxy, getGalaxyOffset, getGalaxyCrossfade, updateGalaxyAnimations, updateGalaxyLOD, updateGalaxyFrame, updateStarStreaks, createSectorOrb } from './render/galaxy';
+import { Broker } from './render/scale-manager';
 import { createPostProcessing, type PostProcessingContext } from './render/post-processing';
 import { createLensFlare, type LensFlareSystem } from './render/lens-flare';
 import { Debug } from './debug/debug-overlay';
@@ -404,6 +405,15 @@ async function boot(): Promise<void> {
 
     // 6. Camera (render-rate)
     camCtrl.update(frameTime);
+
+    // 6b. Frame broker (scale-unification Phase 2b) — compute this frame's
+    // floating-origin rebase R immediately AFTER the camera update and BEFORE
+    // any world-space consumer, so every consumer sees one coherent R per frame
+    // (the contract Phase 2c relies on). Then refresh the galaxy group position
+    // + disc-volume AABB/origin from the broker. Under the 2b identity policy
+    // R≡0, so both are constant (= today's values) — no visual change.
+    Broker.beginFrame(Game.data.camFocusTarget ?? undefined);
+    updateGalaxyFrame();
 
     // 7. Audio
     Audio.updateMix(frameTime);
