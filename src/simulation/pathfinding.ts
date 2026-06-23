@@ -25,7 +25,7 @@ import { globalBoard } from './ai/blackboard';
 export const NAV_LINK_WU = 14 * LY_TO_WU; // ≈ 4292 WU (unified)
 
 export interface StarEdge {
-  distance: number;        // world units (regional scene frame); routing cost
+  distance: number;        // world units (unified frame, 1000 WU/pc); routing cost
   danger: number;          // 0-1 threat level
   status: 'open' | 'blockaded' | 'contested';
 }
@@ -40,7 +40,7 @@ const graph = createGraph<{ eid: number; x: number; y: number; z: number }, Star
  *
  * @param systemEids - Array of star system entity IDs
  * @param maxEdgeDistance - Maximum distance for edge connections, WORLD UNITS
- *   (regional scene frame). Defaults to NAV_LINK_WU (14 ly).
+ *   (unified frame, 1000 WU/pc). Defaults to NAV_LINK_WU (14 ly).
  */
 export function buildStarGraph(
   systemEids: number[],

@@ -25,7 +25,7 @@ import {
   CanvasTexture, Color, Camera,
 } from 'three';
 import { getStellarRenderSpect } from './planet-colors';
-import { CURATED_SYSTEMS, galPos, type CuratedSystem } from '../data/curated-systems';
+import { CURATED_SYSTEMS, galPos, distanceLy, type CuratedSystem } from '../data/curated-systems';
 import { galacticStarsVertexShader, galacticStarsFragmentShader } from './shaders/galactic-stars';
 import { galacticDiscVolumeVertexShader, galacticDiscVolumeFragmentShader } from './shaders/galactic-disc-volume';
 import {
@@ -976,9 +976,10 @@ export function createGalaxy(): Group {
   // parsecs (Phase 2c-1 Inc 4): galPos()·(KPC/1000) = the native 0.333 WU/pc
   // frame; the galaxy group's ×GALAXY_MODEL_SCALE lifts it to the unified
   // 1000 WU/pc. Sol lands at SOL_GAL_POS; home (ε Eri) sits just off it in the spur.
+  const pcToWuNative = KPC / 1000; // 0.333 WU/pc in the native-333 frame (galPos is PARSECS)
   const galLocalPos = (sys: CuratedSystem): Vector3 => {
     const g = galPos(sys);
-    return new Vector3(g.x * lyToWu, g.y * lyToWu, g.z * lyToWu);
+    return new Vector3(g.x * pcToWuNative, g.y * pcToWuNative, g.z * pcToWuNative);
   };
 
   CURATED_SYSTEMS.forEach(sys => {
@@ -997,7 +998,13 @@ export function createGalaxy(): Group {
       new MeshBasicMaterial({ color: stellar.core, transparent: true, opacity: 0.0001, depthWrite: false }),
     );
     marker.position.copy(pos);
-    marker.userData = { type: 'gal_system', ...sys, _pos: pos };
+    // Alias the curated fields to the keys the tooltip/selection panels read
+    // (designation/spectralType/distLy) so galactic markers show real data.
+    marker.userData = {
+      type: 'gal_system', ...sys,
+      designation: sys.desig, spectralType: sys.spect, distLy: distanceLy(sys),
+      _pos: pos,
+    };
     galaxy.add(marker);
 
     // Colored bloom halo — larger for active systems so eye is drawn to them.

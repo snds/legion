@@ -66,12 +66,13 @@ function fmtNum(n: number): string {
 
 // View-radius readout — the real distance the camera sits from the system
 // centre, so the player understands the scale they are viewing (Solar-System-
-// Scope "DISTANCE …" cue). The zoom tiers use mutually-INCONSISTENT compressed
-// WU scales, so the conversion is per-regime, switching unit at the heliopause
-// (the real edge of the solar system: AU inside, light-years beyond):
-//   • system tiers   1 AU  = 10  WU   (planets placed at sma·10)
-//   • stellar tiers  1 ly  = 220 WU   (star map placed at distLy·220)
-//   • galactic       1 kpc = 333 WU   (KPC_WU)
+// Scope "DISTANCE …" cue). The conversion is per-regime, switching unit at the
+// heliopause (the real edge of the solar system: AU inside, light-years beyond).
+// Post Phase 2c-1 the neighbourhood + galaxy ride the unified metric; only the
+// system tier is still the legacy compressed AU scale:
+//   • system tiers   1 AU  = 10 WU      (legacy; planets at sma·10)
+//   • stellar tiers  1 ly  ≈ 306.6 WU   (unified LY_TO_WU; neighbourhood)
+//   • galactic       1 kpc = 1e6 WU     (unified KPC_TO_WU_UNIFIED)
 // WU_PER_AU / WU_PER_LY / WU_PER_KPC are imported from metrics.ts (single source).
 function fmtScale(v: number): string {
   if (v >= 100) return Math.round(v).toString();

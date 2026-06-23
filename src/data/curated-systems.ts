@@ -32,7 +32,7 @@ export interface Vec3 {
 }
 
 export interface CuratedSystem {
-  name: string;          // identity — must stay byte-stable (keys getStellarRender, markers)
+  name: string;          // identity — must stay byte-stable (marker labels, selection)
   desig: string;         // catalogue designation matched in the HYG set
   spect: string;         // HYG spectral type (real)
   solPc: Vec3;           // REAL heliocentric position, parsecs (galactic axes)
