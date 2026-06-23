@@ -55,6 +55,9 @@ export const galacticDiscVolumeFragmentShader = /* glsl */ `
                                // world step length divide by uModelScale → model space.
                                // 1.0 = no-op (pre-rescale). Miss any one division and
                                // the disc compiles but goes opaque/blown-out.
+  uniform float uSteps;        // ACTIVE raymarch step count (≤ STEPS define = loop
+                               // bound). Driven per-frame: full when settled, fewer
+                               // while the camera zooms (motion hides the coarser march).
 
   varying vec3 vWorldPos;
 
@@ -84,20 +87,22 @@ export const galacticDiscVolumeFragmentShader = /* glsl */ `
     // exit: dense where a step subtends a large angle, coarse far away.
     float t0 = max(tNear, 2.0);
     float jitter = uJitter * ign(gl_FragCoord.xy);
-    // STEPS is a material define: 32 live (40 per spec was ~28fps at galaxy
-    // tier full-coverage; Phase 6 half-res is the real reserve), 256 for the
-    // one-shot system-tier bake (galaxy-backdrop.ts) where there is no frame
-    // budget and long in-plane rays need the resolution.
+    // STEPS is a material define = the LOOP BOUND (max steps): 24 live, 256 for
+    // the one-shot system-tier bake (galaxy-backdrop.ts) where long in-plane rays
+    // need the resolution. The ACTIVE count is uSteps (≤ STEPS), driven per-frame:
+    // full when settled, fewer while zooming (the log-spacing + per-pixel jitter
+    // keep the smooth diffuse volume band-free, and motion hides the rest).
     #ifndef STEPS
-    #define STEPS 32
+    #define STEPS 24
     #endif
 
     vec3 accum = vec3(0.0);
     vec3 T = vec3(1.0);
 
     for (int i = 0; i < STEPS; i++) {
-      float a0 = (float(i) + jitter) / float(STEPS);
-      float a1 = (float(i) + 1.0) / float(STEPS);
+      if (float(i) >= uSteps) break;
+      float a0 = (float(i) + jitter) / uSteps;
+      float a1 = (float(i) + 1.0) / uSteps;
       float t  = t0 * pow(tFar / t0, a0);
       float tn = t0 * pow(tFar / t0, a1);
       float dt = max(tn - t, 0.0);
