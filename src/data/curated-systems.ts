@@ -11,21 +11,19 @@
 //   • galaxy.ts GAL_SYSTEMS         — hand-authored ly offsets (galactic tier)
 // One record, real coordinates, float64 galactocentric authority.
 //
-// Scale-unification Phase 1 (docs/scale-unification-plan.md): this PR re-pins
-// the REGIONAL tier (STAR_SYSTEMS) onto these coordinates. The GALACTIC tier
-// (galaxy.ts GAL_SYSTEMS) is NOT changed yet — it still carries its fictional
-// offsets — because re-pointing it means moving the FROZEN galaxy-density
-// HOME_POS, which shifts the whole galaxy group/disc-AABB/skybox. Phase 2's
-// frame broker re-roots that tier onto galPos() once the floating origin makes
-// the move safe. Until then, this record is the single source of truth the
-// regional tier consumes and the galactic tier will be migrated to.
+// Scale-unification (docs/scale-unification-plan.md): BOTH tiers now derive from
+// this record. The regional tier reads regionalScenePos() — Phase 2c-1 Inc 6
+// re-expressed it on the UNIFIED metric (×WU_PER_PC). The galactic tier reads
+// galPos() — Phase 2c-1 Inc 4 re-pointed galaxy.ts onto it (the FROZEN galaxy-
+// density HOME_POS stays put; the ~10⁴-WU offset between it and the curated home
+// is sub-pixel at galaxy scale). One record, real coordinates, both tiers.
 //
 // Axes: galactic plane = XZ, north galactic pole = +Y (matches the build
 // script's px=gx, py=gz, pz=gy mapping and the galaxy renderer's Y-up frame).
 // ═══════════════════════════════════════════════════════════════════
 
 import { Vector3 } from 'three';
-import { SOL_GAL_PC, REGIONAL_WU_PER_PC, LY_PER_PC } from '../core/metrics';
+import { SOL_GAL_PC, WU_PER_PC, LY_PER_PC } from '../core/metrics';
 
 export interface Vec3 {
   readonly x: number;
@@ -100,8 +98,8 @@ export function distanceLy(sys: CuratedSystem): number {
  */
 export function regionalScenePos(sys: CuratedSystem, out = new Vector3()): Vector3 {
   return out.set(
-    (sys.solPc.x - HOME_SYSTEM.solPc.x) * REGIONAL_WU_PER_PC,
-    (sys.solPc.y - HOME_SYSTEM.solPc.y) * REGIONAL_WU_PER_PC,
-    (sys.solPc.z - HOME_SYSTEM.solPc.z) * REGIONAL_WU_PER_PC,
+    (sys.solPc.x - HOME_SYSTEM.solPc.x) * WU_PER_PC,
+    (sys.solPc.y - HOME_SYSTEM.solPc.y) * WU_PER_PC,
+    (sys.solPc.z - HOME_SYSTEM.solPc.z) * WU_PER_PC,
   );
 }

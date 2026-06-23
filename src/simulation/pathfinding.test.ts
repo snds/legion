@@ -41,8 +41,9 @@ describe('star-system pathfinding graph (Phase 1 WU re-pin)', () => {
     expect(route[route.length - 1]).toBe(ross154);
   });
 
-  it('NAV_LINK_WU is a world-unit distance in the regional regime (≈3080 WU)', () => {
+  it('NAV_LINK_WU is a world-unit distance in the unified regime (≈4292 WU)', () => {
     // Guards against the threshold ever silently reverting to a ~10-unit value.
+    // Inc 6: 14 ly × LY_TO_WU (306.6) ≈ 4292 WU (was 14 × 220 ≈ 3080).
     expect(NAV_LINK_WU).toBeGreaterThan(1500);
     expect(NAV_LINK_WU).toBeLessThan(5000);
   });

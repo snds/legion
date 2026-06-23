@@ -11,7 +11,10 @@
 // ═══════════════════════════════════════════════════════════════════
 
 import { Game, type DomainName } from '../core/state';
-import { AU_TO_WU as WU_PER_AU, LY_TO_WU_REGIONAL as WU_PER_LY, KPC_TO_WU as WU_PER_KPC } from '../core/metrics';
+// Phase 2c-1 Inc 6: the neighbourhood + galaxy now ride the unified metric, so
+// the ly/kpc readouts divide by the unified scales (1 ly = LY_TO_WU ≈ 306.6 WU;
+// 1 kpc = 1e6 WU) — was the legacy 220 / 333 which read "108108 kpc" at galaxy.
+import { AU_TO_WU as WU_PER_AU, LY_TO_WU as WU_PER_LY, KPC_TO_WU_UNIFIED as WU_PER_KPC } from '../core/metrics';
 import { formatGameClock } from '../core/time';
 
 // ── DOM References ───────────────────────────────────────────────

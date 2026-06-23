@@ -85,7 +85,7 @@ import {
   createInitialBobs,
 } from './data/star-catalog';
 import { COSMIC_OBJECTS } from './data/cosmic-objects';
-import { AU_TO_WU, LY_TO_WU_REGIONAL } from './core/metrics';
+import { AU_TO_WU, LY_TO_WU } from './core/metrics';
 import { applySolEphemeris } from './data/jpl-ephemeris';
 import { GAME_EPOCH_ET } from './core/time';
 import { PlanetState, Identity, EntityType, BobState, Personality, StarSystem } from './core/components';
@@ -678,7 +678,7 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol'): WorldExtras {
     const marker = createCosmicMarker(cfg);
     const dir = new Vector3(cfg.x, cfg.y, cfg.z);
     if (dir.lengthSq() > 1e-6) {
-      marker.position.copy(dir.normalize().multiplyScalar(cfg.distLy * LY_TO_WU_REGIONAL)); // matches systems
+      marker.position.copy(dir.normalize().multiplyScalar(cfg.distLy * LY_TO_WU)); // matches systems (unified)
     }
     marker.add(createMarkerStem(marker.position.y, cfg.color));
     layers.regional.add(marker);
@@ -728,10 +728,11 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol'): WorldExtras {
   // Sits at the home origin in scene space; visibility system shows/hides
   // it per zoom domain.
   // Sector orb radius matches the regional-system spread — encloses the
-  // ~16 nearest navigable systems comfortably. Sized to the real geometry:
-  // the farthest from home (Ross 154, ~17.6 ly from ε Eridani) sits at
-  // ~3875 WU, so 4200 keeps the whole neighbourhood inside the bubble.
-  const sectorOrb = createSectorOrb(4200);
+  // ~16 nearest navigable systems comfortably. Phase 2c-1 Inc 6: the
+  // neighbourhood now rides the unified metric (1 ly = LY_TO_WU ≈ 306.6 WU), so
+  // the farthest (Ross 154, ~17.6 ly) sits at ~5400 WU; a ~19 ly sensor radius
+  // keeps the whole bubble enclosed (was 4200 WU at the retired 220 WU/ly).
+  const sectorOrb = createSectorOrb(19.1 * LY_TO_WU);
   sceneRoot.add(sectorOrb);
 
   return { eclipticGrid, oortCloud, galaxyArms: galaxyGroup, sectorOrb, bobEids };
