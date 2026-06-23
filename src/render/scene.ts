@@ -25,6 +25,10 @@ export interface SceneContext {
    *  Stays at the origin under the 2b identity policy; Phase 2c re-roots tiers
    *  through the frame broker. Lights remain direct children of `scene`. */
   sceneRoot: Group;
+  /** Star point light. Kept a `scene` child (always active), but its position is
+   *  driven to the local-tier root each frame (Phase 2c) so it tracks the sun
+   *  once the floating origin re-roots the system. */
+  starLight: PointLight;
   camera: PerspectiveCamera;
   layers: LayerGroups;
   renderObjectMap: Map<number, Object3D>;
@@ -129,5 +133,5 @@ export function createScene(): SceneContext {
   };
   window.addEventListener('resize', onResize);
 
-  return { scene, sceneRoot, camera, layers, renderObjectMap, clock };
+  return { scene, sceneRoot, starLight, camera, layers, renderObjectMap, clock };
 }

@@ -146,7 +146,7 @@ async function boot(): Promise<void> {
 
   // ── 2. Scene ──
   const sceneCtx = createScene();
-  const { scene, camera, layers, renderObjectMap, clock } = sceneCtx;
+  const { scene, starLight, camera, layers, renderObjectMap, clock } = sceneCtx;
 
   // ── 2b. Post-Processing ──
   const postCtx = createPostProcessing(renderCtx.renderer, scene, camera);
@@ -341,6 +341,8 @@ async function boot(): Promise<void> {
   // so physics/AI are deterministic and reproducible regardless of frame rate or
   // display refresh, while rendering and cosmetic shader clocks run per frame.
   const starOrigin = new Vector3(0, 0, 0); // Star is always at origin
+  const _localRoot = new Vector3();    // scratch: local-tier root (frame broker, 2c)
+  const _regionalRoot = new Vector3(); // scratch: regional-tier root
   const FIXED_DT = 1 / 60;   // simulation quantum, seconds of real time
   const MAX_FRAME = 0.25;    // clamp frame time to avoid the spiral of death
   const MAX_STEPS = 600;     // hard cap on catch-up steps per frame
@@ -415,6 +417,21 @@ async function boot(): Promise<void> {
     Broker.beginFrame(Game.data.camFocusTarget ?? undefined);
     updateGalaxyFrame();
 
+    // 6c. Re-root the LOCAL + REGIONAL tiers (and their loose furniture + the
+    // star light) from the broker, mirroring the galactic tier. Under the
+    // identity policy R≡0 these all write (0,0,0) — a no-op today — but this
+    // completes the broker wiring (2b only wired the galactic tier) so 2c-0b's
+    // origin flip translates every tier coherently, instead of yanking the
+    // camera away while the system stays at absolute (0,0,0).
+    Broker.getTierRoot('local', _localRoot);
+    layers.local.position.copy(_localRoot);
+    starLight.position.copy(_localRoot);
+    worldExtras.oortCloud.position.copy(_localRoot);
+    worldExtras.eclipticGrid.position.copy(_localRoot);
+    Broker.getTierRoot('regional', _regionalRoot);
+    layers.regional.position.copy(_regionalRoot);
+    worldExtras.sectorOrb.position.copy(_regionalRoot);
+
     // 7. Audio
     Audio.updateMix(frameTime);
     Ambience.update(frameTime);
@@ -432,7 +449,7 @@ async function boot(): Promise<void> {
     updateVisibility(camera);
 
     // 8d-i. Reference scale ring (labelled radius on the plane)
-    updateReferenceRing(Game.data.zoomDomain, Game.data.camDist);
+    updateReferenceRing(Game.data.zoomDomain, Game.data.camDist, _localRoot);
 
     // 8d-bis. Sky crossfade (Phase 4): baked-cube intensity fades OUT across
     // camDist 2000→3000 WU exactly as the live volume's uOpacity fades IN

@@ -15,7 +15,7 @@
 
 import {
   Group, BufferGeometry, Float32BufferAttribute, LineLoop, LineBasicMaterial,
-  Color, type Sprite, type SpriteMaterial, type Texture,
+  Color, type Sprite, type SpriteMaterial, type Texture, type Vector3,
 } from 'three';
 import { createLabel } from './icons';
 import type { DomainName } from '../core/state';
@@ -61,8 +61,12 @@ export function createReferenceRing(): Group {
 }
 
 /** Per-frame: size + label the ring for the current tier/zoom. */
-export function updateReferenceRing(domain: DomainName, camDist: number): void {
+export function updateReferenceRing(domain: DomainName, camDist: number, localRoot: Vector3): void {
   if (!ring || !circle) return;
+  // Follow the local-tier root (passed from the frame broker via main.ts) so the
+  // ring stays at the system centre once the floating origin re-roots the world
+  // (Phase 2c). R≡0 today, so localRoot is (0,0,0) — no change.
+  ring.position.copy(localRoot);
   const show = SHOW_DOMAINS.includes(domain);
   ring.visible = show;
   if (!show) return;
