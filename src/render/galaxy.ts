@@ -16,8 +16,8 @@
 // ═══════════════════════════════════════════════════════════════════
 
 import {
-  Group, Mesh, Points, Line, Sprite,
-  SphereGeometry, RingGeometry, CircleGeometry, BoxGeometry, BufferGeometry,
+  Group, Mesh, Points, Line, LineSegments, Sprite,
+  SphereGeometry, RingGeometry, CircleGeometry, BoxGeometry, BufferGeometry, EdgesGeometry,
   MeshBasicMaterial, PointsMaterial, SpriteMaterial, ShaderMaterial,
   LineBasicMaterial,
   Float32BufferAttribute, Vector3, DoubleSide, BackSide, AdditiveBlending, NormalBlending,
@@ -37,7 +37,7 @@ import {
 import { KPC_TO_WU, GALAXY_MODEL_SCALE } from '../core/metrics';
 import { Broker } from './scale-manager';
 import {
-  GALAXY_TUNE, galaxyLabVolumeUniforms, registerVolumeMat, registerNebula,
+  GALAXY_TUNE, galaxyLabVolumeUniforms, registerVolumeMat,
   clearGalaxyLabTargets, applyGalaxyTune,
 } from './galaxy-lab';
 
@@ -173,20 +173,6 @@ function makeChevronTexture(size = 64): CanvasTexture {
   return new CanvasTexture(cv);
 }
 
-function makeNebulaTexture(size = 128): CanvasTexture {
-  const cv = document.createElement('canvas');
-  cv.width = size; cv.height = size;
-  const ctx = cv.getContext('2d')!;
-  const grad = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
-  grad.addColorStop(0, 'rgba(220,80,180,0.5)');
-  grad.addColorStop(0.3, 'rgba(180,40,160,0.25)');
-  grad.addColorStop(0.6, 'rgba(140,30,140,0.08)');
-  grad.addColorStop(1, 'rgba(100,20,120,0)');
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, size, size);
-  return new CanvasTexture(cv);
-}
-
 function makeLabelSprite(
   text: string, color = 'rgba(255,255,255,0.5)', fontSize = 48,
 ): Sprite {
@@ -314,7 +300,7 @@ interface GalaxyLODState {
   localArmMat: ShaderMaterial | null;
   dustMat: PointsMaterial | null;
   discMats: ShaderMaterial[];           // stacked disc star layers
-  nebulaMats: SpriteMaterial[];
+  nebulaMats: LineBasicMaterial[]; // nebula wireframe-cube outlines (Phase 2c-1 follow-up)
   volumeMat: ShaderMaterial | null;     // disc volume — Phase-4 crossfade target
   volumeMesh: Mesh | null;
 }
@@ -430,14 +416,11 @@ export function updateGalaxyLOD(camDist: number): void {
 
   // (dust-strand particles deleted; their LOD ramp removed with them)
 
-  // Nebulae: prominent at arm scale, fading toward the full-galaxy frame.
-  if (GALAXY_LOD.nebulaMats.length > 0) {
-    const boost = 1 + (1 - smoothRamp(camDist, 3e6, 2e7)) * 1.8;
-    for (const m of GALAXY_LOD.nebulaMats) {
-      const base = (m.userData?._baseOpacity as number | undefined) ?? m.opacity;
-      if (m.userData) m.userData._baseOpacity = base;
-      m.opacity = Math.min(0.95, base * boost * discPresence * GALAXY_TUNE.nebulaOpacity);
-    }
+  // Nebula wireframe-cube outlines: thin position/extent markers (Phase 2c-1
+  // follow-up — the volumetric sprites were intrusive). Modest opacity, fading
+  // with the galaxy presence so they vanish at the neighbourhood tier.
+  for (const m of GALAXY_LOD.nebulaMats) {
+    m.opacity = Math.min(0.7, 0.25 * discPresence * GALAXY_TUNE.nebulaOpacity);
   }
 }
 
@@ -526,7 +509,6 @@ export function createGalaxy(): Group {
   _galaxyGroup = galaxy; // tracked for the per-frame frame-broker updater (2b)
 
   const glowTex = makeGlowTexture();
-  const nebulaTex = makeNebulaTexture();
   const coreTex = makeStarCoreTexture();
   const haloTex = makeStarHaloTexture();
   const chevronTex = makeChevronTexture();
@@ -829,7 +811,21 @@ export function createGalaxy(): Group {
   // model's Hernquist+bar emission inside the volume — the sprites were a
   // chief cause of the interior tan-wash.)
 
-  // ── 5. Nebula Clusters (along spiral arms) ────────────────────
+  // ── 5. Nebula Markers (outlined cubes — position + extent) ────
+  // Phase 2c-1 follow-up: the volumetric nebula sprites were intrusive. Each
+  // star-forming region is now a thin WIREFRAME CUBE marking its position and
+  // size. Shared unit-cube edges; per-nebula scale/colour/material (LOD-faded
+  // by updateGalaxyLOD so they vanish at the neighbourhood tier).
+  const nebCubeEdges = new EdgesGeometry(new BoxGeometry(1, 1, 1));
+  const addNebulaCube = (cx: number, cy: number, cz: number, size: number, color: number): void => {
+    const mat = new LineBasicMaterial({ color, transparent: true, opacity: 0.25, depthWrite: false });
+    const cube = new LineSegments(nebCubeEdges, mat);
+    cube.scale.setScalar(size);
+    cube.position.set(cx, cy, cz);
+    galaxy.add(cube);
+    GALAXY_LOD.nebulaMats.push(mat);
+  };
+
   const NEBULA_COUNT = 50;
   for (let i = 0; i < NEBULA_COUNT; i++) {
     // Star-forming regions sit on the MODEL's m=2 arm crests, slightly
@@ -849,18 +845,8 @@ export function createGalaxy(): Group {
       | (Math.floor(nebG * 255) << 8)
       | Math.floor(nebB * 255);
 
-    const nebMat = new SpriteMaterial({
-      map: nebulaTex, color: nebColor,
-      transparent: true, blending: AdditiveBlending,
-      depthWrite: false, opacity: 0.18 + Math.random() * 0.18,
-    });
-    const nebula = new Sprite(nebMat);
     const size = 400 + Math.random() * 900;
-    nebula.scale.set(size, size, 1);
-    nebula.position.set(x, y, z);
-    galaxy.add(nebula);
-    GALAXY_LOD.nebulaMats.push(nebMat);
-    registerNebula(nebula, size); // Galaxy Lab live size tuning (TEMPORARY)
+    addNebulaCube(x, y, z, size, nebColor);
   }
 
   // ── 6. Sagittarius A* ─────────────────────────────────────────
@@ -1247,25 +1233,9 @@ export function createGalaxy(): Group {
   PHENOMENA.forEach(p => {
     const pos = new Vector3(p.galX * KPC, p.galY * KPC, p.galZ * KPC);
 
-    // Outer diffuse cloud — additive bloom, large
-    const cloud = new Sprite(new SpriteMaterial({
-      map: nebulaTex, color: p.color,
-      transparent: true, blending: AdditiveBlending,
-      depthWrite: false, opacity: 0.55,
-    }));
-    cloud.scale.set(p.scale * 2.4, p.scale * 2.4, 1);
-    cloud.position.copy(pos);
-    galaxy.add(cloud);
-
-    // Inner brighter core — smaller, more saturated
-    const core = new Sprite(new SpriteMaterial({
-      map: glowTex, color: p.coreColor,
-      transparent: true, blending: AdditiveBlending,
-      depthWrite: false, opacity: 0.7,
-    }));
-    core.scale.set(p.scale * 0.6, p.scale * 0.6, 1);
-    core.position.copy(pos);
-    galaxy.add(core);
+    // Outlined cube marking the nebula's position + extent (replaces the
+    // intrusive cloud + core sprites; ~2.4× scale matched the old visible cloud).
+    addNebulaCube(pos.x, pos.y, pos.z, p.scale * 2.4, p.color);
 
     // Invisible raycast hit sphere — sized to the visible cloud so the
     // entire bloom is clickable at galactic scale.
@@ -1288,222 +1258,6 @@ export function createGalaxy(): Group {
     lbl.position.set(pos.x, pos.y + 25, pos.z);
     galaxy.add(lbl);
   });
-
-  // ── 12c. Satellite Galaxies (LMC + SMC) ────────────────────────
-  //
-  // Large and Small Magellanic Clouds — the Milky Way's two largest
-  // dwarf-irregular companions. Real distances 50 / 62 kpc; here scaled
-  // to ~25 / 32 kpc so they fit inside the galaxy-tier viewport while
-  // preserving their actual sky-plane positions (galactic-anti-center,
-  // far below the disc plane). Both are dwarf-irregular morphology
-  // (no spiral structure), so represented as warm diffuse blobs with
-  // a brighter core and a recognizable label.
-  //
-  // Galactic coords used: LMC l=280°, b=-33°; SMC l=302°, b=-44°.
-
-  interface Satellite {
-    name: string;
-    label: string;
-    galX: number; galY: number; galZ: number;  // kpc relative to Sgr A*
-    sizeKpc: number;
-    color: number;
-    coreColor: number;
-  }
-  const SATELLITES: Satellite[] = [
-    {
-      name: 'lmc', label: 'LMC',
-      // Sun at (8.3, 0, 0). LMC sky position l=280° b=-33° d_compressed=18 kpc.
-      // Cartesian offset from Sun: (d·cosB·cos(l-180), d·sinB, d·cosB·sin(l-180))
-      galX: 8.3 + 18 * Math.cos(-33 * Math.PI / 180) * Math.cos((280 - 180) * Math.PI / 180),
-      galY:       18 * Math.sin(-33 * Math.PI / 180),
-      galZ:       18 * Math.cos(-33 * Math.PI / 180) * Math.sin((280 - 180) * Math.PI / 180),
-      sizeKpc: 4.3,
-      color: 0xffd9a8,
-      coreColor: 0xfff0d0,
-    },
-    {
-      name: 'smc', label: 'SMC',
-      // SMC l=302° b=-44° d_compressed=22 kpc.
-      galX: 8.3 + 22 * Math.cos(-44 * Math.PI / 180) * Math.cos((302 - 180) * Math.PI / 180),
-      galY:       22 * Math.sin(-44 * Math.PI / 180),
-      galZ:       22 * Math.cos(-44 * Math.PI / 180) * Math.sin((302 - 180) * Math.PI / 180),
-      sizeKpc: 3.0,
-      color: 0xffe0aa,
-      coreColor: 0xfff0d6,
-    },
-  ];
-
-  SATELLITES.forEach(sat => {
-    const pos = new Vector3(sat.galX * KPC, sat.galY * KPC, sat.galZ * KPC);
-    const sizeWU = sat.sizeKpc * KPC;
-
-    // Outer diffuse halo
-    const cloud = new Sprite(new SpriteMaterial({
-      map: nebulaTex, color: sat.color,
-      transparent: true, blending: AdditiveBlending,
-      depthWrite: false, opacity: 0.55,
-    }));
-    cloud.scale.set(sizeWU * 2.0, sizeWU * 1.4, 1);  // slight elongation
-    cloud.position.copy(pos);
-    galaxy.add(cloud);
-
-    // Brighter inner core
-    const core = new Sprite(new SpriteMaterial({
-      map: glowTex, color: sat.coreColor,
-      transparent: true, blending: AdditiveBlending,
-      depthWrite: false, opacity: 0.75,
-    }));
-    core.scale.set(sizeWU * 0.7, sizeWU * 0.55, 1);
-    core.position.copy(pos);
-    galaxy.add(core);
-
-    // Star sprinkle inside the dwarf galaxy — a few hundred small particles
-    // distributed in an irregular blob.
-    const SAT_STARS = 1200;
-    const satPts: number[] = [];
-    const satCols: number[] = [];
-    const satSizes: number[] = [];
-    for (let i = 0; i < SAT_STARS; i++) {
-      let lx = 0, ly = 0, lz = 0;
-      for (let attempt = 0; attempt < 6; attempt++) {
-        lx = Math.random() * 2 - 1;
-        ly = Math.random() * 2 - 1;
-        lz = Math.random() * 2 - 1;
-        if (lx * lx + ly * ly + lz * lz <= 1) break;
-      }
-      // Elongated ellipsoid (real LMC/SMC are flattened, partially-disrupted dwarfs)
-      satPts.push(
-        pos.x + lx * sat.sizeKpc * KPC * 0.7,
-        pos.y + ly * sat.sizeKpc * KPC * 0.25,
-        pos.z + lz * sat.sizeKpc * KPC * 0.55,
-      );
-      // Use the same stellar-population sampler for variation.
-      const [cr, cg, cb, sz] = sampleStellarPopulation();
-      satCols.push(cr, cg, cb);
-      satSizes.push(sz * 0.8);  // dwarf-galaxy stars dimmer on average
-    }
-    const satGeo = new BufferGeometry();
-    satGeo.setAttribute('position', new Float32BufferAttribute(satPts, 3));
-    satGeo.setAttribute('color', new Float32BufferAttribute(satCols, 3));
-    satGeo.setAttribute('aSize', new Float32BufferAttribute(satSizes, 1));
-    const satMat = new ShaderMaterial({
-      vertexShader: galacticStarsVertexShader,
-      fragmentShader: galacticStarsFragmentShader,
-      uniforms: makeStarUniforms(0.8),
-      transparent: true,
-      depthWrite: false,
-      blending: AdditiveBlending,
-    });
-    const satField = new Points(satGeo, satMat);
-    galaxy.add(satField);
-    STREAK_MATS.push(satMat);
-
-    // Invisible raycast hit target — clickable as a galactic landmark.
-    const hit = new Mesh(
-      new SphereGeometry(sizeWU * 0.9, 12, 12),
-      new MeshBasicMaterial({ color: sat.color, transparent: true, opacity: 0.0001, depthWrite: false }),
-    );
-    hit.position.copy(pos);
-    hit.userData = {
-      type: 'phenomenon',
-      name: sat.label === 'LMC' ? 'Large Magellanic Cloud' : 'Small Magellanic Cloud',
-      subtype: 'Satellite Galaxy',
-      description: `Dwarf irregular galaxy, ${sat.label === 'LMC' ? '~50' : '~62'} kpc from Sol`,
-    };
-    galaxy.add(hit);
-
-    // Label
-    const lbl = makeLabelSprite(sat.label, 'rgba(255,255,255,0.65)', 44);
-    lbl.scale.set(500, 125, 1);
-    lbl.position.set(pos.x, pos.y + sizeWU * 0.9, pos.z);
-    galaxy.add(lbl);
-  });
-
-  // ── 12d. Sagittarius Dwarf Tidal Stream ────────────────────────
-  //
-  // The Sagittarius dwarf spheroidal (Sgr dSph) has been disrupted by
-  // the Milky Way over the past several Gyr, leaving leading and
-  // trailing tidal streams that wrap completely around the disc.
-  // Gaia DR2/DR3 detections show the streams cover 360°+ of sky and
-  // sit at distances 16–50 kpc from the Sun.
-  //
-  // Modeled here as a parametric path through (x,y,z) space with two
-  // wraps and slight vertical oscillation, sprinkled with ~3000
-  // old-population stellar particles (red giant branch dominant).
-
-  const STREAM_N = 6000;
-  const streamPts: number[] = [];
-  const streamCols: number[] = [];
-  const streamSizes: number[] = [];
-  for (let i = 0; i < STREAM_N; i++) {
-    const t = i / STREAM_N;
-    // Two complete wraps around the galaxy (the real stream wraps
-    // multiple times; two reads cleanly visually).
-    const angle = t * Math.PI * 4 + Math.PI * 0.3;
-    // Radius oscillates between perigalacticon (~16 kpc) and
-    // apogalacticon (~50 kpc); compressed slightly to fit.
-    const r = 22 + 12 * Math.sin(t * Math.PI * 2);
-    // Stream is highly inclined ~80° from galactic plane — passes
-    // above and below as it wraps.
-    const yOsc = 8 * Math.sin(t * Math.PI * 3 + 0.7);
-    // Scatter perpendicular to the path
-    const scatter = 0.6 + Math.random() * 0.4;
-    const xk = r * Math.cos(angle) + (Math.random() - 0.5) * scatter;
-    const zk = r * Math.sin(angle) + (Math.random() - 0.5) * scatter;
-    const yk = yOsc + (Math.random() - 0.5) * scatter * 0.5;
-    streamPts.push(xk * KPC, yk * KPC, zk * KPC);
-    // Stream stars are old population, slightly warmer than disc.
-    const c = 0.7 + Math.random() * 0.2;
-    streamCols.push(c, c * 0.92, c * 0.78);
-    streamSizes.push(1.4 + Math.random() * 0.9);
-  }
-  const streamGeo = new BufferGeometry();
-  streamGeo.setAttribute('position', new Float32BufferAttribute(streamPts, 3));
-  streamGeo.setAttribute('color', new Float32BufferAttribute(streamCols, 3));
-  streamGeo.setAttribute('aSize', new Float32BufferAttribute(streamSizes, 1));
-  const streamMat = new ShaderMaterial({
-    vertexShader: galacticStarsVertexShader,
-    fragmentShader: galacticStarsFragmentShader,
-    uniforms: makeStarUniforms(0.55),
-    transparent: true,
-    depthWrite: false,
-    blending: AdditiveBlending,
-  });
-  const streamField = new Points(streamGeo, streamMat);
-  STREAK_MATS.push(streamMat);
-  streamField.name = 'sgr-stream';
-  galaxy.add(streamField);
-
-  // Sgr dSph core — clickable landmark at perigalacticon
-  const sgrCorePos = new Vector3(
-    22 * KPC * Math.cos(Math.PI * 0.3),
-    8 * KPC * Math.sin(0.7),
-    22 * KPC * Math.sin(Math.PI * 0.3),
-  );
-  const sgrCore = new Sprite(new SpriteMaterial({
-    map: nebulaTex, color: 0xffd9b0,
-    transparent: true, blending: AdditiveBlending,
-    depthWrite: false, opacity: 0.55,
-  }));
-  sgrCore.scale.set(700, 500, 1);
-  sgrCore.position.copy(sgrCorePos);
-  galaxy.add(sgrCore);
-  const sgrCoreHit = new Mesh(
-    new SphereGeometry(500, 12, 12),
-    new MeshBasicMaterial({ color: 0xffd9b0, transparent: true, opacity: 0.0001, depthWrite: false }),
-  );
-  sgrCoreHit.position.copy(sgrCorePos);
-  sgrCoreHit.userData = {
-    type: 'phenomenon',
-    name: 'Sagittarius Dwarf Spheroidal',
-    subtype: 'Disrupted Dwarf Galaxy',
-    description: 'Tidal stream wraps the Milky Way disc; remnant core at ~24 kpc',
-  };
-  galaxy.add(sgrCoreHit);
-  const sgrLbl = makeLabelSprite('SGR DSPH', 'rgba(255,255,255,0.55)', 36);
-  sgrLbl.scale.set(420, 105, 1);
-  sgrLbl.position.set(sgrCorePos.x, sgrCorePos.y + 200, sgrCorePos.z);
-  galaxy.add(sgrLbl);
 
   // ── 13. Sol "You Are Here" Reticule ────────────────────────────
   // Four-bracket corner reticule + faint ring, evokes a tactical HUD
