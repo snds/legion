@@ -3,8 +3,8 @@
 
 import { describe, it, expect } from 'vitest';
 import { Vector3 } from 'three';
-import { createHomeSector, createSector } from './sector';
-import { generateSectorStars } from './sector-stars';
+import { createHomeSector } from './sector';
+import { generateSectorStars, generateSectorStarsFast } from './sector-stars';
 import { buildRegionStarField } from './region-merge';
 import type { PopulatedCell } from './galaxy-enumerate';
 
@@ -36,8 +36,8 @@ describe('region-merge', () => {
   const cells = [mk(33, -1), mk(34, -1)];
   const field = buildRegionStarField({ i: 8, j: -1, k: -1 }, cells, 100);
 
-  it('merged count = sum of the cells (each capped)', () => {
-    const sum = cells.reduce((n, c) => n + generateSectorStars(createSector(c.centerPc), 100).count, 0);
+  it('merged count = sum of the cells (each fast-generated, capped)', () => {
+    const sum = cells.reduce((n, c) => n + generateSectorStarsFast(c.centerPc, c.emission, 100).count, 0);
     expect(field.count).toBe(sum);
     const posAttr = field.points.geometry.getAttribute('position');
     expect(posAttr.count).toBe(field.count);
@@ -51,7 +51,7 @@ describe('region-merge', () => {
     expect(maxAbs).toBeLessThan(600_000); // ±500k region span + breach, float32-exact at this range
     expect(Number.isFinite(maxAbs)).toBe(true);
     // cell (34,-1,-1) centre is +125 pc in x from the region centre → its stars cluster near +125000 WU
-    const cell34 = generateSectorStars(createSector(cells[1]!.centerPc), 100);
+    const cell34 = generateSectorStarsFast(cells[1]!.centerPc, cells[1]!.emission, 100);
     // first star of the second cell sits at offset (125000, +375000? no: cy-rcy) ...
     // assert at least one star is in the +x half (the +125 pc cell), proving the offset applied
     let anyPlusX = false;

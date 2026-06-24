@@ -27,7 +27,7 @@ import { armPattern, COL_HII, sampleGalaxy } from '../galaxy-density';
 import { galacticStarsVertexShader, galacticStarsFragmentShader } from '../shaders/galactic-stars';
 import { sampleArmStar, sampleRealisticStar } from '../stellar-population';
 import { mulberry32, seedFrom } from '../../data/system-gen';
-import type { Sector } from './sector';
+import { DEFAULT_SECTOR_EDGE_PC, type Sector } from './sector';
 
 /** parsec → galaxy-local native WU (the frame sampleGalaxy expects). 0.333. */
 export const PC_TO_NATIVE = KPC_TO_WU / 1000;
@@ -222,6 +222,46 @@ export function generateSectorStars(sector: Sector, starCountCap?: number): Sect
     };
   }
   return { positions, colors, sizes, crests, count, emissionMean, emissionMax };
+}
+
+/** Floor on a build-out cell's star count (so even faint rim cells render a few points). */
+const MIN_BUILDOUT_STARS = 6;
+
+/** Build-out FAST path — generate a cell's stars from its ALREADY-KNOWN emission (the enumeration
+ *  gate value), with NO Monte-Carlo integral and NO rejection loop: count = REF_STARS · emission/REF
+ *  capped, placed UNIFORMLY in the cell, arm-phase coloured (+ HII beads). This is what makes a
+ *  galaxy-wide fill generate in seconds, not the ~17 minutes the integral path would take across ~62k
+ *  cells. The near-camera streaming keeps the accurate emission-weighted path; the overview doesn't
+ *  need within-cell weighting. Deterministic from the cell centre. */
+export function generateSectorStarsFast(
+  centerPc: Vector3, emission: number, cap: number, edgePc = DEFAULT_SECTOR_EDGE_PC,
+): SectorStarData {
+  const rng = mulberry32(seedFrom(
+    `buildout:${centerPc.x.toFixed(1)},${centerPc.y.toFixed(1)},${centerPc.z.toFixed(1)}`));
+  const count = Math.max(MIN_BUILDOUT_STARS, Math.min(cap, Math.round(REF_STARS * (emission / REF_EMISSION))));
+  const positions = new Float32Array(count * 3);
+  const colors = new Float32Array(count * 3);
+  const sizes = new Float32Array(count);
+  const crests = new Float32Array(count);
+  for (let i = 0; i < count; i++) {
+    const ox = (rng() - 0.5) * edgePc;
+    const oy = (rng() - 0.5) * edgePc;
+    const oz = (rng() - 0.5) * edgePc;
+    const i3 = i * 3;
+    positions[i3] = ox * WU_PER_PC;
+    positions[i3 + 1] = oy * WU_PER_PC;
+    positions[i3 + 2] = oz * WU_PER_PC;
+    const crest = ARM_AWARE_STARS ? crestinessAtGalPc(centerPc.x + ox, centerPc.z + oz) : 0;
+    const star: readonly [number, number, number, number] = ARM_AWARE_STARS
+      ? (crest > HII_BEAD_CREST && rng() < HII_BEAD_PROB
+          ? [HII_R, HII_G, HII_B, 1.5 + rng() * 1.0]
+          : sampleArmStar(rng, crest))
+      : sampleRealisticStar(rng);
+    colors[i3] = star[0]; colors[i3 + 1] = star[1]; colors[i3 + 2] = star[2];
+    sizes[i] = star[3];
+    crests[i] = crest;
+  }
+  return { positions, colors, sizes, crests, count, emissionMean: emission, emissionMax: emission };
 }
 
 /** Default screen-space size multiplier for sector stars (tunable). */
