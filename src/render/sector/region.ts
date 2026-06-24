@@ -56,9 +56,33 @@ export function regionSeedKey(region: RegionCell): string {
 
 // ── Metadata + budget (declared now; populated when the region manager loads regions) ──
 // Where a region sits relative to the spiral structure (sampled once from the density model at
-// load) and how dense it is — the levers the shape-editor + optimizer consume.
-export type ArmPhase = 'core' | 'crest' | 'inner' | 'outer' | 'gap';
+// load) and how dense it is — the levers the shape-editor + optimizer + the fill pass consume.
+
+/** Where the region sits in the spiral: the bulge/bar 'core', an arm 'crest', its 'flank', or the
+ *  inter-arm 'gap'. Coarse on purpose (a HUD/scheduling label, not a precise dust-lane phase). */
+export type ArmPhase = 'core' | 'crest' | 'flank' | 'gap';
+
+/** How dense the region is vs the solar-circle reference (emission / REF_EMISSION). */
 export type DensityClass = 'core' | 'dense' | 'nominal' | 'sparse' | 'void';
+
+/** Classify a region by its emission relative to the solar-circle midplane (ratio = e/REF_EMISSION).
+ *  Home ≈ 1 → 'nominal'; an arm crest ≈ 1.3–1.6× → 'dense'; the core ≫ → 'core'; off-plane → 'void'. */
+export function classifyDensity(emissionRatio: number): DensityClass {
+  if (emissionRatio >= 4) return 'core';
+  if (emissionRatio >= 1.3) return 'dense';
+  if (emissionRatio >= 0.35) return 'nominal';
+  if (emissionRatio >= 0.06) return 'sparse';
+  return 'void';
+}
+
+/** Classify the spiral phase from the arm ridge (armPattern ∈ [0,1]) + cylindrical radius (native
+ *  WU). Inside ~3 kpc the bulge/bar dominates and the spiral is washed out → 'core'. */
+export function classifyArmPhase(armRidge: number, rNativeWU: number): ArmPhase {
+  if (rNativeWU < 1000) return 'core'; // ~3 kpc (KPC = 333 native WU)
+  if (armRidge >= 0.5) return 'crest';
+  if (armRidge >= 0.08) return 'flank';
+  return 'gap';
+}
 
 /** Per-region cost telemetry (accumulated as its sectors stream). Feeds the optimization budget. */
 export interface RegionBudget {

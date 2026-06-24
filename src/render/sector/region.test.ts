@@ -4,11 +4,12 @@
 
 import { describe, it, expect } from 'vitest';
 import { Vector3 } from 'three';
-import { cellForGalPc, DEFAULT_SECTOR_EDGE_PC } from './sector';
+import { cellForGalPc, DEFAULT_SECTOR_EDGE_PC, HOME_GAL_PC } from './sector';
 import {
   REGION_EDGE_PC, regionForGalPc, regionCenterPc, hystereticRegionCell,
-  regionKey, regionSeedKey,
+  regionKey, regionSeedKey, classifyDensity, classifyArmPhase,
 } from './region';
+import { emissionAtGalPc, REF_EMISSION } from './sector-stars';
 
 describe('Region index — cell math, anywhere in the galaxy', () => {
   // Sampled across the galaxy with NO reference to home — the index is position-pure.
@@ -87,5 +88,41 @@ describe('Region index — hysteresis (no coarse-boundary thrash)', () => {
     const current = { i: 0, j: 0, k: 0 };
     const g = new Vector3(8300, 0, 0);              // i = floor(8300/1000) = 8
     expect(hystereticRegionCell(g, current).i).toBe(8);
+  });
+});
+
+describe('Region metadata — pure classifiers', () => {
+  it('classifyDensity bands the emission ratio (home ≈ 1 → nominal, core ≫ → core)', () => {
+    expect(classifyDensity(8)).toBe('core');
+    expect(classifyDensity(1.5)).toBe('dense');
+    expect(classifyDensity(1.0)).toBe('nominal');
+    expect(classifyDensity(0.2)).toBe('sparse');
+    expect(classifyDensity(0.01)).toBe('void');
+    // boundaries are inclusive-low
+    expect(classifyDensity(4)).toBe('core');
+    expect(classifyDensity(1.3)).toBe('dense');
+    expect(classifyDensity(0.35)).toBe('nominal');
+    expect(classifyDensity(0.06)).toBe('sparse');
+  });
+
+  it('classifyArmPhase: core inside ~3 kpc, else crest/flank/gap by ridge', () => {
+    expect(classifyArmPhase(0.0, 500)).toBe('core');   // R < 1000 native — bulge/bar
+    expect(classifyArmPhase(0.9, 500)).toBe('core');   // core wins regardless of ridge
+    expect(classifyArmPhase(0.7, 2800)).toBe('crest'); // ~8.4 kpc, on a ridge
+    expect(classifyArmPhase(0.2, 2800)).toBe('flank');
+    expect(classifyArmPhase(0.0, 2800)).toBe('gap');   // inter-arm
+  });
+});
+
+describe('Region metadata — real density model (sensible labels across the galaxy)', () => {
+  it('emission ranks core > home > off-plane void, and the classes follow', () => {
+    const ratioCore = emissionAtGalPc(0, 0, 0) / REF_EMISSION;
+    const ratioHome = emissionAtGalPc(HOME_GAL_PC.x, HOME_GAL_PC.y, HOME_GAL_PC.z) / REF_EMISSION;
+    const ratioVoid = emissionAtGalPc(8300, 5000, 0) / REF_EMISSION; // 5 kpc above the plane
+    expect(ratioCore).toBeGreaterThan(ratioHome);
+    expect(ratioHome).toBeGreaterThan(ratioVoid);
+    expect(classifyDensity(ratioCore)).toBe('core');   // the galactic centre is ≫ the solar circle
+    expect(classifyDensity(ratioVoid)).toBe('void');   // far off the thin disc
+    expect(['nominal', 'sparse', 'dense']).toContain(classifyDensity(ratioHome)); // home ≈ reference
   });
 });

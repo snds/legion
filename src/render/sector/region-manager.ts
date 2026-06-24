@@ -14,11 +14,13 @@
 // is the backbone, not a behaviour change; later increments populate + act on the region layer.
 // ═══════════════════════════════════════════════════════════════════
 
-import { Vector3 } from 'three';
+import type { Vector3 } from 'three';
+import { armPattern } from '../galaxy-density';
 import {
-  emptyRegionBudget, hystereticRegionCell, regionCenterPc, regionForGalPc, regionKey,
-  type Region, type RegionCell,
+  classifyArmPhase, classifyDensity, emptyRegionBudget, hystereticRegionCell, regionCenterPc,
+  regionForGalPc, regionKey, REGION_EDGE_PC, type ArmPhase, type DensityClass, type Region, type RegionCell,
 } from './region';
+import { emissionAtGalPc, PC_TO_NATIVE, REF_EMISSION } from './sector-stars';
 import { updateSectorManager, type SectorManager } from './sector-manager';
 
 export interface RegionManager {
@@ -42,10 +44,27 @@ export function createRegionManager(): RegionManager {
   return { residents: new Map(), cameraRegion: null, cameraRegionKey: null };
 }
 
-/** Load a region: just its identity + centre + empty metadata/budget. NO GPU work; the density
- *  metadata (armPhase/densityClass) is sampled in Inc 3. Deterministic — pure of HOME_GAL_PC. */
+/** Load a region: identity + centre + density metadata sampled ONCE from the shared analytic model
+ *  at the region centre (emission → densityClass vs the solar-circle reference; arm ridge + radius
+ *  → armPhase). NO GPU work. Deterministic — pure of HOME_GAL_PC (the model is positional). */
 function loadRegion(cell: RegionCell): Region {
-  return { cell, centerPc: regionCenterPc(cell), armPhase: null, densityClass: null, budget: emptyRegionBudget() };
+  const centerPc = regionCenterPc(cell);
+  // Density is sampled at the region's NEAREST approach to the midplane, not its geometric centre:
+  // a 1 kpc-tall region straddling the thin (~300 pc) disc has its y-centre off-plane, which would
+  // misread an in-disc region (e.g. home, j=-1, centre y=-500) as sparse. The clamp gives the
+  // richest disc content the region's x,z column actually contains. armPhase uses x,z only (R,θ).
+  const yMin = cell.j * REGION_EDGE_PC;
+  const yMidplane = Math.max(yMin, Math.min(yMin + REGION_EDGE_PC, 0));
+  const emission = emissionAtGalPc(centerPc.x, yMidplane, centerPc.z);
+  const rNative = Math.hypot(centerPc.x, centerPc.z) * PC_TO_NATIVE; // cylindrical radius, native WU
+  const armRidge = armPattern(rNative, Math.atan2(centerPc.z, centerPc.x));
+  return {
+    cell,
+    centerPc,
+    armPhase: classifyArmPhase(armRidge, rNative),
+    densityClass: classifyDensity(emission / REF_EMISSION),
+    budget: emptyRegionBudget(),
+  };
 }
 
 /** Per-frame: maintain the 3×3×1 region residency around the camera region, then drive the sector
@@ -55,6 +74,7 @@ export function updateRegionManager(
 ): void {
   // 1. Hysteretic region pick + 3×3×1 residency diff (cheap — metadata only, no GPU).
   const region = hystereticRegionCell(camGalPc, rmgr.cameraRegion);
+  const newKey = regionKey(region);
   const desired = residentRegionCells(region);
   const desiredKeys = new Set(desired.map(regionKey));
   for (const key of rmgr.residents.keys()) {
@@ -64,9 +84,55 @@ export function updateRegionManager(
     const key = regionKey(rc);
     if (!rmgr.residents.has(key)) rmgr.residents.set(key, loadRegion(rc));
   }
+  if (rmgr.cameraRegionKey !== newKey) {
+    const r = rmgr.residents.get(newKey);
+    console.info(`[region-lod] entered ${newKey} — arm:${r?.armPhase} density:${r?.densityClass}`);
+  }
   rmgr.cameraRegion = region;
-  rmgr.cameraRegionKey = regionKey(region);
+  rmgr.cameraRegionKey = newKey;
 
   // 2. Drive sector streaming, gated to the resident regions (a no-op trim in Inc 2).
   updateSectorManager(smgr, camGalPc, camDist, desiredKeys);
+
+  // 3. Aggregate per-region cost budgets from the resident sectors (the optimization levers).
+  //    cloudCostMs (GPU) is reserved for the optimization arc; star generation + count are CPU-cheap
+  //    to attribute here — each sector belongs to exactly one resident region (the no-op-filter
+  //    invariant guarantees the lookup hits).
+  for (const r of rmgr.residents.values()) { r.budget.generationMs = 0; r.budget.starCount = 0; }
+  for (const rs of smgr.residents.values()) {
+    const r = rmgr.residents.get(regionKey(regionForGalPc(rs.sector.centerPc)));
+    if (!r) continue;
+    r.budget.generationMs += rs.generationMs;
+    r.budget.starCount += rs.stars.data.count;
+  }
+}
+
+/** Aggregated telemetry across resident regions — the read-out the fill pass + optimizer consume
+ *  (and a debug HUD, later). cloudCostMs / draw-call / memory metrics arrive with the GPU-timing
+ *  work in the optimization arc. */
+export interface RegionTelemetry {
+  regions: number;
+  cameraRegionKey: string | null;
+  cameraArmPhase: ArmPhase | null;
+  cameraDensityClass: DensityClass | null;
+  totalStarCount: number;
+  totalGenerationMs: number;
+}
+
+export function regionTelemetry(rmgr: RegionManager): RegionTelemetry {
+  let totalStarCount = 0;
+  let totalGenerationMs = 0;
+  for (const r of rmgr.residents.values()) {
+    totalStarCount += r.budget.starCount;
+    totalGenerationMs += r.budget.generationMs;
+  }
+  const cam = rmgr.cameraRegionKey ? rmgr.residents.get(rmgr.cameraRegionKey) : undefined;
+  return {
+    regions: rmgr.residents.size,
+    cameraRegionKey: rmgr.cameraRegionKey,
+    cameraArmPhase: cam?.armPhase ?? null,
+    cameraDensityClass: cam?.densityClass ?? null,
+    totalStarCount,
+    totalGenerationMs,
+  };
 }

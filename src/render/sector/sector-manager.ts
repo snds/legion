@@ -30,11 +30,13 @@ const HYSTERESIS_PC = 20;
 // camera cell always loads first so the cloud stays responsive). Worker pooling is later (B2).
 const MAX_LOADS_PER_FRAME = 2;
 
-interface ResidentSector {
+export interface ResidentSector {
   readonly cell: Cell;
   readonly sector: Sector;
   readonly stars: SectorStarField;
   cloud: SectorCloud | null; // non-null ONLY for the camera's current cell (the 1 live volume)
+  /** Synchronous star-generation cost at load (ms) — the hitch signal the region budgets sum. */
+  readonly generationMs: number;
 }
 
 export interface SectorManager {
@@ -68,10 +70,12 @@ export function createSectorManager(parent: Group): SectorManager {
 const _cellCenter = new Vector3();
 function loadSector(mgr: SectorManager, cell: Cell): ResidentSector {
   const sector = createSector(cellCenterPc(cell, EDGE, _cellCenter), EDGE);
-  const stars = buildSectorStarField(sector);
+  const t0 = performance.now();
+  const stars = buildSectorStarField(sector); // synchronous Monte-Carlo generation — the hitch cost
+  const generationMs = performance.now() - t0;
   sector.group.add(stars.points);
   mgr.group.add(sector.group);
-  return { cell, sector, stars, cloud: null };
+  return { cell, sector, stars, cloud: null, generationMs };
 }
 
 function detachCloud(rs: ResidentSector): void {
