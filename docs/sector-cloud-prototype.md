@@ -155,15 +155,30 @@ one nebula can't hold 60 fps, the grid is dead on arrival — learned in a day.
   steps (16→8) + an **exterior-only gate** (camDist ≥ 150k WU, i.e. camera outside the
   250 pc box → partial-screen) so the cloud is viable now; immersive flythrough is deferred
   to Inc 4's half-res. Flag-gated, so default users are unaffected.
-- [ ] **Inc 4 — cloud lighting + half-res.** Light-march self-shadow + HG phase +
-  blue-noise, AND the **half-res render pass** (render the cloud to a ½-size RT as
-  STRAIGHT-alpha, bicubic upscale, then composite premultiplied) — the load-bearing
-  perf lever that unlocks immersive in-box flythrough at 60 fps. Then lower MIN_CAMDIST
-  back so the cloud is enterable. Proves the fly-through cloud *look* + the FPS guardrail.
-- [ ] **Inc 5 — composition.** AABB punch-out + crossfade over the far disc + the
-  luminance-parity test. Proves seam-free (acceptance #1).
-- [ ] **Inc 6 — fly-through + nav.** Node-to-node flight inside the sector + a fast
-  nebula pass with the FPS probe. Acceptance #2 + #3.
+- [x] **Inc 4 — cloud REFRAMED as far-field LOD** (PR #81). Not the planned light-march +
+  half-res. Sean's reframe: the cloud is a *visual extrapolation of unresolved stars* —
+  densest far, THINS as you move in (Points take over), kept subtle so neighbours sum
+  additively, feathered past the bounds. The camera-distance fade both fixes the look AND
+  enables the perf win (faded near/edge samples are SKIPPED → immersive 2 fps → **57 fps**),
+  so half-res wasn't needed. Gate lowered → enterable. The dramatic self-shadow lighting
+  (light-march + HG + `gdDustKappa` extraction + `dominantLight`) is BUILT but unwired —
+  waits for a dense, high-contrast showcase sector. Half-res RT deferred (only if native
+  perf demands).
+- [x] **Inc 5 — composition crossfade** (PR #82). After the reframe the spatial AABB
+  punch-out is invisible at the single-subtle-sector prototype scale (250 pc speck in a
+  30 kpc disc) → it's a **Phase-B mechanism** (recipe captured below). The visible win is
+  the temporal handoff: the gate is now a smooth opacity CROSSFADE (`sectorCloudGateOpacity`,
+  unit-tested), not a hard `visible` toggle — no pop at the disc↔cloud↔system handoffs.
+  PHASE-B PUNCH-OUT RECIPE: in the disc shader, after `sampleGalaxy`, multiply emission by
+  `(1 − uSectorPresence·falloff)` where falloff is a soft box SDF in NATIVE WU
+  (`abs(pNative−uSectorCenterNativeWU) − uSectorHalfNativeWU`, smoothstep over a feather);
+  drive the 4 uniforms from `updateGalaxyFrame`.
+- [x] **Inc 6 — node-to-node tour** (PR #83). `sector-tour.ts`: `sectorTourOrder` (nearest-
+  neighbour from home, unit-tested) + `runSectorTour` driver; `window.__sectorTour.start()`
+  flies between the sector's systems via the existing Bézier `flyTo`. Holds **84–121 fps**
+  through the flights (acceptance #2). The nav graph (`pathfinding.ts` `findPath`) is ready
+  for true graph routing in Phase B (home systems are ~1 hop apart, so nearest-neighbour
+  suffices for the prototype).
 
 ## 8. File plan
 
