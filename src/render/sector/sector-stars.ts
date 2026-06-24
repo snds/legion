@@ -1,0 +1,187 @@
+// ═══════════════════════════════════════════════════════════════════
+// SECTOR STARS — density-sampled embedded star field (prototype Inc 2)
+//
+// Generates a sector's resolved stars by sampling the SAME analytic density
+// model (galaxy-density.ts) the disc volume raymarches — so the resolved stars
+// and the cloud glow agree by construction (docs/sector-cloud-prototype.md §"Embedded
+// stars"):
+//   • count   = ∫ emission dV over the cube, normalised to a home reference, clamped.
+//   • position = rejection-sample the cube, accept ∝ local emission.
+//   • colour  = IMF-weighted sampleStellarPopulation (shared with the disc).
+//   • ALL deterministic — mulberry32 seeded from the sector identity, never Math.random.
+//
+// FRAME: generation works in galactocentric PARSECS (the sector's authoritative
+// frame). The density model wants galaxy-local native WU (Sgr A* origin, 1 kpc =
+// KPC_TO_WU WU, disc in X-Z, +Y vertical) — and galactocentric pc maps there by a
+// single scalar (PC_TO_NATIVE), no axis swap (solPc is already y-vertical; ε Eri's
+// solPc.y = −2.392 == its true galactic Z). Output positions are sector-LOCAL WU
+// (galPc − centre)·WU_PER_PC, ready to drop into sector.group.
+// ═══════════════════════════════════════════════════════════════════
+
+import {
+  AdditiveBlending, BufferGeometry, Float32BufferAttribute, Points, ShaderMaterial, Vector3,
+} from 'three';
+import { KPC_TO_WU, WU_PER_PC } from '../../core/metrics';
+import { sampleGalaxy } from '../galaxy-density';
+import { galacticStarsVertexShader, galacticStarsFragmentShader } from '../shaders/galactic-stars';
+import { sampleStellarPopulation } from '../stellar-population';
+import { mulberry32, seedFrom } from '../../data/system-gen';
+import type { Sector } from './sector';
+
+/** parsec → galaxy-local native WU (the frame sampleGalaxy expects). 0.333. */
+const PC_TO_NATIVE = KPC_TO_WU / 1000;
+
+/** Total emission radiance density (scalar) at a galactocentric-pc point. The
+ *  unweighted RGB sum is the faithful scalar of what the disc volume integrates
+ *  (the raymarch accumulates T·j·dt per channel) — so star count and cloud glow
+ *  read the SAME field, the "agree by construction" guarantee (spec §Embedded stars). */
+function emissionAtGalPc(x: number, y: number, z: number): number {
+  const s = sampleGalaxy(x * PC_TO_NATIVE, y * PC_TO_NATIVE, z * PC_TO_NATIVE);
+  return s.j[0] + s.j[1] + s.j[2];
+}
+
+/** Emission at the solar-circle midplane — the count-normalisation reference, so a
+ *  home-equivalent 250 pc sector targets REF_STARS and richer sectors scale up. */
+const REF_EMISSION = (() => {
+  const s = sampleGalaxy(8.3 * KPC_TO_WU, 0, 0); // SOL_GAL_POS, native WU
+  return s.j[0] + s.j[1] + s.j[2];
+})();
+
+// Calibration (visual, not physical — real local density ≈ 0.1 star/pc³ would be
+// millions of points). REF_STARS is the count for a home-density 250 pc sector.
+const REF_STARS = 6000;
+const REF_EDGE_PC = 250;
+const MIN_STARS = 400;
+const MAX_STARS = 14000;
+const N_PROBE = 4096; // Monte-Carlo samples for the emission integral / max
+const ACCEPT_HEADROOM = 1.5; // emissionMax safety margin so rare peaks don't over-accept
+
+export interface SectorStarData {
+  /** sector-LOCAL WU, xyz triples. */
+  readonly positions: Float32Array;
+  /** linear RGB triples. */
+  readonly colors: Float32Array;
+  /** point sizes, px. */
+  readonly sizes: Float32Array;
+  readonly count: number;
+  /** mean emission over the cube (∫/V) — drives the count. */
+  readonly emissionMean: number;
+  readonly emissionMax: number;
+}
+
+/** Stable deterministic seed key for a sector (centre + edge). Millipc precision is
+ *  far finer than any sector spacing (≥ edge pc apart), so distinct sectors never
+ *  collide; the value is a pure function of the float64 centre, stable across reloads. */
+export function sectorStarSeedKey(sector: Sector): string {
+  const c = sector.centerPc;
+  return `sector-stars:${c.x.toFixed(3)},${c.y.toFixed(3)},${c.z.toFixed(3)}:${sector.edgePc}`;
+}
+
+/** Generate the sector's embedded stars (pure data; deterministic from the seed). */
+export function generateSectorStars(sector: Sector): SectorStarData {
+  const rng = mulberry32(seedFrom(sectorStarSeedKey(sector)));
+  const { centerPc, edgePc } = sector;
+  const half = edgePc * 0.5;
+
+  // 1. Emission integral over the cube (Monte Carlo): mean + peak.
+  let sum = 0;
+  let emissionMax = 0;
+  for (let i = 0; i < N_PROBE; i++) {
+    const e = emissionAtGalPc(
+      centerPc.x + (rng() - 0.5) * edgePc,
+      centerPc.y + (rng() - 0.5) * edgePc,
+      centerPc.z + (rng() - 0.5) * edgePc,
+    );
+    sum += e;
+    if (e > emissionMax) emissionMax = e;
+  }
+  const emissionMean = sum / N_PROBE;
+  emissionMax *= ACCEPT_HEADROOM;
+
+  // 2. Count ∝ ∫ emission dV, normalised to the home reference, clamped.
+  const edgeFactor = (edgePc / REF_EDGE_PC) ** 3;
+  const rawCount = REF_STARS * (emissionMean / REF_EMISSION) * edgeFactor;
+  const count = Math.max(MIN_STARS, Math.min(MAX_STARS, Math.round(rawCount)));
+
+  // 3. Rejection-sample positions (accept ∝ emission) + IMF colour/size.
+  const positions = new Float32Array(count * 3);
+  const colors = new Float32Array(count * 3);
+  const sizes = new Float32Array(count);
+  const invMax = emissionMax > 0 ? 1 / emissionMax : 0;
+  // A void sector (≈ 0 emission everywhere — e.g. far off the disc plane) can't be
+  // rejection-filled, so scatter the MIN-floor uniformly. Real in-disc sectors always
+  // have emission and take the rejection path → count always equals the field length
+  // (no silent under-fill); the guard below is then a pure never-trip safety net.
+  const useUniform = emissionMax <= 0;
+  let placed = 0;
+  let guard = 0;
+  const guardMax = count * 80 + 1000;
+  while (placed < count && guard++ < guardMax) {
+    const ox = (rng() - 0.5) * edgePc;
+    const oy = (rng() - 0.5) * edgePc;
+    const oz = (rng() - 0.5) * edgePc;
+    if (!useUniform) {
+      const e = emissionAtGalPc(centerPc.x + ox, centerPc.y + oy, centerPc.z + oz);
+      if (rng() > e * invMax) continue; // accept ∝ emission/max
+    }
+    const i3 = placed * 3;
+    positions[i3] = ox * WU_PER_PC;       // sector-local WU
+    positions[i3 + 1] = oy * WU_PER_PC;
+    positions[i3 + 2] = oz * WU_PER_PC;
+    const [cr, cg, cb, sz] = sampleStellarPopulation(rng);
+    colors[i3] = cr; colors[i3 + 1] = cg; colors[i3 + 2] = cb;
+    sizes[placed] = sz;
+    placed++;
+  }
+
+  // If the guard tripped (degenerate near-zero field), return the filled prefix.
+  if (placed < count) {
+    return {
+      positions: positions.slice(0, placed * 3),
+      colors: colors.slice(0, placed * 3),
+      sizes: sizes.slice(0, placed),
+      count: placed, emissionMean, emissionMax,
+    };
+  }
+  return { positions, colors, sizes, count, emissionMean, emissionMax };
+}
+
+/** Default screen-space size multiplier for sector stars (tunable). */
+export const SECTOR_STAR_SIZE_SCALE = 1.0;
+
+export interface SectorStarField {
+  readonly points: Points;
+  readonly material: ShaderMaterial;
+  readonly data: SectorStarData;
+}
+
+/** Build the renderable star field (Points) for a sector, authored sector-LOCAL.
+ *  Reuses the galactic-stars additive point shader. Add .points to sector.group. */
+export function buildSectorStarField(sector: Sector): SectorStarField {
+  const data = generateSectorStars(sector);
+  const geo = new BufferGeometry();
+  geo.setAttribute('position', new Float32BufferAttribute(data.positions, 3));
+  geo.setAttribute('color', new Float32BufferAttribute(data.colors, 3));
+  geo.setAttribute('aSize', new Float32BufferAttribute(data.sizes, 1));
+  const material = new ShaderMaterial({
+    vertexShader: galacticStarsVertexShader,
+    fragmentShader: galacticStarsFragmentShader,
+    uniforms: {
+      uSizeScale: { value: SECTOR_STAR_SIZE_SCALE },
+      uPixelRatio: { value: typeof window !== 'undefined' ? Math.min(window.devicePixelRatio, 2) : 1 },
+      uCamVelocity: { value: new Vector3() },
+      uStreakStrength: { value: 0.0 },
+      uMaxStretch: { value: 0.4 },
+    },
+    transparent: true,
+    depthWrite: false,
+    blending: AdditiveBlending,
+  });
+  const points = new Points(geo, material);
+  points.name = 'sector-stars';
+  // Disable culling: the group's world AABB moves every frame (updateSectorFrame
+  // re-roots it to the floating-origin residual), so a cached frustum AABB would be
+  // stale. Relies on the group being re-rooted before each render (it is, in main.ts).
+  points.frustumCulled = false;
+  return { points, material, data };
+}

@@ -27,6 +27,7 @@ import {
 import { getStellarRenderSpect } from './planet-colors';
 import { CURATED_SYSTEMS, galPos, distanceLy, type CuratedSystem } from '../data/curated-systems';
 import { galacticStarsVertexShader, galacticStarsFragmentShader } from './shaders/galactic-stars';
+import { sampleStellarPopulation, sampleHaloPopulation } from './stellar-population';
 import { galacticDiscVolumeVertexShader, galacticDiscVolumeFragmentShader } from './shaders/galactic-disc-volume';
 import {
   armPattern as mArmPattern, taper as mTaper, flare as mFlare, warpY as mWarpY,
@@ -47,36 +48,8 @@ import {
 // galaxy actually reads visually, sampling is biased toward giants
 // and supergiants (which dominate the integrated light even though
 // dwarfs dominate the count). Color taken from MK Planckian table,
-// size from luminosity class.
-//
-// Returns: [r, g, b, sizePx]
-// Stellar colors pulled closer to white — real stars on a black sky
-// register as mostly white pinpricks with subtle hue tints rather than
-// the saturated red/blue dots the previous palette gave. Tints below
-// match what Gaia DR3 visualization renders use.
-function sampleStellarPopulation(): [number, number, number, number] {
-  const r = Math.random();
-  // M giants — warm pastel
-  if (r < 0.05) return [1.0, 0.85 + Math.random() * 0.07, 0.72 + Math.random() * 0.08, 4.5 + Math.random() * 2.0];
-  // K giants — pale amber
-  if (r < 0.14) return [1.0, 0.92 + Math.random() * 0.05, 0.82 + Math.random() * 0.08, 3.5 + Math.random() * 1.3];
-  // O/B supergiants — pale ice blue
-  if (r < 0.17) return [0.88 + Math.random() * 0.06, 0.93 + Math.random() * 0.05, 1.0, 4.0 + Math.random() * 2.0];
-  // A/F bright main sequence — near-white, slight cool tint
-  if (r < 0.27) return [0.97 + Math.random() * 0.03, 0.98 + Math.random() * 0.02, 1.0, 2.6 + Math.random() * 0.9];
-  // G/K main sequence — near-white with warm tint (sun-like)
-  if (r < 0.55) return [1.0, 0.98 + Math.random() * 0.02, 0.92 + Math.random() * 0.05, 1.8 + Math.random() * 0.7];
-  // M dwarfs — pale warm
-  return [1.0, 0.88 + Math.random() * 0.05, 0.78 + Math.random() * 0.08, 1.1 + Math.random() * 0.5];
-}
-
-// Halo / bulge — older, slightly warmer pastel
-function sampleHaloPopulation(): [number, number, number, number] {
-  const r = Math.random();
-  if (r < 0.10) return [1.0, 0.90 + Math.random() * 0.05, 0.80 + Math.random() * 0.08, 2.8 + Math.random() * 1.4];
-  if (r < 0.45) return [1.0, 0.96 + Math.random() * 0.03, 0.90 + Math.random() * 0.05, 1.8 + Math.random() * 0.6];
-  return [1.0, 0.88 + Math.random() * 0.05, 0.78 + Math.random() * 0.08, 1.2 + Math.random() * 0.5];
-}
+// size from luminosity class. The IMF-weighted samplers now live in
+// stellar-population.ts (shared with the per-sector embedded stars); imported above.
 
 // ── Scale Constants ──────────────────────────────────────────────
 
