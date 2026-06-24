@@ -121,6 +121,8 @@ export interface SectorStarData {
   readonly colors: Float32Array;
   /** point sizes, px. */
   readonly sizes: Float32Array;
+  /** per-star spiral-arm crestiness (0 gap … 1 crest) — for the debug overlay + the tool. */
+  readonly crests: Float32Array;
   readonly count: number;
   /** mean emission over the cube (∫/V) — drives the count. */
   readonly emissionMean: number;
@@ -165,6 +167,7 @@ export function generateSectorStars(sector: Sector): SectorStarData {
   const positions = new Float32Array(count * 3);
   const colors = new Float32Array(count * 3);
   const sizes = new Float32Array(count);
+  const crests = new Float32Array(count);
   const invMax = emissionMax > 0 ? 1 / emissionMax : 0;
   // A void sector (≈ 0 emission everywhere — e.g. far off the disc plane) can't be
   // rejection-filled, so scatter the MIN-floor uniformly. Real in-disc sectors always
@@ -189,9 +192,10 @@ export function generateSectorStars(sector: Sector): SectorStarData {
     // Colour/type biased by the spiral-arm crest at THIS star's galactocentric position (density-wave
     // physics): blue young population on the arms, warm red dwarfs in the gaps, plus magenta HII beads
     // on the brightest crests. crestiness comes from position (not the RNG), so determinism holds.
+    let crest = 0;
     let star: readonly [number, number, number, number];
     if (ARM_AWARE_STARS) {
-      const crest = crestinessAtGalPc(centerPc.x + ox, centerPc.z + oz);
+      crest = crestinessAtGalPc(centerPc.x + ox, centerPc.z + oz);
       star = crest > HII_BEAD_CREST && rng() < HII_BEAD_PROB
         ? [HII_R, HII_G, HII_B, 1.5 + rng() * 1.0] // HII region — magenta star-forming knot
         : sampleArmStar(rng, crest);
@@ -200,6 +204,7 @@ export function generateSectorStars(sector: Sector): SectorStarData {
     }
     colors[i3] = star[0]; colors[i3 + 1] = star[1]; colors[i3 + 2] = star[2];
     sizes[placed] = star[3];
+    crests[placed] = crest;
     placed++;
   }
 
@@ -209,14 +214,24 @@ export function generateSectorStars(sector: Sector): SectorStarData {
       positions: positions.slice(0, placed * 3),
       colors: colors.slice(0, placed * 3),
       sizes: sizes.slice(0, placed),
+      crests: crests.slice(0, placed),
       count: placed, emissionMean, emissionMax,
     };
   }
-  return { positions, colors, sizes, count, emissionMean, emissionMax };
+  return { positions, colors, sizes, crests, count, emissionMean, emissionMax };
 }
 
 /** Default screen-space size multiplier for sector stars (tunable). */
 export const SECTOR_STAR_SIZE_SCALE = 1.0;
+
+/** Shared arm-phase DEBUG uniform — ALL sector star materials reference this one object, so
+ *  setArmDebug() toggles every field (current + future) at once. 0 = normal, 1 = recolour by phase. */
+export const armDebugUniform = { value: 0 };
+
+/** Toggle the arm-phase debug recolour across every sector star field. */
+export function setArmDebug(on: boolean): void {
+  armDebugUniform.value = on ? 1 : 0;
+}
 
 export interface SectorStarField {
   readonly points: Points;
@@ -232,6 +247,7 @@ export function buildSectorStarField(sector: Sector): SectorStarField {
   geo.setAttribute('position', new Float32BufferAttribute(data.positions, 3));
   geo.setAttribute('color', new Float32BufferAttribute(data.colors, 3));
   geo.setAttribute('aSize', new Float32BufferAttribute(data.sizes, 1));
+  geo.setAttribute('aCrest', new Float32BufferAttribute(data.crests, 1));
   const material = new ShaderMaterial({
     vertexShader: galacticStarsVertexShader,
     fragmentShader: galacticStarsFragmentShader,
@@ -242,6 +258,7 @@ export function buildSectorStarField(sector: Sector): SectorStarField {
       uStreakStrength: { value: 0.0 },
       uMaxStretch: { value: 0.4 },
       uDensityDim: { value: sectorDensityDim(data.emissionMean) }, // tame additive overdraw in dense sectors
+      uArmDebug: armDebugUniform, // shared — setArmDebug() recolours every field by arm phase
     },
     transparent: true,
     depthWrite: false,
