@@ -14,9 +14,10 @@ import {
 } from 'three';
 import { WU_PER_PC } from '../../core/metrics';
 import { galacticStarsVertexShader, galacticStarsFragmentShader } from '../shaders/galactic-stars';
-import { DEFAULT_SECTOR_EDGE_PC, HOME_GAL_PC } from './sector';
+import { cellKey, DEFAULT_SECTOR_EDGE_PC, HOME_GAL_PC } from './sector';
 import { regionCenterPc, type RegionCell } from './region';
 import type { PopulatedCell } from './galaxy-enumerate';
+import type { EditState } from './galaxy-edit';
 import {
   armDebugUniform, generateSectorStarsFast, sectorDensityDim, SECTOR_STAR_SIZE_SCALE,
 } from './sector-stars';
@@ -32,9 +33,10 @@ export interface RegionStarField {
 const EDGE = DEFAULT_SECTOR_EDGE_PC;
 const _rcPc = new Vector3();
 
-/** Generate every populated cell of a region (capped) and merge into one region-local Points. */
+/** Generate every populated cell of a region (capped) and merge into one region-local Points.
+ *  `editState` (optional) layers the non-destructive paint edits on top — omitted = the base galaxy. */
 export function buildRegionStarField(
-  regionCell: RegionCell, cells: PopulatedCell[], starCap: number,
+  regionCell: RegionCell, cells: PopulatedCell[], starCap: number, editState?: EditState,
 ): RegionStarField {
   regionCenterPc(regionCell, _rcPc);
   const regionCenterAbsWU = new Vector3().subVectors(_rcPc, HOME_GAL_PC).multiplyScalar(WU_PER_PC);
@@ -46,7 +48,8 @@ export function buildRegionStarField(
   const parts: { data: ReturnType<typeof generateSectorStarsFast>; cx: number; cy: number; cz: number; dim: number }[] = [];
   let total = 0;
   for (const pc of cells) {
-    const data = generateSectorStarsFast(pc.centerPc, pc.emission, starCap, EDGE);
+    const editCtx = editState ? { editState, cellKey: cellKey(pc.cell), regionKey: pc.regionKey } : undefined;
+    const data = generateSectorStarsFast(pc.centerPc, pc.emission, starCap, EDGE, editCtx);
     parts.push({ data, cx: pc.centerPc.x, cy: pc.centerPc.y, cz: pc.centerPc.z, dim: sectorDensityDim(pc.emission) });
     total += data.count;
   }
