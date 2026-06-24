@@ -28,6 +28,7 @@ import { galacticStarsVertexShader, galacticStarsFragmentShader } from '../shade
 import { sampleArmStar, sampleRealisticStar } from '../stellar-population';
 import { mulberry32, seedFrom } from '../../data/system-gen';
 import { DEFAULT_SECTOR_EDGE_PC, type Sector } from './sector';
+import { computeStarId, type EditContext } from './galaxy-edit';
 
 /** parsec → galaxy-local native WU (the frame sampleGalaxy expects). 0.333. */
 export const PC_TO_NATIVE = KPC_TO_WU / 1000;
@@ -241,11 +242,18 @@ const BUILDOUT_VERTICAL_SLICES = 6;
  *  layers' densities meet continuously. Still ~seconds galaxy-wide (6 samples/cell, not 4096). The
  *  near-camera streaming keeps the full emission-weighted path. Deterministic from the cell centre. */
 export function generateSectorStarsFast(
-  centerPc: Vector3, emission: number, cap: number, edgePc = DEFAULT_SECTOR_EDGE_PC,
+  centerPc: Vector3, emission: number, cap: number, edgePc = DEFAULT_SECTOR_EDGE_PC, edit?: EditContext,
 ): SectorStarData {
   const rng = mulberry32(seedFrom(
     `buildout:${centerPc.x.toFixed(1)},${centerPc.y.toFixed(1)},${centerPc.z.toFixed(1)}`));
-  const count = Math.max(MIN_BUILDOUT_STARS, Math.min(cap, Math.round(REF_STARS * (emission / REF_EMISSION))));
+  // Non-destructive paint edits (Phase 0 seam) — read only when this cell/region actually has edits,
+  // so unedited cells (the overwhelming majority) take the identical fast path below. The base star
+  // STREAM is generated unchanged regardless (same RNG draws); edits only transform the OUTPUT.
+  const mod = edit ? edit.editState.modifiers.get(edit.cellKey) : undefined;
+  const ovMap = edit ? edit.editState.overrides.get(edit.regionKey) : undefined;
+  const densityFactor = mod ? mod.densityFactor : 1;
+  const count = Math.max(MIN_BUILDOUT_STARS,
+    Math.min(cap, Math.round(REF_STARS * (emission / REF_EMISSION) * densityFactor)));
   const positions = new Float32Array(count * 3);
   const colors = new Float32Array(count * 3);
   const sizes = new Float32Array(count);
@@ -262,6 +270,7 @@ export function generateSectorStarsFast(
     vcdf[s + 1] = vcdf[s]! + Math.max(0, emissionAtGalPc(centerPc.x, centerPc.y + y0 + (s + 0.5) * yStep, centerPc.z));
   }
   const vTot = vcdf[NV]! || 1;
+  let placed = 0;
   for (let i = 0; i < count; i++) {
     const ox = (rng() - 0.5) * edgePc;
     // sample the height from the vertical emission CDF (inverse lookup + linear interp within a slice)
@@ -270,19 +279,47 @@ export function generateSectorStarsFast(
     while (vs < NV && vcdf[vs]! < u) vs++;
     const oy = y0 + (vs - 1 + (u - vcdf[vs - 1]!) / Math.max(vcdf[vs]! - vcdf[vs - 1]!, 1e-12)) * yStep;
     const oz = (rng() - 0.5) * edgePc;
-    const i3 = i * 3;
-    positions[i3] = ox * WU_PER_PC;
-    positions[i3 + 1] = oy * WU_PER_PC;
-    positions[i3 + 2] = oz * WU_PER_PC;
     const crest = ARM_AWARE_STARS ? crestinessAtGalPc(centerPc.x + ox, centerPc.z + oz) : 0;
     const star: readonly [number, number, number, number] = ARM_AWARE_STARS
       ? (crest > HII_BEAD_CREST && rng() < HII_BEAD_PROB
           ? [HII_R, HII_G, HII_B, 1.5 + rng() * 1.0]
           : sampleArmStar(rng, crest))
       : sampleRealisticStar(rng);
-    colors[i3] = star[0]; colors[i3 + 1] = star[1]; colors[i3 + 2] = star[2];
-    sizes[i] = star[3];
-    crests[i] = crest;
+    // Base position (sector-local WU) + paint edits. With no edits (mod/ovMap undefined) this is the
+    // identity — same arrays, same indices — so the build-out/streaming output is byte-identical.
+    let px = ox * WU_PER_PC, py = oy * WU_PER_PC, pz = oz * WU_PER_PC, br = 1;
+    if (ovMap) {
+      const ov = ovMap.get(computeStarId(edit!.cellKey, i));
+      if (ov) {
+        if (ov.position === null) continue; // deleted star — omit
+        if (ov.position) {
+          px = (ov.position[0] - centerPc.x) * WU_PER_PC;
+          py = (ov.position[1] - centerPc.y) * WU_PER_PC;
+          pz = (ov.position[2] - centerPc.z) * WU_PER_PC;
+        }
+        if (ov.brightness !== undefined) br = ov.brightness;
+      }
+    }
+    if (mod) {
+      px += mod.displacementPc[0] * WU_PER_PC;
+      py += mod.displacementPc[1] * WU_PER_PC;
+      pz += mod.displacementPc[2] * WU_PER_PC;
+    }
+    const i3 = placed * 3;
+    positions[i3] = px; positions[i3 + 1] = py; positions[i3 + 2] = pz;
+    colors[i3] = star[0] * br; colors[i3 + 1] = star[1] * br; colors[i3 + 2] = star[2] * br;
+    sizes[placed] = star[3];
+    crests[placed] = crest;
+    placed++;
+  }
+  if (placed < count) {
+    return {
+      positions: positions.slice(0, placed * 3),
+      colors: colors.slice(0, placed * 3),
+      sizes: sizes.slice(0, placed),
+      crests: crests.slice(0, placed),
+      count: placed, emissionMean: emission, emissionMax: emission,
+    };
   }
   return { positions, colors, sizes, crests, count, emissionMean: emission, emissionMax: emission };
 }

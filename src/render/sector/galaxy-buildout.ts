@@ -15,6 +15,7 @@ import { Broker } from '../scale-manager';
 import { regionForGalPc, type RegionCell } from './region';
 import { enumerateGalaxy, type GalaxyEnumeration, type PopulatedCell } from './galaxy-enumerate';
 import { buildRegionStarField, disposeRegionStarField, type RegionStarField } from './region-merge';
+import { emptyEditState, type EditState } from './galaxy-edit';
 
 /** Overview star cap per cell — low so the galaxy-wide point budget stays viable (live-tunable). */
 export const DEFAULT_BUILDOUT_STAR_CAP = 32;
@@ -31,6 +32,8 @@ export interface GalaxyBuildout {
   readonly queue: QueuedRegion[];
   /** Generated regions (regionKey → merged Points). The future tool addresses regions here. */
   readonly generated: Map<string, RegionStarField>;
+  /** Non-destructive paint edits layered over the base galaxy (empty = the base build-out). */
+  editState: EditState;
   starCap: number;
   totalStars: number;
 }
@@ -49,7 +52,7 @@ export function createGalaxyBuildout(
   // inner→out so the home/core neighbourhood populates first.
   queue.sort((a, b) => regionR2(a.cells[0]!) - regionR2(b.cells[0]!));
   return {
-    group, enumeration, queue, generated: new Map(),
+    group, enumeration, queue, generated: new Map(), editState: emptyEditState(),
     starCap: opts.starCap ?? DEFAULT_BUILDOUT_STAR_CAP, totalStars: 0,
   };
 }
@@ -65,7 +68,7 @@ const _res = new Vector3();
 export function updateGalaxyBuildout(b: GalaxyBuildout, maxRegionsPerFrame = 3): void {
   for (let n = 0; n < maxRegionsPerFrame && b.queue.length > 0; n++) {
     const { key, cell, cells } = b.queue.shift()!;
-    const field = buildRegionStarField(cell, cells, b.starCap);
+    const field = buildRegionStarField(cell, cells, b.starCap, b.editState);
     b.group.add(field.points);
     b.generated.set(key, field);
     b.totalStars += field.count;
@@ -74,6 +77,22 @@ export function updateGalaxyBuildout(b: GalaxyBuildout, maxRegionsPerFrame = 3):
     Broker.getResidual(field.regionCenterAbsWU, _res);
     field.points.position.copy(_res); // the shader's per-vertex uDepthLODRef handles the distance LOD
   }
+}
+
+/** Re-bake ONE region's merged Points with the current editState (after a brush stroke dirties it):
+ *  rebuild from the enumeration's cells, dispose the old Points, swap in the new — the same
+ *  generated-Map swap updateGalaxyBuildout does, scoped to one region. */
+export function regenerateRegion(b: GalaxyBuildout, regionKey: string): void {
+  const cells = b.enumeration.byRegion.get(regionKey);
+  if (!cells || cells.length === 0) return;
+  const old = b.generated.get(regionKey);
+  if (old) { b.group.remove(old.points); b.totalStars -= old.count; disposeRegionStarField(old); }
+  const field = buildRegionStarField(regionForGalPc(cells[0]!.centerPc), cells, b.starCap, b.editState);
+  b.group.add(field.points);
+  b.generated.set(regionKey, field);
+  b.totalStars += field.count;
+  Broker.getResidual(field.regionCenterAbsWU, _res);
+  field.points.position.copy(_res);
 }
 
 export function buildoutStatus(b: GalaxyBuildout): {
