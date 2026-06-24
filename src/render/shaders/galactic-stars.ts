@@ -18,6 +18,10 @@
 export const galacticStarsVertexShader = /* glsl */ `
   attribute vec3 color;
   attribute float aSize;
+  // Per-star spiral-arm crestiness (0 gap … 1 crest). Only meaningful for sector stars; the disc
+  // geometry omits it (defaults to 0). Drives the arm-phase DEBUG recolour below.
+  attribute float aCrest;
+  uniform float uArmDebug; // 0 = normal colour, 1 = recolour by arm phase (debug topology view)
   varying vec3 vColor;
   // Per-vertex screen-space streak direction (normalized) + amount (0..MAX).
   // Packed as vec3 (xy=direction, z=amount) to keep the varying budget low.
@@ -38,7 +42,10 @@ export const galacticStarsVertexShader = /* glsl */ `
   uniform float uMaxStretch;
 
   void main() {
-    vColor = color;
+    // Arm-phase debug: gap (crest 0) → dim red, crest (1) → bright cyan, so spiral arms light up and
+    // seam continuity is obvious. uArmDebug lerps between the true colour and the topology ramp.
+    vec3 armCol = mix(vec3(0.9, 0.25, 0.18), vec3(0.30, 0.85, 1.0), aCrest);
+    vColor = mix(color, armCol, uArmDebug);
     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
 
     // Transform world-space camera velocity into view space. modelViewMatrix

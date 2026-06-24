@@ -77,6 +77,7 @@ import { createSectorPrototype, updateSectorPrototype } from './render/sector/se
 import { createSectorManager, updateSectorManager, type SectorManager } from './render/sector/sector-manager';
 import { createRegionManager, regionTelemetry, updateRegionManager, type RegionManager } from './render/sector/region-manager';
 import { createSectorFill, fillStatus, updateSectorFill, type SectorFill } from './render/sector/sector-fill';
+import { setArmDebug } from './render/sector/sector-stars';
 import { absWUToGalPc, HOME_GAL_PC } from './render/sector/sector';
 import { runSectorTour, type SectorTourHandle } from './render/sector/sector-tour';
 import { regionalScenePos, type CuratedSystem } from './data/curated-systems';
@@ -791,7 +792,8 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol'): WorldExtras {
   const sectorMgr = regionsOn || params.has('proto-stream') ? createSectorManager(sceneRoot) : null;
   if (sectorMgr) {
     (globalThis as Record<string, unknown>).__sectorMgr = sectorMgr;
-    console.info('[sector-stream] streaming on — __sectorMgr.residents (cellKey→sector), .starCount');
+    (globalThis as Record<string, unknown>).__armDebug = (on = true) => setArmDebug(Boolean(on));
+    console.info('[sector-stream] streaming on — __sectorMgr.residents; __armDebug(true) recolours stars by arm phase');
   }
   const regionMgr = regionsOn ? createRegionManager() : null;
   if (regionMgr) {
