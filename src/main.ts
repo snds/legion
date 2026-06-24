@@ -431,7 +431,7 @@ async function boot(): Promise<void> {
     Broker.getTierRoot('regional', _regionalRoot);
     layers.regional.position.copy(_regionalRoot);
     worldExtras.sectorOrb.position.copy(_regionalRoot);
-    updateSectorPrototype(); // sector-cloud prototype: re-root per frame (no-op if off)
+    updateSectorPrototype(Game.data.camDist); // sector-cloud prototype: re-root + gate cloud (no-op if off)
 
     // 7. Audio
     Audio.updateMix(frameTime);

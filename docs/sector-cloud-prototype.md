@@ -142,15 +142,24 @@ one nebula can't hold 60 fps, the grid is dead on arrival — learned in a day.
 
 ## 7. Build increments (each independently verifiable)
 
-- [ ] **Inc 1 — `Sector` skeleton.** Group factory + sector 0 at home, curated systems
+- [x] **Inc 1 — `Sector` skeleton.** Group factory + sector 0 at home, curated systems
   only, behind a flag. Zero default visual change. Proves the component API + the
-  broker framing (float-safe placement that tracks the camera).
-- [ ] **Inc 2 — embedded stars.** Density-sampled generated Points, deterministic
-  seed. Proves count/color agree with the model.
-- [ ] **Inc 3 — cloud volume v1.** Generalize the disc raymarch to the sector box;
-  density = shared-field × worldFBM; emission only. Proves the cloud renders band-not-fog.
-- [ ] **Inc 4 — cloud lighting.** Light-march self-shadow + HG phase + blue-noise +
-  half-res. Proves the fly-through cloud *look*.
+  broker framing (float-safe placement that tracks the camera). *(PR #76)*
+- [x] **Inc 2 — embedded stars.** Density-sampled generated Points, deterministic
+  seed. Proves count/color agree with the model. *(PR #78, 5017 stars @ home)*
+- [x] **Inc 3 — cloud volume v1.** Generalize the disc raymarch to the sector box;
+  density = shared-field × worldFBM; emission only. Renders band-not-fog (verified). NOTE:
+  the sampleGalaxy GLSL needs the model-param uniforms (`galaxyLabVolumeUniforms()`) or
+  emission collapses. PERF: the immersive (camera-INSIDE-box, full-screen) case is the
+  guardrail blocker — it needs the half-res pass (Inc 4). Inc 3 ships with motion-adaptive
+  steps (16→8) + an **exterior-only gate** (camDist ≥ 150k WU, i.e. camera outside the
+  250 pc box → partial-screen) so the cloud is viable now; immersive flythrough is deferred
+  to Inc 4's half-res. Flag-gated, so default users are unaffected.
+- [ ] **Inc 4 — cloud lighting + half-res.** Light-march self-shadow + HG phase +
+  blue-noise, AND the **half-res render pass** (render the cloud to a ½-size RT as
+  STRAIGHT-alpha, bicubic upscale, then composite premultiplied) — the load-bearing
+  perf lever that unlocks immersive in-box flythrough at 60 fps. Then lower MIN_CAMDIST
+  back so the cloud is enterable. Proves the fly-through cloud *look* + the FPS guardrail.
 - [ ] **Inc 5 — composition.** AABB punch-out + crossfade over the far disc + the
   luminance-parity test. Proves seam-free (acceptance #1).
 - [ ] **Inc 6 — fly-through + nav.** Node-to-node flight inside the sector + a fast
