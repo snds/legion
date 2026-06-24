@@ -6,11 +6,11 @@
 import { describe, it, expect } from 'vitest';
 import { Vector3 } from 'three';
 import { KPC_TO_WU, WU_PER_PC, GALAXY_MODEL_SCALE } from '../../core/metrics';
-import { galPos, HOME_SYSTEM } from '../../data/curated-systems';
+import { CURATED_SYSTEMS, galPos, HOME_SYSTEM } from '../../data/curated-systems';
 import { createHomeSector, createSector, HOME_GAL_PC, DEFAULT_SECTOR_EDGE_PC } from './sector';
 import {
   buildSectorCloud, sectorCenterNativeWU, sectorLocalWUToNative, updateSectorCloudFrame,
-  SECTOR_CLOUD_MIN_CAMDIST, SECTOR_CLOUD_MAX_CAMDIST,
+  dominantLight, SECTOR_CLOUD_MIN_CAMDIST, SECTOR_CLOUD_MAX_CAMDIST,
 } from './sector-cloud';
 
 const PC_TO_NATIVE = KPC_TO_WU / 1000;
@@ -54,9 +54,10 @@ describe('Sector cloud — native sampling frame', () => {
 });
 
 describe('Sector cloud — mesh build', () => {
-  it('box half-edge is edgePc·WU_PER_PC/2 and composites over disc + stars', () => {
+  it('box half-edge is the enlarged (×1.3) extent and composites over disc + stars', () => {
     const cloud = buildSectorCloud(createHomeSector());
-    expect(cloud.halfEdgeWU).toBe((DEFAULT_SECTOR_EDGE_PC * WU_PER_PC) / 2); // 125,000
+    // The cloud box is enlarged (SECTOR_CLOUD_BOX_FACTOR=1.3) so it feathers past the bounds.
+    expect(cloud.halfEdgeWU).toBeCloseTo((DEFAULT_SECTOR_EDGE_PC * WU_PER_PC / 2) * 1.3, 3); // 162,500
     expect(cloud.mesh.renderOrder).toBe(3);
     expect(cloud.mesh.frustumCulled).toBe(false);
     expect(cloud.material.depthWrite).toBe(false);
@@ -95,5 +96,25 @@ describe('Sector cloud — viewing-band gate (protects the system + galaxy tiers
   it('hides at the galaxy tier (far disc owns the view)', () => {
     updateSectorCloudFrame(home, cloud, SECTOR_CLOUD_MAX_CAMDIST + 1);
     expect(cloud.mesh.visible).toBe(false);
+  });
+});
+
+describe('Sector cloud — dominant light (brightest star)', () => {
+  it('home sector picks Sirius (A-class, most luminous) at its native position', () => {
+    const light = dominantLight(createHomeSector());
+    const sirius = CURATED_SYSTEMS.find((s) => s.name === 'Sirius')!;
+    const g = galPos(sirius);
+    expect(light.nativePos.x).toBeCloseTo(g.x * PC_TO_NATIVE, 3);
+    expect(light.nativePos.y).toBeCloseTo(g.y * PC_TO_NATIVE, 3);
+    expect(light.nativePos.z).toBeCloseTo(g.z * PC_TO_NATIVE, 3);
+    // A-class colour (0xcad7ff) is pale blue → blue channel the strongest.
+    expect(light.color[2]).toBeGreaterThan(light.color[0]);
+  });
+
+  it('falls back to the sector centre when there are no curated systems', () => {
+    const void3 = createSector(new Vector3(HOME_GAL_PC.x, HOME_GAL_PC.y + 12_000, HOME_GAL_PC.z));
+    const light = dominantLight(void3);
+    const centre = sectorCenterNativeWU(void3);
+    expect(light.nativePos.distanceTo(centre)).toBeLessThan(1e-6);
   });
 });

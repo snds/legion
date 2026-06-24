@@ -48,8 +48,12 @@ const REF_EMISSION = (() => {
 })();
 
 // Calibration (visual, not physical — real local density ≈ 0.1 star/pc³ would be
-// millions of points). REF_STARS is the count for a home-density 250 pc sector.
-const REF_STARS = 6000;
+// millions of points). REF_STARS is the generated-star budget for a home-density 250 pc
+// sector — kept SPARSE: the cloud is the unresolved-star aggregate, these are the ~few-%
+// we resolve as Points (alongside the canonical curated/survey systems). STAR_BREACH lets
+// them spill past the sector bounds so there's no hard cube edge (matches the cloud feather).
+const REF_STARS = 1800;
+const STAR_BREACH = 1.15;
 const REF_EDGE_PC = 250;
 const MIN_STARS = 400;
 const MAX_STARS = 14000;
@@ -81,16 +85,16 @@ export function sectorStarSeedKey(sector: Sector): string {
 export function generateSectorStars(sector: Sector): SectorStarData {
   const rng = mulberry32(seedFrom(sectorStarSeedKey(sector)));
   const { centerPc, edgePc } = sector;
-  const half = edgePc * 0.5;
+  const genEdge = edgePc * STAR_BREACH; // generation volume — slightly past the bounds
 
   // 1. Emission integral over the cube (Monte Carlo): mean + peak.
   let sum = 0;
   let emissionMax = 0;
   for (let i = 0; i < N_PROBE; i++) {
     const e = emissionAtGalPc(
-      centerPc.x + (rng() - 0.5) * edgePc,
-      centerPc.y + (rng() - 0.5) * edgePc,
-      centerPc.z + (rng() - 0.5) * edgePc,
+      centerPc.x + (rng() - 0.5) * genEdge,
+      centerPc.y + (rng() - 0.5) * genEdge,
+      centerPc.z + (rng() - 0.5) * genEdge,
     );
     sum += e;
     if (e > emissionMax) emissionMax = e;
@@ -117,9 +121,9 @@ export function generateSectorStars(sector: Sector): SectorStarData {
   let guard = 0;
   const guardMax = count * 80 + 1000;
   while (placed < count && guard++ < guardMax) {
-    const ox = (rng() - 0.5) * edgePc;
-    const oy = (rng() - 0.5) * edgePc;
-    const oz = (rng() - 0.5) * edgePc;
+    const ox = (rng() - 0.5) * genEdge;
+    const oy = (rng() - 0.5) * genEdge;
+    const oz = (rng() - 0.5) * genEdge;
     if (!useUniform) {
       const e = emissionAtGalPc(centerPc.x + ox, centerPc.y + oy, centerPc.z + oz);
       if (rng() > e * invMax) continue; // accept ∝ emission/max
