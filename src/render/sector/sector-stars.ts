@@ -7,7 +7,8 @@
 // stars"):
 //   • count   = ∫ emission dV over the cube, normalised to a home reference, clamped.
 //   • position = rejection-sample the cube, accept ∝ local emission.
-//   • colour  = IMF-weighted sampleStellarPopulation (shared with the disc).
+//   • colour  = sampleRealisticStar — the true type census (mostly red/orange dwarfs,
+//               accurate hue, luminosity-driven size), since these are resolved up close.
 //   • ALL deterministic — mulberry32 seeded from the sector identity, never Math.random.
 //
 // FRAME: generation works in galactocentric PARSECS (the sector's authoritative
@@ -24,7 +25,7 @@ import {
 import { KPC_TO_WU, WU_PER_PC } from '../../core/metrics';
 import { sampleGalaxy } from '../galaxy-density';
 import { galacticStarsVertexShader, galacticStarsFragmentShader } from '../shaders/galactic-stars';
-import { sampleStellarPopulation } from '../stellar-population';
+import { sampleRealisticStar } from '../stellar-population';
 import { mulberry32, seedFrom } from '../../data/system-gen';
 import type { Sector } from './sector';
 
@@ -52,11 +53,11 @@ const REF_EMISSION = (() => {
 // sector — kept SPARSE: the cloud is the unresolved-star aggregate, these are the ~few-%
 // we resolve as Points (alongside the canonical curated/survey systems). STAR_BREACH lets
 // them spill past the sector bounds so there's no hard cube edge (matches the cloud feather).
-const REF_STARS = 1800;
+const REF_STARS = 600;
 const STAR_BREACH = 1.15;
 const REF_EDGE_PC = 250;
-const MIN_STARS = 400;
-const MAX_STARS = 14000;
+const MIN_STARS = 120;
+const MAX_STARS = 6000;
 const N_PROBE = 4096; // Monte-Carlo samples for the emission integral / max
 const ACCEPT_HEADROOM = 1.5; // emissionMax safety margin so rare peaks don't over-accept
 
@@ -132,7 +133,7 @@ export function generateSectorStars(sector: Sector): SectorStarData {
     positions[i3] = ox * WU_PER_PC;       // sector-local WU
     positions[i3 + 1] = oy * WU_PER_PC;
     positions[i3 + 2] = oz * WU_PER_PC;
-    const [cr, cg, cb, sz] = sampleStellarPopulation(rng);
+    const [cr, cg, cb, sz] = sampleRealisticStar(rng);
     colors[i3] = cr; colors[i3 + 1] = cg; colors[i3 + 2] = cb;
     sizes[placed] = sz;
     placed++;
