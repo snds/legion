@@ -75,7 +75,7 @@ import {
 import { createGalaxy, getGalaxyOffset, getGalaxyCrossfade, updateGalaxyAnimations, updateGalaxyLOD, updateGalaxyMarkerScale, updateGalaxyFrame, updateStarStreaks, createSectorOrb } from './render/galaxy';
 import { createSectorPrototype, updateSectorPrototype } from './render/sector/sector-prototype';
 import { createSectorManager, updateSectorManager, type SectorManager } from './render/sector/sector-manager';
-import { createRegionManager, updateRegionManager, type RegionManager } from './render/sector/region-manager';
+import { createRegionManager, regionTelemetry, updateRegionManager, type RegionManager } from './render/sector/region-manager';
 import { absWUToGalPc } from './render/sector/sector';
 import { runSectorTour, type SectorTourHandle } from './render/sector/sector-tour';
 import { regionalScenePos, type CuratedSystem } from './data/curated-systems';
@@ -792,7 +792,8 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol'): WorldExtras {
   const regionMgr = regionsOn ? createRegionManager() : null;
   if (regionMgr) {
     (globalThis as Record<string, unknown>).__regionMgr = regionMgr;
-    console.info('[region-lod] region layer on — __regionMgr.residents (regionKey→Region), .cameraRegionKey');
+    (globalThis as Record<string, unknown>).__regionTelemetry = () => regionTelemetry(regionMgr);
+    console.info('[region-lod] region layer on — __regionMgr.residents, __regionTelemetry() for arm/density/budgets');
   }
 
   // ── Sector orb (Homeworld-style sensor bubble, visible at sector tier) ──

@@ -30,20 +30,22 @@ import { mulberry32, seedFrom } from '../../data/system-gen';
 import type { Sector } from './sector';
 
 /** parsec → galaxy-local native WU (the frame sampleGalaxy expects). 0.333. */
-const PC_TO_NATIVE = KPC_TO_WU / 1000;
+export const PC_TO_NATIVE = KPC_TO_WU / 1000;
 
 /** Total emission radiance density (scalar) at a galactocentric-pc point. The
  *  unweighted RGB sum is the faithful scalar of what the disc volume integrates
  *  (the raymarch accumulates T·j·dt per channel) — so star count and cloud glow
- *  read the SAME field, the "agree by construction" guarantee (spec §Embedded stars). */
-function emissionAtGalPc(x: number, y: number, z: number): number {
+ *  read the SAME field, the "agree by construction" guarantee (spec §Embedded stars).
+ *  Exported so the region layer can classify a region's density from the same scalar. */
+export function emissionAtGalPc(x: number, y: number, z: number): number {
   const s = sampleGalaxy(x * PC_TO_NATIVE, y * PC_TO_NATIVE, z * PC_TO_NATIVE);
   return s.j[0] + s.j[1] + s.j[2];
 }
 
 /** Emission at the solar-circle midplane — the count-normalisation reference, so a
- *  home-equivalent 250 pc sector targets REF_STARS and richer sectors scale up. */
-const REF_EMISSION = (() => {
+ *  home-equivalent 250 pc sector targets REF_STARS and richer sectors scale up.
+ *  Exported as the shared galactic-density reference (the region density class is emission/REF). */
+export const REF_EMISSION = (() => {
   const s = sampleGalaxy(8.3 * KPC_TO_WU, 0, 0); // SOL_GAL_POS, native WU
   return s.j[0] + s.j[1] + s.j[2];
 })();
