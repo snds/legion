@@ -93,7 +93,7 @@ const [HII_R, HII_G, HII_B] = COL_HII;
 // DENSITY DIM — additive star sprites in a dense sector pile up and clamp to white, hiding the
 // arm-phase colour. Dense sectors dim their additive output so N overlapping points sum to a natural
 // coloured glow. ~1/√(emission ratio), clamped gentle; the solar circle and below never dim.
-function sectorDensityDim(emissionMean: number): number {
+export function sectorDensityDim(emissionMean: number): number {
   const ratio = emissionMean / REF_EMISSION;
   return ratio <= 1 ? 1 : Math.max(0.4, 1 / Math.sqrt(ratio));
 }
@@ -137,8 +137,10 @@ export function sectorStarSeedKey(sector: Sector): string {
   return `sector-stars:${c.x.toFixed(3)},${c.y.toFixed(3)},${c.z.toFixed(3)}:${sector.edgePc}`;
 }
 
-/** Generate the sector's embedded stars (pure data; deterministic from the seed). */
-export function generateSectorStars(sector: Sector): SectorStarData {
+/** Generate the sector's embedded stars (pure data; deterministic from the seed). `starCountCap`
+ *  (the build-out overview path) clamps the placed count to a deterministic PREFIX — fewer stars,
+ *  same seed stream, same arm colour — so a galaxy-wide fill stays in a viable point budget. */
+export function generateSectorStars(sector: Sector, starCountCap?: number): SectorStarData {
   const rng = mulberry32(seedFrom(sectorStarSeedKey(sector)));
   const { centerPc, edgePc } = sector;
   const genEdge = edgePc * STAR_BREACH; // generation volume — slightly past the bounds
@@ -161,7 +163,8 @@ export function generateSectorStars(sector: Sector): SectorStarData {
   // 2. Count ∝ ∫ emission dV, normalised to the home reference, clamped.
   const edgeFactor = (edgePc / REF_EDGE_PC) ** 3;
   const rawCount = REF_STARS * (emissionMean / REF_EMISSION) * edgeFactor;
-  const count = Math.max(MIN_STARS, Math.min(MAX_STARS, Math.round(rawCount)));
+  let count = Math.max(MIN_STARS, Math.min(MAX_STARS, Math.round(rawCount)));
+  if (starCountCap !== undefined) count = Math.min(count, starCountCap); // build-out overview budget
 
   // 3. Rejection-sample positions (accept ∝ emission) + IMF colour/size.
   const positions = new Float32Array(count * 3);
