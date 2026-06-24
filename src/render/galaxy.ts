@@ -998,11 +998,14 @@ export function createGalaxy(): Group {
     );
     const infR = ac.influenceRadius * lyToWu;
 
+    // Outlined (wireframe) sphere — the territory boundary, not a filled volume.
+    // The fill stacked heavy where civs overlap; the wireframe reads as a light
+    // boundary. Still the raycast hit target (raycasting uses the triangles).
     const sphere = new Mesh(
-      new SphereGeometry(infR, 24, 24),
+      new SphereGeometry(infR, 16, 10),
       new MeshBasicMaterial({
-        color: ac.color, transparent: true, opacity: 0.05,
-        side: DoubleSide, depthWrite: false,
+        color: ac.color, transparent: true, opacity: 0.16,
+        wireframe: true, depthWrite: false,
       }),
     );
     sphere.position.copy(pos);
