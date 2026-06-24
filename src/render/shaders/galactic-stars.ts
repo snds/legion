@@ -73,6 +73,9 @@ export const galacticStarsVertexShader = /* glsl */ `
 export const galacticStarsFragmentShader = /* glsl */ `
   varying vec3 vColor;
   varying vec3 vStreak;
+  // Per-field additive dim (1.0 = none). Dense sectors set this < 1 so N overlapping points sum to
+  // a natural coloured glow instead of clamping to white — which is what reveals the arm-phase colour.
+  uniform float uDensityDim;
 
   void main() {
     // gl_PointCoord is the screen-aligned UV across the (square) sprite.
@@ -96,7 +99,7 @@ export const galacticStarsFragmentShader = /* glsl */ `
     // rather than as larger / more present.
     float core = pow(1.0 - d, 1.6);
     float halo = 0.06 * (1.0 - d);
-    float intensity = (core + halo) * (1.0 - stretch * 0.5);
+    float intensity = (core + halo) * (1.0 - stretch * 0.5) * uDensityDim;
 
     gl_FragColor = vec4(vColor, intensity);
   }

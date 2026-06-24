@@ -303,6 +303,7 @@ function makeStarUniforms(initialSize = 1.0) {
     uCamVelocity:    { value: STAR_CAM_VELOCITY },
     uStreakStrength: { value: 0.0 },
     uMaxStretch:     { value: 0.4 },
+    uDensityDim:     { value: 1.0 }, // disc stars never dim; sector stars set this per-density
   };
 }
 
