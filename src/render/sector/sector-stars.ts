@@ -179,6 +179,7 @@ export function buildSectorStarField(sector: Sector): SectorStarField {
   });
   const points = new Points(geo, material);
   points.name = 'sector-stars';
+  points.renderOrder = 0; // before the cloud (3): the cloud's premultiplied alpha then occludes dust-shadowed Points
   // Disable culling: the group's world AABB moves every frame (updateSectorFrame
   // re-roots it to the floating-origin residual), so a cached frustum AABB would be
   // stale. Relies on the group being re-rooted before each render (it is, in main.ts).

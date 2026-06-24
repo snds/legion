@@ -12,8 +12,10 @@ import { WU_PER_PC } from '../../core/metrics';
 import { galPos } from '../../data/curated-systems';
 import { createHomeSector, galPcToSectorLocalWU, updateSectorFrame, type Sector } from './sector';
 import { buildSectorStarField } from './sector-stars';
+import { buildSectorCloud, updateSectorCloudFrame, type SectorCloud } from './sector-cloud';
 
 let _proto: Sector | null = null;
+let _cloud: SectorCloud | null = null;
 
 /** ?proto-sector flag (off by default → zero visual change). */
 export function sectorPrototypeEnabled(): boolean {
@@ -33,6 +35,11 @@ export function createSectorPrototype(): Sector | null {
     new LineBasicMaterial({ color: 0x44ccff, transparent: true, opacity: 0.55, depthWrite: false }),
   );
   sector.group.add(cube);
+
+  // Inc 3: the cloud volume — raymarched emission over the same density field.
+  const cloud = buildSectorCloud(sector);
+  sector.group.add(cloud.mesh);
+  _cloud = cloud;
 
   // Inc 2: embedded stars — density-sampled generated Points (agree with the model).
   const starField = buildSectorStarField(sector);
@@ -58,7 +65,10 @@ export function createSectorPrototype(): Sector | null {
   return sector;
 }
 
-/** Re-root the prototype sector each frame (no-op if disabled). After Broker.beginFrame. */
-export function updateSectorPrototype(): void {
-  if (_proto) updateSectorFrame(_proto);
+/** Re-root the prototype sector each frame (no-op if disabled). After Broker.beginFrame.
+ *  camDist gates the cloud's viewing band (see sector-cloud.ts). */
+export function updateSectorPrototype(camDist = 0): void {
+  if (!_proto) return;
+  updateSectorFrame(_proto); // sets group.position to the residual (must run first)
+  if (_cloud) updateSectorCloudFrame(_proto, _cloud, camDist); // gate + refresh the cloud
 }
