@@ -72,7 +72,8 @@ import {
   createEclipticGrid,
   STATION_DATA, COMET_DATA, type StationConfig,
 } from './render/scene-objects';
-import { createGalaxy, getGalaxyOffset, getGalaxyCrossfade, updateGalaxyAnimations, updateGalaxyLOD, updateGalaxyMarkerScale, updateGalaxyFrame, updateStarStreaks, createSectorOrb } from './render/galaxy';
+import { createGalaxy, getGalaxyOffset, getGalaxyCrossfade, updateGalaxyAnimations, updateGalaxyLOD, updateGalaxyMarkerScale, updateGalaxyFrame, updateStarStreaks, createSectorOrb, setDiscVisual } from './render/galaxy';
+import { createGalaxyBuildout, updateGalaxyBuildout, buildoutStatus, type GalaxyBuildout } from './render/sector/galaxy-buildout';
 import { createSectorPrototype, updateSectorPrototype } from './render/sector/sector-prototype';
 import { createSectorManager, updateSectorManager, type SectorManager } from './render/sector/sector-manager';
 import { createRegionManager, regionTelemetry, updateRegionManager, type RegionManager } from './render/sector/region-manager';
@@ -480,6 +481,7 @@ async function boot(): Promise<void> {
       }
     }
     if (worldExtras.sectorFill) updateSectorFill(worldExtras.sectorFill); // capped corridor fill
+    if (worldExtras.galaxyBuildout) updateGalaxyBuildout(worldExtras.galaxyBuildout); // full-galaxy fill
 
     // 7. Audio
     Audio.updateMix(frameTime);
@@ -588,6 +590,7 @@ interface WorldExtras {
   sectorMgr: SectorManager | null;
   regionMgr: RegionManager | null;
   sectorFill: SectorFill | null;
+  galaxyBuildout: GalaxyBuildout | null;
 }
 
 function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol'): WorldExtras {
@@ -812,6 +815,16 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol'): WorldExtras {
     console.info(`[sector-fill] filling ${sectorFill.queue.length} sectors home→core — __fillStatus() for progress`);
   }
 
+  // FULL-GALAXY build-out (?proto-galaxy) — the whole disc rendered as region-merged sector stars,
+  // with the disc emission visual disabled for performance. Enumerates synchronously at boot (~1s).
+  const galaxyBuildout = params.has('proto-galaxy') ? createGalaxyBuildout(sceneRoot) : null;
+  if (galaxyBuildout) {
+    setDiscVisual(false);
+    (globalThis as Record<string, unknown>).__buildout = galaxyBuildout;
+    (globalThis as Record<string, unknown>).__buildoutStatus = () => buildoutStatus(galaxyBuildout);
+    console.info(`[galaxy-buildout] ${galaxyBuildout.enumeration.cells.length} cells / ${galaxyBuildout.queue.length} regions — disc disabled; __buildoutStatus()`);
+  }
+
   // ── Sector orb (Homeworld-style sensor bubble, visible at sector tier) ──
   // Sits at the home origin in scene space; visibility system shows/hides
   // it per zoom domain.
@@ -823,7 +836,7 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol'): WorldExtras {
   const sectorOrb = createSectorOrb(19.1 * LY_TO_WU);
   sceneRoot.add(sectorOrb);
 
-  return { eclipticGrid, oortCloud, galaxyArms: galaxyGroup, sectorOrb, bobEids, protoSector, sectorMgr, regionMgr, sectorFill };
+  return { eclipticGrid, oortCloud, galaxyArms: galaxyGroup, sectorOrb, bobEids, protoSector, sectorMgr, regionMgr, sectorFill, galaxyBuildout };
 }
 
 // ── Start ────────────────────────────────────────────────────────

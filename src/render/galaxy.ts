@@ -354,7 +354,22 @@ const DISC_STEPS_MOVING = 12;
 let _discPrevCamDist = 0;
 let _discSteps = DISC_STEPS_SETTLED;
 
+let discVisualEnabled = true;
+/** Disable the disc EMISSION visual — the raymarched volume, the 75k disc stars, the stacked disc
+ *  layers + nebula sprites — so the full-galaxy sector build-out can own the view at performance.
+ *  Reversible + non-destructive: the markers/labels/grid/Sgr A* are untouched, and the disc uniforms
+ *  recompute from camDist on the next frame when re-enabled. */
+export function setDiscVisual(on: boolean): void { discVisualEnabled = on; }
+
 export function updateGalaxyLOD(camDist: number): void {
+  if (!discVisualEnabled) {
+    if (GALAXY_LOD.volumeMesh) GALAXY_LOD.volumeMesh.visible = false;
+    if (GALAXY_LOD.volumeMat) GALAXY_LOD.volumeMat.uniforms.uOpacity.value = 0;
+    for (const m of GALAXY_LOD.discMats) m.uniforms.uOpacity.value = 0;
+    if (GALAXY_LOD.starFieldMat) GALAXY_LOD.starFieldMat.uniforms.uSizeScale.value = 0;
+    for (const m of GALAXY_LOD.nebulaMats) m.opacity = 0;
+    return;
+  }
   // Crossfade the live volume in across the heliopause→sector window; hide
   // the mesh entirely below it so the march cost is zero at system tiers.
   const xf = getGalaxyCrossfade(camDist);

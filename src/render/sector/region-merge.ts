@@ -14,11 +14,11 @@ import {
 } from 'three';
 import { WU_PER_PC } from '../../core/metrics';
 import { galacticStarsVertexShader, galacticStarsFragmentShader } from '../shaders/galactic-stars';
-import { createSector, DEFAULT_SECTOR_EDGE_PC, HOME_GAL_PC } from './sector';
+import { DEFAULT_SECTOR_EDGE_PC, HOME_GAL_PC } from './sector';
 import { regionCenterPc, type RegionCell } from './region';
 import type { PopulatedCell } from './galaxy-enumerate';
 import {
-  armDebugUniform, generateSectorStars, sectorDensityDim, SECTOR_STAR_SIZE_SCALE,
+  armDebugUniform, generateSectorStarsFast, sectorDensityDim, SECTOR_STAR_SIZE_SCALE,
 } from './sector-stars';
 
 export interface RegionStarField {
@@ -39,12 +39,12 @@ export function buildRegionStarField(
   regionCenterPc(regionCell, _rcPc);
   const regionCenterAbsWU = new Vector3().subVectors(_rcPc, HOME_GAL_PC).multiplyScalar(WU_PER_PC);
 
-  // Pass 1: generate each cell's (capped) stars + sum the total.
-  const parts: { data: ReturnType<typeof generateSectorStars>; cx: number; cy: number; cz: number }[] = [];
+  // Pass 1: generate each cell's stars (FAST path — from the known emission, no integral) + sum.
+  const parts: { data: ReturnType<typeof generateSectorStarsFast>; cx: number; cy: number; cz: number }[] = [];
   let total = 0;
   let emissionSum = 0;
   for (const pc of cells) {
-    const data = generateSectorStars(createSector(pc.centerPc, EDGE), starCap);
+    const data = generateSectorStarsFast(pc.centerPc, pc.emission, starCap, EDGE);
     parts.push({ data, cx: pc.centerPc.x, cy: pc.centerPc.y, cz: pc.centerPc.z });
     total += data.count;
     emissionSum += pc.emission;
