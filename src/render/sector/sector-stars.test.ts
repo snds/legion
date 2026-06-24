@@ -58,8 +58,8 @@ describe('Sector stars — frame + content validity', () => {
     expect(data.sizes.length).toBe(data.count);
   });
 
-  it('all stars sit within the breached AABB (±half edge · 1.15 in WU)', () => {
-    const bound = HALF_WU * 1.15; // STAR_BREACH — stars spill slightly past the bounds
+  it('all stars sit within the exact cube (±half edge in WU — no breach, so sectors tile seamlessly)', () => {
+    const bound = HALF_WU; // STAR_BREACH = 1.0 (B4): each star belongs to exactly one cell
     for (let i = 0; i < data.positions.length; i++) {
       expect(Math.abs(data.positions[i]!)).toBeLessThanOrEqual(bound);
     }
