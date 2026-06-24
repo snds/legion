@@ -108,6 +108,10 @@ export interface SectorCloud {
   readonly mesh: Mesh;
   readonly material: ShaderMaterial;
   readonly halfEdgeWU: number;
+  /** Per-cloud motion-adaptive state — PER INSTANCE so N streamed clouds don't clobber
+   *  each other's step easing (Phase B). */
+  prevCamDist: number;
+  steps: number;
 }
 
 /** Native-WU centre of a sector (absolute galactocentric, the stable sampling anchor). */
@@ -173,12 +177,10 @@ export function buildSectorCloud(sector: Sector): SectorCloud {
   // three.js caches the frustum AABB from the build-time local AABB → it goes stale. The
   // shader's own ray-AABB clip is the real bound. (Same reason as the embedded stars.)
   mesh.frustumCulled = false;
-  return { mesh, material, halfEdgeWU };
+  return { mesh, material, halfEdgeWU, prevCamDist: 0, steps: SECTOR_CLOUD_STEPS_SETTLED };
 }
 
 const _res = new Vector3();
-let _cloudPrevCamDist = 0;
-let _cloudSteps = SECTOR_CLOUD_STEPS_SETTLED;
 /** Gate the cloud to its viewing band + refresh its per-frame uniforms (residual +
  *  world AABB) + motion-adaptive steps. Call AFTER updateSectorFrame each frame. */
 export function updateSectorCloudFrame(sector: Sector, cloud: SectorCloud, camDist: number): void {
@@ -193,12 +195,19 @@ export function updateSectorCloudFrame(sector: Sector, cloud: SectorCloud, camDi
   const h = cloud.halfEdgeWU;
   (cloud.material.uniforms.uBoxMin.value as Vector3).set(_res.x - h, _res.y - h, _res.z - h);
   (cloud.material.uniforms.uBoxMax.value as Vector3).set(_res.x + h, _res.y + h, _res.z + h);
-  if (!cloud.mesh.visible) { _cloudPrevCamDist = camDist; return; }
+  if (!cloud.mesh.visible) { cloud.prevCamDist = camDist; return; }
   // Motion-adaptive steps (mirrors the disc): full when settled, fewer while moving.
-  const rel = _cloudPrevCamDist > 0 ? Math.abs(camDist - _cloudPrevCamDist) / camDist : 0;
-  _cloudPrevCamDist = camDist;
+  // State is PER-CLOUD (cloud.prevCamDist/steps) so streamed clouds don't clobber each other.
+  const rel = cloud.prevCamDist > 0 ? Math.abs(camDist - cloud.prevCamDist) / camDist : 0;
+  cloud.prevCamDist = camDist;
   const motion = Math.min(1, rel / 0.015);
   const target = SECTOR_CLOUD_STEPS_SETTLED - motion * (SECTOR_CLOUD_STEPS_SETTLED - SECTOR_CLOUD_STEPS_MOVING);
-  _cloudSteps += (target - _cloudSteps) * 0.3;
-  cloud.material.uniforms.uSteps.value = Math.round(_cloudSteps);
+  cloud.steps += (target - cloud.steps) * 0.3;
+  cloud.material.uniforms.uSteps.value = Math.round(cloud.steps);
+}
+
+/** Dispose a cloud's GPU resources (geometry + material). Call when its sector unloads. */
+export function disposeSectorCloud(cloud: SectorCloud): void {
+  cloud.mesh.geometry.dispose();
+  cloud.material.dispose();
 }

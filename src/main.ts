@@ -74,6 +74,8 @@ import {
 } from './render/scene-objects';
 import { createGalaxy, getGalaxyOffset, getGalaxyCrossfade, updateGalaxyAnimations, updateGalaxyLOD, updateGalaxyMarkerScale, updateGalaxyFrame, updateStarStreaks, createSectorOrb } from './render/galaxy';
 import { createSectorPrototype, updateSectorPrototype } from './render/sector/sector-prototype';
+import { createSectorManager, updateSectorManager, type SectorManager } from './render/sector/sector-manager';
+import { absWUToGalPc } from './render/sector/sector';
 import { runSectorTour, type SectorTourHandle } from './render/sector/sector-tour';
 import { regionalScenePos, type CuratedSystem } from './data/curated-systems';
 import { Broker } from './render/scale-manager';
@@ -371,6 +373,8 @@ async function boot(): Promise<void> {
   // display refresh, while rendering and cosmetic shader clocks run per frame.
   const _localRoot = new Vector3();    // scratch: local-tier root (frame broker, 2c)
   const _regionalRoot = new Vector3(); // scratch: regional-tier root
+  const _focusWU = new Vector3();      // scratch: camera focus, absolute scene-WU (Phase B streaming)
+  const _focusGalPc = new Vector3();   // scratch: camera focus → galactocentric pc (Phase B streaming)
   const FIXED_DT = 1 / 60;   // simulation quantum, seconds of real time
   const MAX_FRAME = 0.25;    // clamp frame time to avoid the spiral of death
   const MAX_STEPS = 600;     // hard cap on catch-up steps per frame
@@ -460,6 +464,12 @@ async function boot(): Promise<void> {
     layers.regional.position.copy(_regionalRoot);
     worldExtras.sectorOrb.position.copy(_regionalRoot);
     updateSectorPrototype(Game.data.camDist); // sector-cloud prototype: re-root + gate cloud (no-op if off)
+    if (worldExtras.sectorMgr) {
+      // Stream sectors around the camera's FOCUS cell (camFocusTarget is absolute scene-WU).
+      const f = Game.data.camFocusTarget;
+      _focusWU.set(f?.x ?? 0, f?.y ?? 0, f?.z ?? 0);
+      updateSectorManager(worldExtras.sectorMgr, absWUToGalPc(_focusWU, _focusGalPc), Game.data.camDist);
+    }
 
     // 7. Audio
     Audio.updateMix(frameTime);
@@ -565,6 +575,7 @@ interface WorldExtras {
   sectorOrb: import('three').Group;
   bobEids: number[];
   protoSector: import('./render/sector/sector').Sector | null;
+  sectorMgr: SectorManager | null;
 }
 
 function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol'): WorldExtras {
@@ -759,6 +770,16 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol'): WorldExtras {
   const protoSector = createSectorPrototype();
   if (protoSector) sceneRoot.add(protoSector.group);
 
+  // Phase B sector STREAMING (Inc B1) — flag-gated (?proto-stream). Streams a sparse hash
+  // of sectors around the camera's galactic cell; one live cloud + N resident star fields.
+  const sectorMgr = new URLSearchParams(location.search).has('proto-stream')
+    ? createSectorManager(sceneRoot)
+    : null;
+  if (sectorMgr) {
+    (globalThis as Record<string, unknown>).__sectorMgr = sectorMgr;
+    console.info('[sector-stream] streaming on — __sectorMgr.residents (cellKey→sector), .starCount');
+  }
+
   // ── Sector orb (Homeworld-style sensor bubble, visible at sector tier) ──
   // Sits at the home origin in scene space; visibility system shows/hides
   // it per zoom domain.
@@ -770,7 +791,7 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol'): WorldExtras {
   const sectorOrb = createSectorOrb(19.1 * LY_TO_WU);
   sceneRoot.add(sectorOrb);
 
-  return { eclipticGrid, oortCloud, galaxyArms: galaxyGroup, sectorOrb, bobEids, protoSector };
+  return { eclipticGrid, oortCloud, galaxyArms: galaxyGroup, sectorOrb, bobEids, protoSector, sectorMgr };
 }
 
 // ── Start ────────────────────────────────────────────────────────
