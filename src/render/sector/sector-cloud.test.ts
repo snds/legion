@@ -10,7 +10,7 @@ import { CURATED_SYSTEMS, galPos, HOME_SYSTEM } from '../../data/curated-systems
 import { createHomeSector, createSector, HOME_GAL_PC, DEFAULT_SECTOR_EDGE_PC } from './sector';
 import {
   buildSectorCloud, sectorCenterNativeWU, sectorLocalWUToNative, updateSectorCloudFrame,
-  dominantLight, SECTOR_CLOUD_MIN_CAMDIST, SECTOR_CLOUD_MAX_CAMDIST,
+  dominantLight, sectorCloudGateOpacity, SECTOR_CLOUD_MIN_CAMDIST, SECTOR_CLOUD_MAX_CAMDIST,
 } from './sector-cloud';
 
 const PC_TO_NATIVE = KPC_TO_WU / 1000;
@@ -96,6 +96,32 @@ describe('Sector cloud — viewing-band gate (protects the system + galaxy tiers
   it('hides at the galaxy tier (far disc owns the view)', () => {
     updateSectorCloudFrame(home, cloud, SECTOR_CLOUD_MAX_CAMDIST + 1);
     expect(cloud.mesh.visible).toBe(false);
+  });
+
+  it('drives a smooth crossfade opacity (no hard pop)', () => {
+    updateSectorCloudFrame(home, cloud, 60_000); // mid-band
+    expect(cloud.material.uniforms.uOpacity!.value).toBeGreaterThan(0.9);
+    updateSectorCloudFrame(home, cloud, SECTOR_CLOUD_MAX_CAMDIST + 1); // past the disc handoff
+    expect(cloud.material.uniforms.uOpacity!.value).toBe(0);
+  });
+});
+
+describe('Sector cloud — gate crossfade math (Inc 5 composition)', () => {
+  it('0 at the system tier, 1 in-band, 0 past the disc handoff — no discontinuity', () => {
+    expect(sectorCloudGateOpacity(SECTOR_CLOUD_MIN_CAMDIST - 1)).toBe(0);
+    expect(sectorCloudGateOpacity(SECTOR_CLOUD_MIN_CAMDIST)).toBe(0); // just entering
+    expect(sectorCloudGateOpacity(60_000)).toBeGreaterThan(0.9);
+    expect(sectorCloudGateOpacity(400_000)).toBeCloseTo(1, 5); // full mid-band
+    expect(sectorCloudGateOpacity(SECTOR_CLOUD_MAX_CAMDIST)).toBe(0); // disc owns it
+    expect(sectorCloudGateOpacity(SECTOR_CLOUD_MAX_CAMDIST + 1)).toBe(0);
+  });
+
+  it('stays within [0,1] across the whole zoom range', () => {
+    for (let d = 0; d <= 1_500_000; d += 2_500) {
+      const o = sectorCloudGateOpacity(d);
+      expect(o).toBeGreaterThanOrEqual(0);
+      expect(o).toBeLessThanOrEqual(1);
+    }
   });
 });
 

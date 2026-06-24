@@ -84,6 +84,25 @@ const SECTOR_CLOUD_STEPS_MOVING = 8;
 // Phase B (streamed sectors the camera flies between) wants a direct 3D AABB test.
 export const SECTOR_CLOUD_MIN_CAMDIST = 5_000;
 export const SECTOR_CLOUD_MAX_CAMDIST = 700_000;
+// Inc 5 composition: the gate is a smooth CROSSFADE, not a hard visible-toggle, so the
+// disc↔cloud↔system handoffs have no pop. Fade in over NEAR_MARGIN above MIN (pulling
+// back off a system); fade out over FAR_MARGIN below MAX as the analytic disc fades in.
+const SECTOR_CLOUD_NEAR_MARGIN = 10_000;
+const SECTOR_CLOUD_FAR_MARGIN = 120_000;
+
+function smoothstep01(a: number, b: number, x: number): number {
+  const t = Math.max(0, Math.min(1, (x - a) / (b - a)));
+  return t * t * (3 - 2 * t);
+}
+
+/** Cloud gate opacity [0..1] for a camDist — a smooth crossfade across the band edges
+ *  (pure; unit-tested). 0 at the system tier, ramps to 1 across the band, ramps back to
+ *  0 as the far disc takes over. This is the seam-free disc↔cloud↔system handoff. */
+export function sectorCloudGateOpacity(camDist: number): number {
+  const fadeIn = smoothstep01(SECTOR_CLOUD_MIN_CAMDIST, SECTOR_CLOUD_MIN_CAMDIST + SECTOR_CLOUD_NEAR_MARGIN, camDist);
+  const fadeOut = 1 - smoothstep01(SECTOR_CLOUD_MAX_CAMDIST - SECTOR_CLOUD_FAR_MARGIN, SECTOR_CLOUD_MAX_CAMDIST, camDist);
+  return fadeIn * fadeOut;
+}
 
 export interface SectorCloud {
   readonly mesh: Mesh;
@@ -163,8 +182,9 @@ let _cloudSteps = SECTOR_CLOUD_STEPS_SETTLED;
 /** Gate the cloud to its viewing band + refresh its per-frame uniforms (residual +
  *  world AABB) + motion-adaptive steps. Call AFTER updateSectorFrame each frame. */
 export function updateSectorCloudFrame(sector: Sector, cloud: SectorCloud, camDist: number): void {
-  const visible = camDist >= SECTOR_CLOUD_MIN_CAMDIST && camDist <= SECTOR_CLOUD_MAX_CAMDIST;
-  cloud.mesh.visible = visible;
+  const opacity = sectorCloudGateOpacity(camDist);
+  cloud.mesh.visible = opacity > 0.002; // cull when fully faded
+  cloud.material.uniforms.uOpacity.value = opacity; // smooth crossfade (no pop)
   // ALWAYS refresh the frame uniforms from THIS frame's residual (set by
   // updateSectorFrame). Refreshing even while hidden costs three vec3 writes but means
   // the first visible frame after re-entry samples correctly — no stale-residual swim.
@@ -173,7 +193,7 @@ export function updateSectorCloudFrame(sector: Sector, cloud: SectorCloud, camDi
   const h = cloud.halfEdgeWU;
   (cloud.material.uniforms.uBoxMin.value as Vector3).set(_res.x - h, _res.y - h, _res.z - h);
   (cloud.material.uniforms.uBoxMax.value as Vector3).set(_res.x + h, _res.y + h, _res.z + h);
-  if (!visible) { _cloudPrevCamDist = camDist; return; }
+  if (!cloud.mesh.visible) { _cloudPrevCamDist = camDist; return; }
   // Motion-adaptive steps (mirrors the disc): full when settled, fewer while moving.
   const rel = _cloudPrevCamDist > 0 ? Math.abs(camDist - _cloudPrevCamDist) / camDist : 0;
   _cloudPrevCamDist = camDist;
