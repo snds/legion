@@ -54,7 +54,9 @@ const STAR_BRANCHES: ReadonlyArray<(rand: Rand) => [number, number, number, numb
 // up an order of magnitude so young blue stars become VISIBLE, with an M-dwarf FLOOR (≥ ~0.55) so the
 // field stays physical, not gaudy. sampleArmStar lerps between them by crestiness.
 const GAP_CUTS = [0.73, 0.85, 0.93, 0.96, 0.985, 0.997] as const;
-const CREST_CUTS = [0.55, 0.70, 0.80, 0.855, 0.875, 0.95] as const;
+// Balanced crest mix: blue tail (A+B/O) ~15%, hot (F+A+B/O) ~21%, M floor 0.55 — reads clearly as a
+// spiral arm without abandoning the red-dwarf majority. (Push these toward the hot end for bolder.)
+const CREST_CUTS = [0.55, 0.67, 0.77, 0.83, 0.85, 0.92] as const;
 
 function pickStar(rand: Rand, cuts: ArrayLike<number>): [number, number, number, number] {
   const r = rand();

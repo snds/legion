@@ -23,7 +23,7 @@ import {
   AdditiveBlending, BufferGeometry, Float32BufferAttribute, Points, ShaderMaterial, Vector3,
 } from 'three';
 import { KPC_TO_WU, WU_PER_PC } from '../../core/metrics';
-import { armPattern, sampleGalaxy } from '../galaxy-density';
+import { armPattern, COL_HII, sampleGalaxy } from '../galaxy-density';
 import { galacticStarsVertexShader, galacticStarsFragmentShader } from '../shaders/galactic-stars';
 import { sampleArmStar, sampleRealisticStar } from '../stellar-population';
 import { mulberry32, seedFrom } from '../../data/system-gen';
@@ -81,6 +81,21 @@ export function armPhaseAt(xPc: number, zPc: number): { armRidge: number; cresti
   const rNative = Math.hypot(xPc, zPc) * PC_TO_NATIVE;
   const armRidge = armPattern(rNative, Math.atan2(zPc, xPc));
   return { armRidge, crestiness: smoothstep01((armRidge - CREST_LO) / (CREST_HI - CREST_LO)) };
+}
+
+// HII REGIONS — pink/magenta emission knots (ionised gas around young OB clusters) sit on the arm
+// crests just downstream of the dust lane. The strongest "this is a spiral" cue for the least code:
+// on a strong crest, a small deterministic fraction of accepted stars become a COL_HII bead instead.
+const HII_BEAD_CREST = 0.7;   // only the brightest crests host visible HII regions
+const HII_BEAD_PROB = 0.006;  // ~1/160 of crest stars → a few beads per arm sector
+const [HII_R, HII_G, HII_B] = COL_HII;
+
+// DENSITY DIM — additive star sprites in a dense sector pile up and clamp to white, hiding the
+// arm-phase colour. Dense sectors dim their additive output so N overlapping points sum to a natural
+// coloured glow. ~1/√(emission ratio), clamped gentle; the solar circle and below never dim.
+function sectorDensityDim(emissionMean: number): number {
+  const ratio = emissionMean / REF_EMISSION;
+  return ratio <= 1 ? 1 : Math.max(0.4, 1 / Math.sqrt(ratio));
 }
 
 // Calibration (visual, not physical — real local density ≈ 0.1 star/pc³ would be
@@ -172,11 +187,17 @@ export function generateSectorStars(sector: Sector): SectorStarData {
     positions[i3 + 1] = oy * WU_PER_PC;
     positions[i3 + 2] = oz * WU_PER_PC;
     // Colour/type biased by the spiral-arm crest at THIS star's galactocentric position (density-wave
-    // physics): blue young population on the arms, warm red dwarfs in the gaps. crestiness comes from
-    // position (not the RNG), so the stream — and determinism — is unchanged.
-    const star = ARM_AWARE_STARS
-      ? sampleArmStar(rng, crestinessAtGalPc(centerPc.x + ox, centerPc.z + oz))
-      : sampleRealisticStar(rng);
+    // physics): blue young population on the arms, warm red dwarfs in the gaps, plus magenta HII beads
+    // on the brightest crests. crestiness comes from position (not the RNG), so determinism holds.
+    let star: readonly [number, number, number, number];
+    if (ARM_AWARE_STARS) {
+      const crest = crestinessAtGalPc(centerPc.x + ox, centerPc.z + oz);
+      star = crest > HII_BEAD_CREST && rng() < HII_BEAD_PROB
+        ? [HII_R, HII_G, HII_B, 1.5 + rng() * 1.0] // HII region — magenta star-forming knot
+        : sampleArmStar(rng, crest);
+    } else {
+      star = sampleRealisticStar(rng);
+    }
     colors[i3] = star[0]; colors[i3 + 1] = star[1]; colors[i3 + 2] = star[2];
     sizes[placed] = star[3];
     placed++;
@@ -220,6 +241,7 @@ export function buildSectorStarField(sector: Sector): SectorStarField {
       uCamVelocity: { value: new Vector3() },
       uStreakStrength: { value: 0.0 },
       uMaxStretch: { value: 0.4 },
+      uDensityDim: { value: sectorDensityDim(data.emissionMean) }, // tame additive overdraw in dense sectors
     },
     transparent: true,
     depthWrite: false,
