@@ -229,14 +229,17 @@ const MIN_BUILDOUT_STARS = 6;
 /** Vertical scale height (pc) for placing build-out stars WITHIN a cell. The disc's emission falls off
  *  as ~exp(−|y|/H) (thin-disc dominated near the plane); placing stars by this profile instead of
  *  uniformly makes the 250 pc layers blend into a smooth disc rather than a banded box-staircase. */
-const BUILDOUT_HZ_PC = 300;
+/** Sub-slices for the per-cell vertical emission CDF (placement ∝ the real profile, see below). */
+const BUILDOUT_VERTICAL_SLICES = 6;
 
 /** Build-out FAST path — generate a cell's stars from its ALREADY-KNOWN emission (the enumeration
- *  gate value), with NO Monte-Carlo integral and NO rejection loop: count = REF_STARS · emission/REF
- *  capped, placed UNIFORMLY in the cell, arm-phase coloured (+ HII beads). This is what makes a
- *  galaxy-wide fill generate in seconds, not the ~17 minutes the integral path would take across ~62k
- *  cells. The near-camera streaming keeps the accurate emission-weighted path; the overview doesn't
- *  need within-cell weighting. Deterministic from the cell centre. */
+ *  gate value), with NO full Monte-Carlo integral: count = REF_STARS · emission/REF capped, x,z placed
+ *  uniformly, arm-phase coloured (+ HII beads). The VERTICAL position is sampled ∝ the cell's REAL
+ *  emission profile (a tiny 6-sample CDF down the cell) — this is the key to a band-free disc: the
+ *  model's vertical falloff varies (thin disc near the plane, thick + flared off-plane), so a single
+ *  analytic scale height left residual horizontal banding; matching the real profile makes the 250 pc
+ *  layers' densities meet continuously. Still ~seconds galaxy-wide (6 samples/cell, not 4096). The
+ *  near-camera streaming keeps the full emission-weighted path. Deterministic from the cell centre. */
 export function generateSectorStarsFast(
   centerPc: Vector3, emission: number, cap: number, edgePc = DEFAULT_SECTOR_EDGE_PC,
 ): SectorStarData {
@@ -247,18 +250,25 @@ export function generateSectorStarsFast(
   const colors = new Float32Array(count * 3);
   const sizes = new Float32Array(count);
   const crests = new Float32Array(count);
-  // Vertical placement weights (per cell): the cell spans [yLo,yHi]; sample |y| ∝ exp(-|y|/HZ) across
-  // it (inverse-CDF) so stars concentrate toward the midplane side and adjacent layers' densities meet
-  // continuously at the boundary — killing the box-staircase banding. (No cell straddles y=0, so |y| is
-  // monotone within the cell.) x,z stay uniform — the finer radial/azimuthal grid doesn't band.
-  const yLo = centerPc.y - edgePc * 0.5;
-  const yHi = centerPc.y + edgePc * 0.5;
-  const wLo = Math.exp(-Math.min(Math.abs(yLo), Math.abs(yHi)) / BUILDOUT_HZ_PC);
-  const wHi = Math.exp(-Math.max(Math.abs(yLo), Math.abs(yHi)) / BUILDOUT_HZ_PC);
-  const ySign = centerPc.y >= 0 ? 1 : -1;
+  // Vertical emission CDF for this cell: sample the REAL emission at a few heights down the cell and
+  // accumulate, so stars place ∝ the actual vertical profile and adjacent layers meet the model
+  // continuously (no horizontal banding edge-on). x,z stay uniform — the radial/azimuthal grid is far
+  // finer and its per-region banding was removed separately.
+  const NV = BUILDOUT_VERTICAL_SLICES;
+  const yStep = edgePc / NV;
+  const y0 = -edgePc * 0.5; // bottom of the cell, relative to centre
+  const vcdf = new Float64Array(NV + 1);
+  for (let s = 0; s < NV; s++) {
+    vcdf[s + 1] = vcdf[s]! + Math.max(0, emissionAtGalPc(centerPc.x, centerPc.y + y0 + (s + 0.5) * yStep, centerPc.z));
+  }
+  const vTot = vcdf[NV]! || 1;
   for (let i = 0; i < count; i++) {
     const ox = (rng() - 0.5) * edgePc;
-    const oy = ySign * (-BUILDOUT_HZ_PC * Math.log(wLo - rng() * (wLo - wHi))) - centerPc.y;
+    // sample the height from the vertical emission CDF (inverse lookup + linear interp within a slice)
+    const u = rng() * vTot;
+    let vs = 1;
+    while (vs < NV && vcdf[vs]! < u) vs++;
+    const oy = y0 + (vs - 1 + (u - vcdf[vs - 1]!) / Math.max(vcdf[vs]! - vcdf[vs - 1]!, 1e-12)) * yStep;
     const oz = (rng() - 0.5) * edgePc;
     const i3 = i * 3;
     positions[i3] = ox * WU_PER_PC;
