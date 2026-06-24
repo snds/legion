@@ -16,6 +16,7 @@ import {
   cellCenterPc, cellKey, createSector, DEFAULT_SECTOR_EDGE_PC, hystereticCell,
   updateSectorFrame, type Cell, type Sector,
 } from './sector';
+import { regionForGalPc, regionKey } from './region';
 import { buildSectorCloud, disposeSectorCloud, updateSectorCloudFrame, type SectorCloud } from './sector-cloud';
 import { buildSectorStarField, disposeSectorStarField, type SectorStarField } from './sector-stars';
 
@@ -87,10 +88,20 @@ function unloadSector(mgr: SectorManager, rs: ResidentSector): void {
   mgr.group.remove(rs.sector.group);
 }
 
+const _regionProbe = new Vector3(); // scratch: a desired cell's centre, for its region lookup
+
 /** Per-frame: stream the residency around the camera's cell, move the single live cloud to
  *  the camera's cell, and re-root + update every resident. `camGalPc` is the camera focus in
- *  galactocentric pc (absWUToGalPc(camFocusTarget)); `camDist` drives the cloud gate. */
-export function updateSectorManager(mgr: SectorManager, camGalPc: Vector3, camDist: number): void {
+ *  galactocentric pc (absWUToGalPc(camFocusTarget)); `camDist` drives the cloud gate.
+ *
+ *  `residentRegionKeys` (Phase B region/LOD, optional): when a region manager drives streaming,
+ *  the 3×3×1 desired block is restricted to cells whose 1 kpc region is resident — EXCEPT the
+ *  camera cell, which is always kept (it owns the live cloud). Omitted (the standalone path) =
+ *  no restriction. In Inc 2 the resident-region span (3 kpc) dwarfs the sector block (750 pc),
+ *  so nothing is ever filtered → behaviour is byte-identical to the unfiltered path. */
+export function updateSectorManager(
+  mgr: SectorManager, camGalPc: Vector3, camDist: number, residentRegionKeys?: Set<string>,
+): void {
   // Hysteretic so a focus jitter across a boundary doesn't thrash residency (B4).
   const cell = hystereticCell(camGalPc, mgr.cameraCell, EDGE, HYSTERESIS_PC);
   const camKey = cellKey(cell);
@@ -98,7 +109,12 @@ export function updateSectorManager(mgr: SectorManager, camGalPc: Vector3, camDi
   // 1. Residency diff. Unload residents no longer desired (safe to delete during Map
   //    iteration — ES6 iterators skip removed entries). Then load missing cells: the camera
   //    cell FIRST (so its cloud can attach), capped per frame to amortise the generation hitch.
-  const desired = residentCells(cell);
+  let desired = residentCells(cell);
+  if (residentRegionKeys) {
+    desired = desired.filter((c) =>
+      cellKey(c) === camKey ||
+      residentRegionKeys.has(regionKey(regionForGalPc(cellCenterPc(c, EDGE, _regionProbe)))));
+  }
   const desiredKeys = new Set(desired.map(cellKey));
   for (const [key, rs] of mgr.residents) {
     if (!desiredKeys.has(key)) { unloadSector(mgr, rs); mgr.residents.delete(key); }
