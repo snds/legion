@@ -18,8 +18,9 @@ import { buildRegionStarField, disposeRegionStarField, type RegionStarField } fr
 
 /** Overview star cap per cell — low so the galaxy-wide point budget stays viable (live-tunable). */
 export const DEFAULT_BUILDOUT_STAR_CAP = 32;
-const LOD_FULL_WU = 80_000;  // regions within this distance render full size; farther shrink to ...
-const LOD_FLOOR = 0.2;       // ... this floor, so the far galaxy is a faint dusting, never vanishing.
+// Distance LOD (far galaxy → faint dusting) is now CONTINUOUS per-vertex in the shader (uDepthLODRef,
+// set in region-merge), not a per-region uSizeScale — a per-region size step reads as concentric
+// banding edge-on. So updateGalaxyBuildout only re-roots; it no longer touches uSizeScale.
 
 interface QueuedRegion { readonly key: string; readonly cell: RegionCell; readonly cells: PopulatedCell[]; }
 
@@ -71,10 +72,7 @@ export function updateGalaxyBuildout(b: GalaxyBuildout, maxRegionsPerFrame = 3):
   }
   for (const field of b.generated.values()) {
     Broker.getResidual(field.regionCenterAbsWU, _res);
-    field.points.position.copy(_res);
-    // residual length = distance from camera → shrink far regions to a faint dusting.
-    const dist = _res.length();
-    field.material.uniforms.uSizeScale!.value = Math.max(LOD_FLOOR, Math.min(1, LOD_FULL_WU / Math.max(dist, 1)));
+    field.points.position.copy(_res); // the shader's per-vertex uDepthLODRef handles the distance LOD
   }
 }
 

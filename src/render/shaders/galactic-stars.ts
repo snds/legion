@@ -40,6 +40,10 @@ export const galacticStarsVertexShader = /* glsl */ `
   // Hard cap on stretch amount. 0.4 = max sprite 1.4x its rest size along
   // the streak axis — well below "hyperspace effect."
   uniform float uMaxStretch;
+  // Continuous per-VERTEX distance LOD reference (WU). > 0 (the full-galaxy build-out) shrinks each
+  // point by clamp(ref/depth, floor, 1) so the far galaxy recedes to a faint dusting SMOOTHLY — no
+  // per-region size shells (the concentric banding). 0 = off (disc + near streaming want constant size).
+  uniform float uDepthLODRef;
 
   void main() {
     // Arm-phase debug: gap (crest 0) → dim red, crest (1) → bright cyan, so spiral arms light up and
@@ -72,7 +76,10 @@ export const galacticStarsVertexShader = /* glsl */ `
     // scalar so the sprite grows in both axes equally; the fragment shader
     // then compresses the perpendicular axis back down so the visual ends
     // up elongated, not just bigger.
-    gl_PointSize = aSize * uSizeScale * uPixelRatio * (1.0 + stretch);
+    // Continuous depth LOD (build-out): per-vertex, so far points shrink smoothly to a 0.2 floor
+    // (uniform faint dusting at distance, no per-region shells). Off when uDepthLODRef == 0.
+    float lodSize = uDepthLODRef > 0.0 ? clamp(uDepthLODRef / depth, 0.2, 1.0) : 1.0;
+    gl_PointSize = aSize * uSizeScale * uPixelRatio * (1.0 + stretch) * lodSize;
     gl_Position = projectionMatrix * mvPosition;
   }
 `;

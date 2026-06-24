@@ -315,6 +315,7 @@ export function buildSectorStarField(sector: Sector): SectorStarField {
       uMaxStretch: { value: 0.4 },
       uDensityDim: { value: sectorDensityDim(data.emissionMean) }, // tame additive overdraw in dense sectors
       uArmDebug: armDebugUniform, // shared — setArmDebug() recolours every field by arm phase
+      uDepthLODRef: { value: 0.0 }, // near-camera streaming keeps constant point size
     },
     transparent: true,
     depthWrite: false,
