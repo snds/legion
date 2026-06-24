@@ -76,7 +76,8 @@ import { createGalaxy, getGalaxyOffset, getGalaxyCrossfade, updateGalaxyAnimatio
 import { createSectorPrototype, updateSectorPrototype } from './render/sector/sector-prototype';
 import { createSectorManager, updateSectorManager, type SectorManager } from './render/sector/sector-manager';
 import { createRegionManager, regionTelemetry, updateRegionManager, type RegionManager } from './render/sector/region-manager';
-import { absWUToGalPc } from './render/sector/sector';
+import { createSectorFill, fillStatus, updateSectorFill, type SectorFill } from './render/sector/sector-fill';
+import { absWUToGalPc, HOME_GAL_PC } from './render/sector/sector';
 import { runSectorTour, type SectorTourHandle } from './render/sector/sector-tour';
 import { regionalScenePos, type CuratedSystem } from './data/curated-systems';
 import { Broker } from './render/scale-manager';
@@ -477,6 +478,7 @@ async function boot(): Promise<void> {
         updateSectorManager(worldExtras.sectorMgr, focusGalPc, Game.data.camDist);
       }
     }
+    if (worldExtras.sectorFill) updateSectorFill(worldExtras.sectorFill); // capped corridor fill
 
     // 7. Audio
     Audio.updateMix(frameTime);
@@ -584,6 +586,7 @@ interface WorldExtras {
   protoSector: import('./render/sector/sector').Sector | null;
   sectorMgr: SectorManager | null;
   regionMgr: RegionManager | null;
+  sectorFill: SectorFill | null;
 }
 
 function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol'): WorldExtras {
@@ -783,7 +786,8 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol'): WorldExtras {
   // region/LOD scheduling layer ABOVE it (Inc 2) — it needs a sector manager to drive, so either
   // flag creates one; ?proto-regions also creates the region manager.
   const params = new URLSearchParams(location.search);
-  const regionsOn = params.has('proto-regions');
+  const fillOn = params.has('proto-fill');
+  const regionsOn = params.has('proto-regions') || fillOn; // fill rides the region+sector managers
   const sectorMgr = regionsOn || params.has('proto-stream') ? createSectorManager(sceneRoot) : null;
   if (sectorMgr) {
     (globalThis as Record<string, unknown>).__sectorMgr = sectorMgr;
@@ -794,6 +798,16 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol'): WorldExtras {
     (globalThis as Record<string, unknown>).__regionMgr = regionMgr;
     (globalThis as Record<string, unknown>).__regionTelemetry = () => regionTelemetry(regionMgr);
     console.info('[region-lod] region layer on — __regionMgr.residents, __regionTelemetry() for arm/density/budgets');
+  }
+
+  // Galaxy-FILL stress pass (?proto-fill) — pre-generates a corridor of sectors from home to the
+  // galactic core, kept resident (the deliberate stress + the impostor measurement gate + the
+  // dramatic-core-cloud setup). Generation is capped per frame so it never hard-hangs.
+  const sectorFill = fillOn ? createSectorFill(sceneRoot, HOME_GAL_PC.clone(), new Vector3(0, 0, 0)) : null;
+  if (sectorFill) {
+    (globalThis as Record<string, unknown>).__fill = sectorFill;
+    (globalThis as Record<string, unknown>).__fillStatus = () => fillStatus(sectorFill);
+    console.info(`[sector-fill] filling ${sectorFill.queue.length} sectors home→core — __fillStatus() for progress`);
   }
 
   // ── Sector orb (Homeworld-style sensor bubble, visible at sector tier) ──
@@ -807,7 +821,7 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol'): WorldExtras {
   const sectorOrb = createSectorOrb(19.1 * LY_TO_WU);
   sceneRoot.add(sectorOrb);
 
-  return { eclipticGrid, oortCloud, galaxyArms: galaxyGroup, sectorOrb, bobEids, protoSector, sectorMgr, regionMgr };
+  return { eclipticGrid, oortCloud, galaxyArms: galaxyGroup, sectorOrb, bobEids, protoSector, sectorMgr, regionMgr, sectorFill };
 }
 
 // ── Start ────────────────────────────────────────────────────────
