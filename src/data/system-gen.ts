@@ -42,7 +42,9 @@ export interface GenSystem {
 }
 
 // ── Deterministic PRNG (seed from the star's stable identity) ──
-function seedFrom(key: string): number {
+// Exported as the project's canonical deterministic-generation primitives
+// (FNV-1a string→seed + mulberry32). Reused by the sector star generator.
+export function seedFrom(key: string): number {
   let h = 2166136261 >>> 0;
   for (let i = 0; i < key.length; i++) {
     h ^= key.charCodeAt(i);
@@ -50,7 +52,7 @@ function seedFrom(key: string): number {
   }
   return h >>> 0;
 }
-function mulberry32(a: number): () => number {
+export function mulberry32(a: number): () => number {
   return () => {
     a |= 0; a = (a + 0x6d2b79f5) | 0;
     let t = Math.imul(a ^ (a >>> 15), 1 | a);

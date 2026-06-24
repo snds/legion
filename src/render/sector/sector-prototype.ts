@@ -11,6 +11,7 @@ import {
 import { WU_PER_PC } from '../../core/metrics';
 import { galPos } from '../../data/curated-systems';
 import { createHomeSector, galPcToSectorLocalWU, updateSectorFrame, type Sector } from './sector';
+import { buildSectorStarField } from './sector-stars';
 
 let _proto: Sector | null = null;
 
@@ -33,6 +34,10 @@ export function createSectorPrototype(): Sector | null {
   );
   sector.group.add(cube);
 
+  // Inc 2: embedded stars — density-sampled generated Points (agree with the model).
+  const starField = buildSectorStarField(sector);
+  sector.group.add(starField.points);
+
   // A marker at each contained curated system, placed sector-LOCAL.
   const _p = new Vector3();
   const _g = new Vector3();
@@ -45,7 +50,8 @@ export function createSectorPrototype(): Sector | null {
   }
 
   console.info(
-    `[sector-proto] home sector "${sector.group.name}" — ${sector.systems.length} curated systems:`,
+    `[sector-proto] home sector "${sector.group.name}" — ${sector.systems.length} curated systems`,
+    `+ ${starField.data.count} generated stars (emissionMean ${starField.data.emissionMean.toExponential(2)}):`,
     sector.systems.map((s) => s.name).join(', '),
   );
   _proto = sector;
