@@ -299,7 +299,7 @@ const STREAK_MATS: ShaderMaterial[] = [];
 function makeStarUniforms(initialSize = 1.0) {
   return {
     uSizeScale:      { value: initialSize },
-    uPixelRatio:     { value: Math.min(window.devicePixelRatio, 2) },
+    uPixelRatio:     { value: typeof window !== 'undefined' ? Math.min(window.devicePixelRatio, 2) : 1 },
     uCamVelocity:    { value: STAR_CAM_VELOCITY },
     uStreakStrength: { value: 0.0 },
     uMaxStretch:     { value: 0.4 },
