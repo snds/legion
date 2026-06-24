@@ -40,14 +40,15 @@ export function buildRegionStarField(
   const regionCenterAbsWU = new Vector3().subVectors(_rcPc, HOME_GAL_PC).multiplyScalar(WU_PER_PC);
 
   // Pass 1: generate each cell's stars (FAST path — from the known emission, no integral) + sum.
-  const parts: { data: ReturnType<typeof generateSectorStarsFast>; cx: number; cy: number; cz: number }[] = [];
+  // The overdraw-taming dim is computed PER CELL (250 pc) and baked into colour below, NOT applied as
+  // one per-region uniform — a single per-region dim steps at every 1 kpc boundary and reads as radial
+  // banding edge-on; per-cell is 4× finer + continuous across region seams.
+  const parts: { data: ReturnType<typeof generateSectorStarsFast>; cx: number; cy: number; cz: number; dim: number }[] = [];
   let total = 0;
-  let emissionSum = 0;
   for (const pc of cells) {
     const data = generateSectorStarsFast(pc.centerPc, pc.emission, starCap, EDGE);
-    parts.push({ data, cx: pc.centerPc.x, cy: pc.centerPc.y, cz: pc.centerPc.z });
+    parts.push({ data, cx: pc.centerPc.x, cy: pc.centerPc.y, cz: pc.centerPc.z, dim: sectorDensityDim(pc.emission) });
     total += data.count;
-    emissionSum += pc.emission;
   }
 
   // Pass 2: concatenate, offsetting each sector's local positions into region-local WU (parsec-space).
@@ -56,7 +57,7 @@ export function buildRegionStarField(
   const sizes = new Float32Array(total);
   const crests = new Float32Array(total);
   let o = 0;
-  for (const { data, cx, cy, cz } of parts) {
+  for (const { data, cx, cy, cz, dim } of parts) {
     const offX = (cx - _rcPc.x) * WU_PER_PC;
     const offY = (cy - _rcPc.y) * WU_PER_PC;
     const offZ = (cz - _rcPc.z) * WU_PER_PC;
@@ -66,9 +67,9 @@ export function buildRegionStarField(
       positions[s] = data.positions[t]! + offX;
       positions[s + 1] = data.positions[t + 1]! + offY;
       positions[s + 2] = data.positions[t + 2]! + offZ;
-      colors[s] = data.colors[t]!;
-      colors[s + 1] = data.colors[t + 1]!;
-      colors[s + 2] = data.colors[t + 2]!;
+      colors[s] = data.colors[t]! * dim; // per-cell overdraw dim baked in (no per-region banding)
+      colors[s + 1] = data.colors[t + 1]! * dim;
+      colors[s + 2] = data.colors[t + 2]! * dim;
       sizes[o + i] = data.sizes[i]!;
       crests[o + i] = data.crests[i]!;
     }
@@ -85,13 +86,14 @@ export function buildRegionStarField(
     vertexShader: galacticStarsVertexShader,
     fragmentShader: galacticStarsFragmentShader,
     uniforms: {
-      uSizeScale: { value: SECTOR_STAR_SIZE_SCALE }, // build-out drives this per-region by distance
+      uSizeScale: { value: SECTOR_STAR_SIZE_SCALE },
       uPixelRatio: { value: typeof window !== 'undefined' ? Math.min(window.devicePixelRatio, 2) : 1 },
       uCamVelocity: { value: new Vector3() },
       uStreakStrength: { value: 0.0 },
       uMaxStretch: { value: 0.4 },
-      uDensityDim: { value: sectorDensityDim(cells.length ? emissionSum / cells.length : 0) },
+      uDensityDim: { value: 1.0 }, // per-cell overdraw dim is baked into colour (continuous, no banding)
       uArmDebug: armDebugUniform, // shared — __armDebug recolours the whole galaxy
+      uDepthLODRef: { value: 80_000 }, // continuous per-vertex distance LOD — no per-region size shells
     },
     transparent: true,
     depthWrite: false,
