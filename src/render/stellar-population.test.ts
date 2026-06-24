@@ -4,7 +4,11 @@
 
 import { describe, it, expect } from 'vitest';
 import { mulberry32 } from '../data/system-gen';
-import { sampleRealisticStar } from './stellar-population';
+import { sampleArmStar, sampleRealisticStar } from './stellar-population';
+
+// M dwarf is the only branch with r=1, low green, low blue; A/B-O are the blue tail (full blue, cut red).
+const isM = (s: number[]) => s[0] === 1 && s[1]! < 0.63 && s[2]! < 0.45;
+const isBlue = (s: number[]) => s[2]! >= 0.99 && s[0]! < 0.95;
 
 describe('sampleRealisticStar', () => {
   it('is deterministic for a given seeded rand stream', () => {
@@ -46,5 +50,40 @@ describe('sampleRealisticStar', () => {
     }
     expect(blue).toBeGreaterThan(0);
     expect(blue / N).toBeLessThan(0.05); // but rare
+  });
+});
+
+describe('sampleArmStar — density-wave arm-phase bias', () => {
+  it('at crestiness 0 is byte-identical to sampleRealisticStar (seam/determinism preserved)', () => {
+    const a = mulberry32(2024);
+    const b = mulberry32(2024);
+    for (let i = 0; i < 300; i++) {
+      expect(sampleArmStar(a, 0)).toEqual(sampleRealisticStar(b));
+    }
+  });
+
+  it('at crestiness 1 boosts the blue tail ~order of magnitude and holds an M-dwarf floor', () => {
+    const gapRand = mulberry32(55);
+    const crestRand = mulberry32(55);
+    const N = 8000;
+    let gapBlue = 0;
+    let crestBlue = 0;
+    let crestM = 0;
+    for (let i = 0; i < N; i++) {
+      if (isBlue(sampleRealisticStar(gapRand))) gapBlue++;
+      const c = sampleArmStar(crestRand, 1);
+      if (isBlue(c)) crestBlue++;
+      if (isM(c)) crestM++;
+    }
+    expect(crestBlue).toBeGreaterThan(gapBlue * 4); // young blue population becomes visible on the crest
+    expect(crestM / N).toBeGreaterThan(0.5);        // M floor — never an artificial all-blue field
+    expect(crestM / N).toBeLessThan(0.62);          // ~0.55 target
+  });
+
+  it('clamps crestiness outside [0,1]', () => {
+    const a = mulberry32(9);
+    const b = mulberry32(9);
+    // crestiness < 0 behaves as 0
+    expect(sampleArmStar(a, -3)).toEqual(sampleRealisticStar(b));
   });
 });

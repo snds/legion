@@ -23,9 +23,9 @@ import {
   AdditiveBlending, BufferGeometry, Float32BufferAttribute, Points, ShaderMaterial, Vector3,
 } from 'three';
 import { KPC_TO_WU, WU_PER_PC } from '../../core/metrics';
-import { sampleGalaxy } from '../galaxy-density';
+import { armPattern, sampleGalaxy } from '../galaxy-density';
 import { galacticStarsVertexShader, galacticStarsFragmentShader } from '../shaders/galactic-stars';
-import { sampleRealisticStar } from '../stellar-population';
+import { sampleArmStar, sampleRealisticStar } from '../stellar-population';
 import { mulberry32, seedFrom } from '../../data/system-gen';
 import type { Sector } from './sector';
 
@@ -49,6 +49,39 @@ export const REF_EMISSION = (() => {
   const s = sampleGalaxy(8.3 * KPC_TO_WU, 0, 0); // SOL_GAL_POS, native WU
   return s.j[0] + s.j[1] + s.j[2];
 })();
+
+// ── Arm-phase → stellar population (density-wave physics; region/LOD spiral READ) ──
+// When ARM_AWARE_STARS, each accepted star's COLOUR/TYPE is biased by the spiral-arm crest it sits
+// in — a pure function of its galactocentric position via the SHARED armPattern, so adjacent sectors
+// agree at their seam by construction and the RNG stream (hence determinism) is untouched. Flip to
+// false to fall back to the uniform census.
+const ARM_AWARE_STARS = true;
+// armPattern is already pow(cos, ARM_SHARP)·spiralInnerFade — a SHARP ridge, not a smooth cosine
+// (most of the disc reads ~0, only narrow crests approach 1). Map it through a smoothstep band so
+// 'crest' begins near where region.ts/classifyArmPhase calls it crest (≈0.5) and flanks get partial
+// credit, rather than treating the whole disc as inter-arm.
+const CREST_LO = 0.12;
+const CREST_HI = 0.6;
+
+function smoothstep01(t: number): number {
+  const x = t <= 0 ? 0 : t >= 1 ? 1 : t;
+  return x * x * (3 - 2 * x);
+}
+
+/** Crestiness ∈ [0,1] at a galactocentric (x,z) pc — how deep into a spiral-arm crest, for biasing
+ *  the stellar population. The disc plane is X-Z; theta's scale factor cancels in atan2. */
+function crestinessAtGalPc(xPc: number, zPc: number): number {
+  const rNative = Math.hypot(xPc, zPc) * PC_TO_NATIVE;
+  return smoothstep01((armPattern(rNative, Math.atan2(zPc, xPc)) - CREST_LO) / (CREST_HI - CREST_LO));
+}
+
+/** Arm phase at a galactocentric (x,z) pc — the raw ridge + the smoothstepped crestiness. Exported
+ *  as a pure query hook for a future galaxy/star manipulation tool (preview what's at a point). */
+export function armPhaseAt(xPc: number, zPc: number): { armRidge: number; crestiness: number } {
+  const rNative = Math.hypot(xPc, zPc) * PC_TO_NATIVE;
+  const armRidge = armPattern(rNative, Math.atan2(zPc, xPc));
+  return { armRidge, crestiness: smoothstep01((armRidge - CREST_LO) / (CREST_HI - CREST_LO)) };
+}
 
 // Calibration (visual, not physical — real local density ≈ 0.1 star/pc³ would be
 // millions of points). REF_STARS is the generated-star budget for a home-density 250 pc
@@ -138,9 +171,14 @@ export function generateSectorStars(sector: Sector): SectorStarData {
     positions[i3] = ox * WU_PER_PC;       // sector-local WU
     positions[i3 + 1] = oy * WU_PER_PC;
     positions[i3 + 2] = oz * WU_PER_PC;
-    const [cr, cg, cb, sz] = sampleRealisticStar(rng);
-    colors[i3] = cr; colors[i3 + 1] = cg; colors[i3 + 2] = cb;
-    sizes[placed] = sz;
+    // Colour/type biased by the spiral-arm crest at THIS star's galactocentric position (density-wave
+    // physics): blue young population on the arms, warm red dwarfs in the gaps. crestiness comes from
+    // position (not the RNG), so the stream — and determinism — is unchanged.
+    const star = ARM_AWARE_STARS
+      ? sampleArmStar(rng, crestinessAtGalPc(centerPc.x + ox, centerPc.z + oz))
+      : sampleRealisticStar(rng);
+    colors[i3] = star[0]; colors[i3 + 1] = star[1]; colors[i3 + 2] = star[2];
+    sizes[placed] = star[3];
     placed++;
   }
 
