@@ -51,10 +51,13 @@ const REF_EMISSION = (() => {
 // Calibration (visual, not physical — real local density ≈ 0.1 star/pc³ would be
 // millions of points). REF_STARS is the generated-star budget for a home-density 250 pc
 // sector — kept SPARSE: the cloud is the unresolved-star aggregate, these are the ~few-%
-// we resolve as Points (alongside the canonical curated/survey systems). STAR_BREACH lets
-// them spill past the sector bounds so there's no hard cube edge (matches the cloud feather).
+// we resolve as Points (alongside the canonical curated/survey systems). STAR_BREACH = 1.0:
+// stars tile EXACTLY to the cube (B4 seam fix). Each star belongs to exactly one cell, so
+// adjacent streamed sectors don't double up at the shared face (a 1.15 breach overlapped them
+// into a visible denser band). Density stays continuous across the seam because placement is
+// ∝ the shared analytic emission, which is identical on both sides of the boundary.
 const REF_STARS = 600;
-const STAR_BREACH = 1.15;
+const STAR_BREACH = 1.0;
 const REF_EDGE_PC = 250;
 const MIN_STARS = 120;
 const MAX_STARS = 6000;

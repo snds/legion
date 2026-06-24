@@ -120,6 +120,21 @@ export function cellCenterPc(cell: Cell, edgePc = DEFAULT_SECTOR_EDGE_PC, out = 
   return out.set((cell.i + 0.5) * edgePc, (cell.j + 0.5) * edgePc, (cell.k + 0.5) * edgePc);
 }
 
+/** Hysteretic cell selection (Phase B, B4). Keeps `current` until the point moves more than
+ *  `marginPc` PAST the current cell's slab on an axis — a deadzone that stops residency thrash
+ *  when the focus jitters across a boundary (home sits ~0.6 pc from the k=0 boundary, so the
+ *  raw cell would flip on sub-pc wobble). A genuine move still jumps straight to the right cell:
+ *  beyond the margin we recompute floor(p/edge), which lands on the correct (possibly distant)
+ *  cell, not merely ±1. With current = null (first frame) it's exactly cellForGalPc. */
+export function hystereticCell(
+  galPc: Vector3, current: Cell | null, edgePc = DEFAULT_SECTOR_EDGE_PC, marginPc = 20,
+): Cell {
+  if (!current) return cellForGalPc(galPc, edgePc);
+  const axis = (p: number, c: number): number =>
+    p < c * edgePc - marginPc || p > (c + 1) * edgePc + marginPc ? Math.floor(p / edgePc) : c;
+  return { i: axis(galPc.x, current.i), j: axis(galPc.y, current.j), k: axis(galPc.z, current.k) };
+}
+
 /** Stable string key for a cell (sparse-hash + deterministic-seed key, Phase B). */
 export function cellKey(cell: Cell): string {
   return `${cell.i}|${cell.j}|${cell.k}`;

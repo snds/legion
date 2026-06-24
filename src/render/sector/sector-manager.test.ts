@@ -5,6 +5,7 @@ import { describe, it, expect } from 'vitest';
 import { Vector3 } from 'three';
 import {
   absWUToGalPc, cellForGalPc, cellKey, createHomeSector, HOME_GAL_PC, DEFAULT_SECTOR_EDGE_PC,
+  hystereticCell,
 } from './sector';
 import { residentCells } from './sector-manager';
 
@@ -53,5 +54,38 @@ describe('Sector streaming — camera focus → cell', () => {
     const homeCell = cellForGalPc(HOME_GAL_PC, DEFAULT_SECTOR_EDGE_PC);
     expect(cellKey(camCell)).not.toBe(cellKey(homeCell));
     expect(camCell.i).toBeGreaterThan(homeCell.i);
+  });
+});
+
+describe('Sector streaming — hysteresis (no boundary thrash)', () => {
+  const E = DEFAULT_SECTOR_EDGE_PC; // 250 pc
+
+  it('with no current cell, picks the raw cell', () => {
+    const g = new Vector3(600, 100, 50);
+    expect(cellKey(hystereticCell(g, null, E, 20))).toBe(cellKey(cellForGalPc(g, E)));
+  });
+
+  it('keeps the current cell for a sub-margin jitter across a boundary', () => {
+    const current = { i: 0, j: 0, k: -1 };          // z slab [-250, 0)
+    const g = new Vector3(125, 125, 5);             // z = +5 pc, only 5 pc past the k=0 boundary
+    expect(hystereticCell(g, current, E, 20).k).toBe(-1); // stays — no churn
+  });
+
+  it('switches once the focus clears the margin', () => {
+    const current = { i: 0, j: 0, k: -1 };
+    const g = new Vector3(125, 125, 25);            // z = +25 pc > 20 margin past the boundary
+    expect(hystereticCell(g, current, E, 20).k).toBe(0);  // commits to the new cell
+  });
+
+  it('a large move jumps straight to the correct (distant) cell, not merely ±1', () => {
+    const current = { i: 0, j: 0, k: 0 };
+    const g = new Vector3(2600, 0, 0);              // i = floor(2600/250) = 10
+    expect(hystereticCell(g, current, E, 20).i).toBe(10);
+  });
+
+  it('absorbs the home boundary-straddle (home sits ~0.6 pc from the k=0 boundary)', () => {
+    const homeCell = cellForGalPc(HOME_GAL_PC, E);  // (33, -1, -1)
+    const jitter = HOME_GAL_PC.clone().add(new Vector3(0, 0, 1)); // z ≈ +0.4 — raw flips to k=0
+    expect(cellKey(hystereticCell(jitter, homeCell, E, 20))).toBe(cellKey(homeCell)); // no flip
   });
 });

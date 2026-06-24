@@ -13,13 +13,17 @@
 
 import { Group, Vector3 } from 'three';
 import {
-  cellCenterPc, cellForGalPc, cellKey, createSector, DEFAULT_SECTOR_EDGE_PC,
+  cellCenterPc, cellKey, createSector, DEFAULT_SECTOR_EDGE_PC, hystereticCell,
   updateSectorFrame, type Cell, type Sector,
 } from './sector';
 import { buildSectorCloud, disposeSectorCloud, updateSectorCloudFrame, type SectorCloud } from './sector-cloud';
 import { buildSectorStarField, disposeSectorStarField, type SectorStarField } from './sector-stars';
 
 const EDGE = DEFAULT_SECTOR_EDGE_PC; // 250 pc
+// Deadzone (pc) for the camera-cell pick — the focus must move this far past a boundary before
+// the residency re-centres, so sub-pc jitter near a cell edge (home sits ~0.6 pc from one) can't
+// thrash load/unload. Well under the edge (250 pc), well over any real focus wobble.
+const HYSTERESIS_PC = 20;
 // Each sector's stars are generated synchronously (~6k sampleGalaxy calls); loading all 3
 // new cells on a crossing in one frame would hitch. Cap loads per frame to amortise it (the
 // camera cell always loads first so the cloud stays responsive). Worker pooling is later (B2).
@@ -35,6 +39,8 @@ interface ResidentSector {
 export interface SectorManager {
   readonly group: Group;
   readonly residents: Map<string, ResidentSector>;
+  /** The committed camera cell (hysteretic — only re-centres past HYSTERESIS_PC). */
+  cameraCell: Cell | null;
   cameraCellKey: string | null;
   /** Total resolved star Points across residents (telemetry). */
   starCount: number;
@@ -55,7 +61,7 @@ export function createSectorManager(parent: Group): SectorManager {
   const group = new Group();
   group.name = 'sector-manager';
   parent.add(group);
-  return { group, residents: new Map(), cameraCellKey: null, starCount: 0 };
+  return { group, residents: new Map(), cameraCell: null, cameraCellKey: null, starCount: 0 };
 }
 
 const _cellCenter = new Vector3();
@@ -85,7 +91,8 @@ function unloadSector(mgr: SectorManager, rs: ResidentSector): void {
  *  the camera's cell, and re-root + update every resident. `camGalPc` is the camera focus in
  *  galactocentric pc (absWUToGalPc(camFocusTarget)); `camDist` drives the cloud gate. */
 export function updateSectorManager(mgr: SectorManager, camGalPc: Vector3, camDist: number): void {
-  const cell = cellForGalPc(camGalPc, EDGE);
+  // Hysteretic so a focus jitter across a boundary doesn't thrash residency (B4).
+  const cell = hystereticCell(camGalPc, mgr.cameraCell, EDGE, HYSTERESIS_PC);
   const camKey = cellKey(cell);
 
   // 1. Residency diff. Unload residents no longer desired (safe to delete during Map
@@ -110,6 +117,7 @@ export function updateSectorManager(mgr: SectorManager, camGalPc: Vector3, camDi
       const prev = mgr.cameraCellKey ? mgr.residents.get(mgr.cameraCellKey) : undefined;
       if (prev) detachCloud(prev);
       if (!cur.cloud) { cur.cloud = buildSectorCloud(cur.sector); cur.sector.group.add(cur.cloud.mesh); }
+      mgr.cameraCell = cell;
       mgr.cameraCellKey = camKey;
     }
   }
