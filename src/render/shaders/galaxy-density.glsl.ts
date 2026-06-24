@@ -193,6 +193,30 @@ float gdBarField(float x, float yw, float z) {
 
 struct GalaxySample { vec3 j; float kappaV; };
 
+// Extinction coefficient κ_V only (the EXTINCTION block of sampleGalaxy, extracted so
+// a light-march can sample dust without the full emission cost). Takes R/yw/theta/tap
+// precomputed by the caller, so sampleGalaxy's combined path recomputes nothing — its
+// kappaV is byte-identical to the inline version.
+float gdDustKappa(vec3 p, float R, float yw, float theta, float tap) {
+  float dust = exp(-R / GD_HR_DUST)
+    * (exp(-abs(yw) / GD_HZ_DUST) + GD_DUST2_W * exp(-abs(yw) / GD_HZ_DUST2));
+  // Clump fBm only where dust is non-negligible (perf; mirrors TS guard).
+  if (dust > 1e-5) {
+    dust *= 0.4 + 1.2 * gdFbm3(p / GD_CLUMP_SCALE);
+    float lf = gdSpiralInnerFade(R);
+    dust *= (1.0 - lf) + lf * (0.25 + gdDustLane(R, theta));
+  }
+  dust *= tap;
+
+  float kappaV = GD_KAPPA_MID * dust / GD_DUST_NORM * uDustStrength;
+  for (int i = 0; i < N_RIFT; i++) {
+    vec3 d = (p - GD_RIFT[i].c) / GD_RIFT[i].r;
+    float d2 = dot(d, d);
+    if (d2 < 9.0) kappaV += GD_RIFT[i].k * exp(-d2);
+  }
+  return kappaV;
+}
+
 GalaxySample sampleGalaxy(vec3 p) {
   float R = length(p.xz);
   float theta = atan(p.z, p.x);
@@ -217,23 +241,8 @@ GalaxySample sampleGalaxy(vec3 p) {
     if (d2 < 9.0) j += GD_COL_HII * (GD_HII[i].amp * exp(-d2)) * uHiiAmp;
   }
 
-  // EXTINCTION
-  float dust = exp(-R / GD_HR_DUST)
-    * (exp(-abs(yw) / GD_HZ_DUST) + GD_DUST2_W * exp(-abs(yw) / GD_HZ_DUST2));
-  // Clump fBm only where dust is non-negligible (perf; mirrors TS guard).
-  if (dust > 1e-5) {
-    dust *= 0.4 + 1.2 * gdFbm3(p / GD_CLUMP_SCALE);
-    float lf = gdSpiralInnerFade(R);
-    dust *= (1.0 - lf) + lf * (0.25 + gdDustLane(R, theta));
-  }
-  dust *= tap;
-
-  float kappaV = GD_KAPPA_MID * dust / GD_DUST_NORM * uDustStrength;
-  for (int i = 0; i < N_RIFT; i++) {
-    vec3 d = (p - GD_RIFT[i].c) / GD_RIFT[i].r;
-    float d2 = dot(d, d);
-    if (d2 < 9.0) kappaV += GD_RIFT[i].k * exp(-d2);
-  }
+  // EXTINCTION (extracted to gdDustKappa; identical result, reusable by the light-march)
+  float kappaV = gdDustKappa(p, R, yw, theta, tap);
 
   return GalaxySample(j, kappaV);
 }

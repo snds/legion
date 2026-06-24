@@ -49,6 +49,19 @@ export const sectorCloudFragmentShader = /* glsl */ `
   uniform float uCloudScale;           // worldFBM scale, native WU (smaller = finer wisps)
   uniform float uCloudFloor;           // emission multiplier in the wisp gaps [0..1]
 
+  // The cloud is the unresolved-star AGGREGATE: densest in the distance, it thins as you
+  // move INTO it (the resolved star Points take over). A camera-distance fade does this.
+  uniform float uFadeNearFloor;        // cloud strength right at the camera (≠ 0)
+  uniform float uFadeFarWU;            // world WU at which the cloud reaches full strength
+  uniform float uFeatherWU;            // soft-edge feather near the box faces (breach the bounds)
+
+  // Cheap directional tint (HG forward-scatter toward the sector's brightest star). No
+  // self-shadow light-march yet (subtle for now; dramatic lighting waits for a dense sector).
+  uniform vec3 uLightNativePos;        // dominant star, galaxy-local native WU
+  uniform vec3 uLightColor;            // its spectral colour
+  uniform float uScatter;              // tint strength
+  uniform float uHGg;                  // Henyey-Greenstein asymmetry (forward ≈ 0.6)
+
   varying vec3 vWorldPos;
 
   ${galaxyDensityGLSL}
@@ -89,6 +102,18 @@ export const sectorCloudFragmentShader = /* glsl */ `
       float dt = max(tn - t, 0.0);
       float dtm = dt * uConvK;          // world step → native step (same scalar as the point)
 
+      // Camera-distance fade + box-edge feather — computed BEFORE the expensive density
+      // sample so negligible samples (near the camera, near the faces) are SKIPPED. This
+      // is the perf win the fade buys: when immersed, the near screen-filling part of the
+      // ray costs nothing; only the fuller far part is marched.
+      vec3 pw = ro + rd * t;
+      float camFade = uFadeNearFloor + (1.0 - uFadeNearFloor) * smoothstep(0.0, uFadeFarWU, t);
+      vec3 dmin = pw - uBoxMin, dmax = uBoxMax - pw;
+      float edge = min(min(min(dmin.x, dmin.y), dmin.z), min(min(dmax.x, dmax.y), dmax.z));
+      float edgeFade = smoothstep(0.0, uFeatherWU, edge);
+      float fade = camFade * edgeFade;
+      if (fade < 0.02) continue;        // contributes ~nothing → skip the sample
+
       // Absolute galactocentric position in native WU — R cancels, so it matches the
       // disc and never swims with the floating origin.
       vec3 pNative = uSectorCenterNativeWU + (ro + rd * t - uWorldResidual) * uConvK;
@@ -98,15 +123,25 @@ export const sectorCloudFragmentShader = /* glsl */ `
       // sectors). Squared → carve cleaner gaps; floor keeps gaps from going black.
       float detail = gdFbm3(pNative / uCloudScale);
       float shape = mix(uCloudFloor, 1.0, detail * detail);
+      float w = shape * fade;           // effective cloud density weight
+      float density = s.kappaV * w;
 
-      accum += T * s.j * shape * dtm;
-      T *= exp(-s.kappaV * GD_KAPPA_RGB * dtm);
+      // Cheap directional tint: HG forward-scatter toward the dominant star (no light-march).
+      vec3 Ldir = normalize(uLightNativePos - pNative);
+      float gg = uHGg * uHGg;
+      float phase = 0.0795775 * (1.0 - gg) / pow(max(1.0 + gg - 2.0 * uHGg * dot(rd, Ldir), 1e-4), 1.5);
+      vec3 scatter = uLightColor * (uScatter * phase) * density;
+
+      // Emission (aggregate glow) + directional tint. Extinction uses the SAME weighted
+      // density (spec: density = structure × worldFBM) → gaps transparent, cloud not fog.
+      accum += T * (s.j * w * uEmissionScale + scatter) * dtm;
+      T *= exp(-density * GD_KAPPA_RGB * dtm);
 
       if (max(T.r, max(T.g, T.b)) < 0.005) break;
     }
 
     float coverage = 1.0 - (T.r + T.g + T.b) / 3.0;
-    vec3 rgb = accum * uEmissionScale * uOpacity;
+    vec3 rgb = accum * uOpacity; // uEmissionScale folded into the per-step emission
     if (coverage < 0.002 && max(rgb.r, max(rgb.g, rgb.b)) < 0.0005) discard;
     gl_FragColor = vec4(rgb, coverage * uOpacity);
   }

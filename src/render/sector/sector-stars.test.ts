@@ -58,9 +58,10 @@ describe('Sector stars — frame + content validity', () => {
     expect(data.sizes.length).toBe(data.count);
   });
 
-  it('all stars sit inside the sector-local AABB (±half edge in WU)', () => {
+  it('all stars sit within the breached AABB (±half edge · 1.15 in WU)', () => {
+    const bound = HALF_WU * 1.15; // STAR_BREACH — stars spill slightly past the bounds
     for (let i = 0; i < data.positions.length; i++) {
-      expect(Math.abs(data.positions[i]!)).toBeLessThanOrEqual(HALF_WU);
+      expect(Math.abs(data.positions[i]!)).toBeLessThanOrEqual(bound);
     }
   });
 
