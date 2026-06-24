@@ -44,7 +44,7 @@ describe('Sector stars — no silent under-fill (count == field length)', () => 
     expect(d.positions.length).toBe(d.count * 3);
     expect(d.colors.length).toBe(d.count * 3);
     expect(d.sizes.length).toBe(d.count);
-    expect(d.count).toBeGreaterThanOrEqual(400); // MIN floor honoured by the fallback
+    expect(d.count).toBeGreaterThanOrEqual(120); // MIN_STARS floor honoured by the fallback
   });
 });
 
@@ -73,13 +73,13 @@ describe('Sector stars — frame + content validity', () => {
       expect(c).toBeLessThanOrEqual(1);
     }
     for (let i = 0; i < data.sizes.length; i++) {
-      expect(data.sizes[i]!).toBeGreaterThan(0.5);
-      expect(data.sizes[i]!).toBeLessThan(7);
+      expect(data.sizes[i]!).toBeGreaterThanOrEqual(0.5); // smallest M-dwarf pinpoint
+      expect(data.sizes[i]!).toBeLessThan(4); // pinpoints — far smaller than the old backdrop mix
     }
   });
 
-  it('home sector is substantially populated', () => {
-    expect(data.count).toBeGreaterThan(1000);
+  it('home sector is meaningfully populated (sparse by design — the cloud carries the rest)', () => {
+    expect(data.count).toBeGreaterThan(300); // REF_STARS=600 × home emission factor, kept sparse
     expect(data.emissionMean).toBeGreaterThan(0);
   });
 });
