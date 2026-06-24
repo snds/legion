@@ -226,6 +226,10 @@ export function generateSectorStars(sector: Sector, starCountCap?: number): Sect
 
 /** Floor on a build-out cell's star count (so even faint rim cells render a few points). */
 const MIN_BUILDOUT_STARS = 6;
+/** Vertical scale height (pc) for placing build-out stars WITHIN a cell. The disc's emission falls off
+ *  as ~exp(−|y|/H) (thin-disc dominated near the plane); placing stars by this profile instead of
+ *  uniformly makes the 250 pc layers blend into a smooth disc rather than a banded box-staircase. */
+const BUILDOUT_HZ_PC = 300;
 
 /** Build-out FAST path — generate a cell's stars from its ALREADY-KNOWN emission (the enumeration
  *  gate value), with NO Monte-Carlo integral and NO rejection loop: count = REF_STARS · emission/REF
@@ -243,9 +247,18 @@ export function generateSectorStarsFast(
   const colors = new Float32Array(count * 3);
   const sizes = new Float32Array(count);
   const crests = new Float32Array(count);
+  // Vertical placement weights (per cell): the cell spans [yLo,yHi]; sample |y| ∝ exp(-|y|/HZ) across
+  // it (inverse-CDF) so stars concentrate toward the midplane side and adjacent layers' densities meet
+  // continuously at the boundary — killing the box-staircase banding. (No cell straddles y=0, so |y| is
+  // monotone within the cell.) x,z stay uniform — the finer radial/azimuthal grid doesn't band.
+  const yLo = centerPc.y - edgePc * 0.5;
+  const yHi = centerPc.y + edgePc * 0.5;
+  const wLo = Math.exp(-Math.min(Math.abs(yLo), Math.abs(yHi)) / BUILDOUT_HZ_PC);
+  const wHi = Math.exp(-Math.max(Math.abs(yLo), Math.abs(yHi)) / BUILDOUT_HZ_PC);
+  const ySign = centerPc.y >= 0 ? 1 : -1;
   for (let i = 0; i < count; i++) {
     const ox = (rng() - 0.5) * edgePc;
-    const oy = (rng() - 0.5) * edgePc;
+    const oy = ySign * (-BUILDOUT_HZ_PC * Math.log(wLo - rng() * (wLo - wHi))) - centerPc.y;
     const oz = (rng() - 0.5) * edgePc;
     const i3 = i * 3;
     positions[i3] = ox * WU_PER_PC;
