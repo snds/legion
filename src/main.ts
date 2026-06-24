@@ -74,6 +74,8 @@ import {
 } from './render/scene-objects';
 import { createGalaxy, getGalaxyOffset, getGalaxyCrossfade, updateGalaxyAnimations, updateGalaxyLOD, updateGalaxyMarkerScale, updateGalaxyFrame, updateStarStreaks, createSectorOrb } from './render/galaxy';
 import { createSectorPrototype, updateSectorPrototype } from './render/sector/sector-prototype';
+import { runSectorTour, type SectorTourHandle } from './render/sector/sector-tour';
+import { regionalScenePos, type CuratedSystem } from './data/curated-systems';
 import { Broker } from './render/scale-manager';
 import { createPostProcessing, type PostProcessingContext } from './render/post-processing';
 import { createLensFlare, type LensFlareSystem } from './render/lens-flare';
@@ -233,6 +235,32 @@ async function boot(): Promise<void> {
   const params = new URLSearchParams(window.location.search);
   const systemId = (params.get('system') === 'sol' ? 'sol' : 'ee') as 'ee' | 'sol';
   const worldExtras = populateWorld(sceneCtx, systemId);
+
+  // Sector tour (Inc 6) — flag-gated node-to-node fly-through. __sectorTour.start() flies
+  // the camera between the sector's systems in nearest-neighbour order (looping), so you
+  // can watch the cloud thin/thicken as you travel. Targets are the systems' render-frame
+  // positions (regional tier root + regionalScenePos), which flyTo rebases to absolute.
+  if (worldExtras.protoSector) {
+    const _tourRoot = new Vector3();
+    const tourFlyTo = (sys: CuratedSystem, zoomLevel: number): void => {
+      Broker.getTierRoot('regional', _tourRoot);
+      const target = regionalScenePos(sys).add(_tourRoot);
+      camCtrl.flyTo(target, { targetZoomLevel: zoomLevel });
+    };
+    let tourHandle: SectorTourHandle | null = null;
+    (globalThis as Record<string, unknown>).__sectorTour = {
+      start: () => {
+        tourHandle?.stop();
+        tourHandle = runSectorTour({
+          systems: worldExtras.protoSector!.systems,
+          flyTo: tourFlyTo,
+          isFlying: () => camCtrl.flying,
+        });
+      },
+      stop: () => { tourHandle?.stop(); tourHandle = null; },
+    };
+    console.info('[sector-proto] tour ready — call __sectorTour.start() to fly the sector node-to-node');
+  }
 
   // ── 8b. Tab Cycling Through Bobs ──
   let bobCycleIndex = -1;
@@ -536,6 +564,7 @@ interface WorldExtras {
   galaxyArms: import('three').Group;
   sectorOrb: import('three').Group;
   bobEids: number[];
+  protoSector: import('./render/sector/sector').Sector | null;
 }
 
 function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol'): WorldExtras {
@@ -741,7 +770,7 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol'): WorldExtras {
   const sectorOrb = createSectorOrb(19.1 * LY_TO_WU);
   sceneRoot.add(sectorOrb);
 
-  return { eclipticGrid, oortCloud, galaxyArms: galaxyGroup, sectorOrb, bobEids };
+  return { eclipticGrid, oortCloud, galaxyArms: galaxyGroup, sectorOrb, bobEids, protoSector };
 }
 
 // ── Start ────────────────────────────────────────────────────────
