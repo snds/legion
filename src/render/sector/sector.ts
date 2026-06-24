@@ -83,6 +83,13 @@ export function galPcToSectorLocalWU(sector: Sector, galPc: Vector3, out = new V
   return out.subVectors(galPc, sector.centerPc).multiplyScalar(WU_PER_PC);
 }
 
+/** Inverse of centerAbsWU: an ABSOLUTE scene-WU position (home at the origin, e.g.
+ *  Game.data.camFocusTarget) → galactocentric parsecs. Used by the streaming manager to
+ *  find which cell the camera occupies. galPc = HOME_GAL_PC + absWU / WU_PER_PC. */
+export function absWUToGalPc(absWU: Vector3, out = new Vector3()): Vector3 {
+  return out.copy(absWU).divideScalar(WU_PER_PC).add(HOME_GAL_PC);
+}
+
 const _r = new Vector3();
 /** Re-root the sector group to this frame's floating-origin residual. Call once
  *  per frame AFTER Broker.beginFrame (same ordering as the tier re-roots). */

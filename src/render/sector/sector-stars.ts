@@ -190,3 +190,9 @@ export function buildSectorStarField(sector: Sector): SectorStarField {
   points.frustumCulled = false;
   return { points, material, data };
 }
+
+/** Dispose a star field's GPU resources (geometry + material). Call when its sector unloads. */
+export function disposeSectorStarField(field: SectorStarField): void {
+  field.points.geometry.dispose();
+  field.material.dispose();
+}
