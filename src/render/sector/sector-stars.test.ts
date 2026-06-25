@@ -6,7 +6,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { Vector3 } from 'three';
 import { createHomeSector, createSector, HOME_GAL_PC, DEFAULT_SECTOR_EDGE_PC } from './sector';
-import { generateSectorStars, sectorStarSeedKey } from './sector-stars';
+import { generateSectorStars, generateSectorStarsFast, sectorStarSeedKey, emissionAtGalPc, REF_EMISSION } from './sector-stars';
 
 const HALF_WU = (DEFAULT_SECTOR_EDGE_PC / 2) * 1000; // 125,000 WU
 
@@ -105,5 +105,22 @@ describe('Sector stars — count/emission agree with the density model', () => {
     const hi = generateSectorStars(highup);
     expect(hi.emissionMean).toBeLessThan(home.emissionMean * 0.1); // far off the thin disc
     expect(hi.count).toBeLessThan(home.count);
+  });
+});
+
+describe('Build-out fast path — in-plane density follows the field (no 250 pc grid)', () => {
+  it('biases placement toward the higher-emission (inner) edge of a disc cell, not the cell centre', () => {
+    const center = new Vector3(12000, 0, 0); // 12 kpc out on +x; emission rises toward −x (galactic centre)
+    const inner = emissionAtGalPc(center.x - 125, 0, 0);
+    const outer = emissionAtGalPc(center.x + 125, 0, 0);
+    expect(inner).toBeGreaterThan(outer); // the radial gradient gives a well-defined "inward" direction
+
+    // High emission ⇒ many stars ⇒ the mean is statistically tight.
+    const d = generateSectorStarsFast(center, REF_EMISSION * 30, 20000, DEFAULT_SECTOR_EDGE_PC);
+    expect(d.count).toBeGreaterThan(5000);
+    let sumOx = 0;
+    for (let i = 0; i < d.count; i++) sumOx += d.positions[i * 3];
+    const meanOxPc = sumOx / d.count / 1000; // sector-local WU → pc; uniform placement ⇒ ~0
+    expect(meanOxPc).toBeLessThan(-0.8);     // importance-sampled ⇒ shifted toward the brighter inner edge
   });
 });
