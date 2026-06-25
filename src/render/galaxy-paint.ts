@@ -22,18 +22,25 @@ import {
   createGalaxyBuildout, disposeGalaxyBuildout, regenerateRegion, updateGalaxyBuildout,
   type GalaxyBuildout,
 } from './sector/galaxy-buildout';
-import { applyStroke, rebuildEditState, type BrushStroke } from './galaxy-paint-ops';
+import { applyStroke, rebuildEditState, type BrushStroke, type FalloffKind } from './galaxy-paint-ops';
 import { PointerSource, type BrushSample, type GestureSink } from './paint-input';
 import type { RendererContext } from './renderer';
+
+const RING_ADD = 0x6aa3ff;   // blue — depositing
+const RING_ERASE = 0xff6a6a; // red — removing
 
 /** Density brush: a paint pointer (pen, touch, or LEFT mouse) drags stamps along the galactic plane
  *  (scene y=0 ↔ galactocentric y=0). Input arrives already normalized as BrushSamples from PointerSource,
  *  so pen / touch / mouse are one path. Phase 2b records each stamp's PRESSURE alongside the path, so a
  *  firm pen press lays a dense core and a feather touch seeds faint density (mouse resolves to pressure 1
- *  ⇒ desktop is byte-identical). Off-plane depth is a later mode; here every stamp lands on the plane. */
+ *  ⇒ desktop is byte-identical). Phase 2d adds erase (removes density), falloff presets, and the opacity
+ *  ceiling. Off-plane depth is a later mode; here every stamp lands on the plane. */
 export class PaintBrush {
   radiusPc = 1500;
   intensity = 0.8;
+  /** 'add' deposits stars, 'erase' removes them — set via setErase(). */
+  mode: 'add' | 'erase' = 'add';
+  falloff: FalloffKind = 'linear';
   private path: Array<[number, number, number]> = [];
   private pressures: number[] = [];
   private readonly raycaster = new Raycaster();
@@ -79,10 +86,20 @@ export class PaintBrush {
       onStrokeBegin: (s) => { this.path = []; this.pressures = []; push(s); },
       onStrokeSample: (s) => push(s),
       onStrokeEnd: () => {
-        if (this.path.length) onStroke({ brushType: 'density-add', path: this.path, pressures: this.pressures, radiusPc: this.radiusPc, intensity: this.intensity });
+        if (this.path.length) onStroke({
+          brushType: this.mode === 'erase' ? 'density-erase' : 'density-add',
+          path: this.path, pressures: this.pressures, radiusPc: this.radiusPc,
+          intensity: this.intensity, falloff: this.falloff,
+        });
       },
       onStrokeCancel: () => { this.path = []; this.pressures = []; },
     });
+  }
+
+  /** Toggle erase mode and recolour the footprint ring (blue = add, red = erase). */
+  setErase(on: boolean): void {
+    this.mode = on ? 'erase' : 'add';
+    if (this.ring) (this.ring.material as LineBasicMaterial).color.setHex(on ? RING_ERASE : RING_ADD);
   }
 
   dispose(): void {
@@ -276,7 +293,13 @@ export function bootGalaxyPaint(renderCtx: RendererContext, shouldRun: () => boo
     <input id="pp-r" type="range" min="250" max="6000" step="50" value="1500" style="width:100%;accent-color:#6aa3ff">
     <div style="margin-top:6px">Intensity&nbsp;<span id="pp-iv">0.80</span></div>
     <input id="pp-i" type="range" min="0" max="3" step="0.05" value="0.8" style="width:100%;accent-color:#6aa3ff">
-    <button id="pp-undo" style="margin-top:10px;width:100%;padding:6px;background:#1c2530;color:#cfd8e3;
+    <div style="display:flex;gap:6px;margin-top:8px;align-items:center">
+      <button id="pp-erase" style="flex:1;padding:6px;background:#1c2530;color:#cfd8e3;border:1px solid #34404e;border-radius:5px;cursor:pointer;font:inherit">Add</button>
+      <select id="pp-falloff" title="edge falloff" style="flex:1;padding:5px;background:#1c2530;color:#cfd8e3;border:1px solid #34404e;border-radius:5px;font:inherit;cursor:pointer">
+        <option value="linear">linear</option><option value="smooth">smooth</option><option value="ease">ease</option><option value="hard">hard</option>
+      </select>
+    </div>
+    <button id="pp-undo" style="margin-top:8px;width:100%;padding:6px;background:#1c2530;color:#cfd8e3;
       border:1px solid #34404e;border-radius:5px;cursor:pointer;font:inherit">Undo&nbsp;(0)</button>
     <div id="pp-help" style="margin-top:8px;opacity:0.55;font-size:11px">
       pen / 1-finger / left-drag&nbsp;paint<br>2-finger / right-drag&nbsp;orbit&nbsp;·&nbsp;pinch / wheel&nbsp;zoom</div>`;
@@ -284,8 +307,18 @@ export function bootGalaxyPaint(renderCtx: RendererContext, shouldRun: () => boo
   const rEl = hud.querySelector<HTMLInputElement>('#pp-r')!;
   const iEl = hud.querySelector<HTMLInputElement>('#pp-i')!;
   const undoBtn = hud.querySelector<HTMLButtonElement>('#pp-undo')!;
+  const eraseBtn = hud.querySelector<HTMLButtonElement>('#pp-erase')!;
+  const falloffSel = hud.querySelector<HTMLSelectElement>('#pp-falloff')!;
   rEl.addEventListener('input', () => { brush.radiusPc = +rEl.value; hud.querySelector('#pp-rv')!.textContent = rEl.value; });
   iEl.addEventListener('input', () => { brush.intensity = +iEl.value; hud.querySelector('#pp-iv')!.textContent = (+iEl.value).toFixed(2); });
+  eraseBtn.addEventListener('click', () => {
+    const erasing = brush.mode === 'add'; // flip
+    brush.setErase(erasing);
+    eraseBtn.textContent = erasing ? 'Erase' : 'Add';
+    eraseBtn.style.color = erasing ? '#ff9a9a' : '#cfd8e3';
+    eraseBtn.style.borderColor = erasing ? '#7a3a3a' : '#34404e';
+  });
+  falloffSel.addEventListener('change', () => { brush.falloff = falloffSel.value as FalloffKind; });
   undoBtn.addEventListener('click', undo);
   onStatus = (): void => { undoBtn.textContent = `Undo (${opList.length})`; };
 

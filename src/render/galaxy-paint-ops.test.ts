@@ -5,7 +5,7 @@ import { describe, it, expect } from 'vitest';
 import { Vector3 } from 'three';
 import type { PopulatedCell } from './sector/galaxy-enumerate';
 import { emptyEditState } from './sector/galaxy-edit';
-import { applyStroke, rebuildEditState, type BrushStroke } from './galaxy-paint-ops';
+import { applyStroke, rebuildEditState, MAX_DENSITY_FACTOR, type BrushStroke } from './galaxy-paint-ops';
 
 const mk = (i: number, k: number): PopulatedCell => ({
   cell: { i, j: 0, k },
@@ -61,5 +61,43 @@ describe('applyStroke', () => {
     const rebuilt = rebuildEditState([stroke, stroke], cells);
     expect(rebuilt.editState.modifiers.get('0|0|0')!.densityFactor).toBeCloseTo(a.modifiers.get('0|0|0')!.densityFactor, 5);
     expect(rebuilt.dirty.has('R:0|0|0')).toBe(true);
+  });
+});
+
+describe('applyStroke — erase / falloff / opacity ceiling (Phase 2d)', () => {
+  const at = (path: BrushStroke['path'], extra: Partial<BrushStroke>): BrushStroke => ({
+    brushType: 'density-add', path, radiusPc: 200, intensity: 1, ...extra,
+  });
+
+  it('erase multiplies densityFactor down toward 0, composing with a prior add', () => {
+    const es = emptyEditState();
+    applyStroke(at([[125, 125, 125]], {}), es, cells);                                  // cell0 → 2.0
+    applyStroke(at([[125, 125, 125]], { brushType: 'density-erase', intensity: 0.5 }), es, cells); // ×(1−0.5)
+    expect(es.modifiers.get('0|0|0')!.densityFactor).toBeCloseTo(1.0, 5); // 2.0 × 0.5
+  });
+
+  it('erase on an unedited cell drops it below 1 (fewer stars than the base)', () => {
+    const es = emptyEditState();
+    applyStroke(at([[125, 125, 125]], { brushType: 'density-erase', intensity: 0.5 }), es, cells);
+    expect(es.modifiers.get('0|0|0')!.densityFactor).toBeCloseTo(0.5, 5); // 1 × (1−0.5)
+  });
+
+  it('the opacity ceiling clamps runaway additive scrubbing at MAX_DENSITY_FACTOR', () => {
+    const es = emptyEditState();
+    for (let i = 0; i < 10; i++) applyStroke(at([[125, 125, 125]], { intensity: 3 }), es, cells); // ≫ 8 uncapped
+    expect(es.modifiers.get('0|0|0')!.densityFactor).toBe(MAX_DENSITY_FACTOR);
+  });
+
+  it('hard falloff deposits full strength across the disc; ease is softer than linear at the edge', () => {
+    const hard = emptyEditState(); applyStroke(at([[125, 125, 125]], { radiusPc: 400, falloff: 'hard' }), hard, cells);
+    const lin = emptyEditState(); applyStroke(at([[125, 125, 125]], { radiusPc: 400, falloff: 'linear' }), lin, cells);
+    const ease = emptyEditState(); applyStroke(at([[125, 125, 125]], { radiusPc: 400, falloff: 'ease' }), ease, cells);
+    // cell (1,0,0) is 250 pc from the stamp; radius 400 ⇒ t = 0.625
+    const h = hard.modifiers.get('1|0|0')!.densityFactor;
+    const l = lin.modifiers.get('1|0|0')!.densityFactor;
+    const e = ease.modifiers.get('1|0|0')!.densityFactor;
+    expect(h).toBeCloseTo(2.0, 5);   // full deposit through the disc
+    expect(h).toBeGreaterThan(l);
+    expect(l).toBeGreaterThan(e);    // ease tapers faster toward the edge
   });
 });
