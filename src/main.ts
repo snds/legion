@@ -156,6 +156,14 @@ async function boot(): Promise<void> {
     return;
   }
 
+  // ── NEW physically-generated galaxy (?galaxy-sim) — the global density-wave star set (no sectors, no
+  // image), standalone, to judge the new generation before wiring it into the engine's galaxy tier. ──
+  if (new URLSearchParams(location.search).has('galaxy-sim')) {
+    const { bootGalaxySim } = await import('./render/galaxy-sim');
+    bootGalaxySim(renderCtx, () => _hmr.bootGen === myGen);
+    return;
+  }
+
   // ── Independent galaxy PAINT MODE (?paint-mode) — the standalone painting-tool shell: only the
   // full-galaxy build-out + a free-fly camera, none of the system-tier streaming/transitions. ──
   if (new URLSearchParams(location.search).has('paint-mode')) {
