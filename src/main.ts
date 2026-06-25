@@ -148,6 +148,14 @@ async function boot(): Promise<void> {
   _hmr.renderer = renderCtx.renderer;
   console.info(`[Legion] Renderer: ${renderCtx.backend.toUpperCase()}`);
 
+  // ── Independent galaxy PAINT MODE (?paint-mode) — the standalone painting-tool shell: only the
+  // full-galaxy build-out + a free-fly camera, none of the system-tier streaming/transitions. ──
+  if (new URLSearchParams(location.search).has('paint-mode')) {
+    const { bootGalaxyPaint } = await import('./render/galaxy-paint');
+    bootGalaxyPaint(renderCtx, () => _hmr.bootGen === myGen);
+    return;
+  }
+
   setMaxAnisotropy(renderCtx.maxAnisotropy);
   // Register the renderer with the planet texture baker before the world is
   // populated (populateWorld → createPlanetMesh → generatePlanetTexture).
