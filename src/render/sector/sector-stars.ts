@@ -252,8 +252,13 @@ export function generateSectorStarsFast(
   const mod = edit ? edit.editState.modifiers.get(edit.cellKey) : undefined;
   const ovMap = edit ? edit.editState.overrides.get(edit.regionKey) : undefined;
   const densityFactor = mod ? mod.densityFactor : 1;
+  // Painting denser must be able to grow a cell PAST its base point budget, else cells already at the
+  // build-out cap (the bright bulge) wouldn't visibly respond. Scale the cap with densityFactor>1 so a
+  // density-add stroke adds stars; at densityFactor===1 (every unedited cell) the cap is untouched, so
+  // the fast path stays byte-identical.
+  const effCap = densityFactor > 1 ? Math.round(cap * densityFactor) : cap;
   const count = Math.max(MIN_BUILDOUT_STARS,
-    Math.min(cap, Math.round(REF_STARS * (emission / REF_EMISSION) * densityFactor)));
+    Math.min(effCap, Math.round(REF_STARS * (emission / REF_EMISSION) * densityFactor)));
   const positions = new Float32Array(count * 3);
   const colors = new Float32Array(count * 3);
   const sizes = new Float32Array(count);
