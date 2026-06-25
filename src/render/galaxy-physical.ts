@@ -284,14 +284,16 @@ export interface DustConfig {
   dustOpacity: number;        // per-particle base alpha (optical depth)
   dustScaleHeight_pc: number; // thinner than the stars ⇒ a crisp midplane lane
   dustLeadDeg: number;        // phase lead: dust sits on the inner/leading edge of the arms
-  dustContrast: number;       // how tightly dust hugs the arms
-  dustFilament: number;       // 0 = smooth lane … 1 = spindly tendrils that detach + recoalesce
+  dustThickness: number;      // 0 = razor-thin wispy lane … 1 = broad lane (drives ridge sharpness + sprite)
+  dustSegment: number;        // 0 = continuous lane … 1 = heavily broken into segments (gap fraction)
+  dustSegmentScale: number;   // segment frequency along the arm (per kpc) — smaller = longer segments/gaps
+  dustFilament: number;       // 0 = smooth … 1 = spindly cross-lane tendrils that detach + recoalesce
   dustFilamentScale: number;  // spatial frequency of the tendrils (per kpc)
 }
 
 export const DEFAULT_DUST_CONFIG: DustConfig = {
-  dustCount: 700_000, dustOpacity: 0.16, dustScaleHeight_pc: 120, dustLeadDeg: 18, dustContrast: 0.92,
-  dustFilament: 0.7, dustFilamentScale: 2.1,
+  dustCount: 700_000, dustOpacity: 0.16, dustScaleHeight_pc: 90, dustLeadDeg: 18,
+  dustThickness: 0.16, dustSegment: 0.55, dustSegmentScale: 3.0, dustFilament: 0.7, dustFilamentScale: 2.1,
 };
 
 /** Ridged value-noise FBM ∈ [0,1]: thin bright RIDGES at the FBM zero-crossings — the threads/tendrils
@@ -320,35 +322,59 @@ export function sampleDust(
   const opacities = new Float32Array(n);
   const hz = dust.dustScaleHeight_pc / 1000;
   const lead = (dust.dustLeadDeg * DEG2RAD) / Math.max(1, cfg.armCount);
-  const denom = 1 + dust.dustContrast;
+  const m = Math.max(1, cfg.armCount);
+  const ns = cfg.armNoiseScale;
+  const warpAmp = cfg.armNoise * Math.PI;
   const fil = Math.max(0, Math.min(1, dust.dustFilament));
   const fScale = dust.dustFilamentScale;
   const fSeed = noiseSeed + 1013;
+  // Lane WIDTH from a thin arm ridge cos(ψ)^k: razor-thin (low dustThickness ⇒ high k). We IMPORTANCE-SAMPLE
+  // the ridge — place each grain ON a warped lane with a narrow perpendicular jitter ∝ 1/√k — rather than
+  // reject-sample, so thin lanes stay DENSE instead of starving to a few specks.
+  const laneSharp = 2 + (1 - Math.max(0, Math.min(1, dust.dustThickness))) * 38;
+  const jitterSigma = 1 / Math.sqrt(laneSharp);
+  // SEGMENTATION: a value-noise gate along the arm (per-arm offset). Noise ⇒ the gaps are irregularly
+  // spaced (not periodic); dustSegment raises the cutoff ⇒ more/longer gaps.
+  const seg = Math.max(0, Math.min(1, dust.dustSegment));
+  const segScale = dust.dustSegmentScale;
+  const segSeed = noiseSeed + 2027;
+  const cot = 1 / Math.tan(cfg.armPitch_deg * DEG2RAD);
+  // BAR: the dust avoids the bar-dominated centre exactly like the stars (same radial fade-in gate).
+  const barred = cfg.barLength_kpc > 0.05 && cfg.barFraction > 0.001;
+  const cutLo = cfg.barLength_kpc * 0.55;
+  const cutHi = cfg.barLength_kpc * 1.1;
+  const spr = 2 + dust.dustThickness * 9; // finer sprites for thinner lanes
   for (let i = 0; i < n; i++) {
     let Rkpc = gamma2(rng, cfg.discScaleLength_kpc * 1.05);
-    let phi = rng() * Math.PI * 2;
-    // Accept onto the arm leading-edge wave AND onto a high-frequency ridged-noise filament field, so the
-    // dust breaks into spindly tendrils that detach and recoalesce along the arm instead of a smooth lane.
-    for (let t = 0; t < 7; t++) {
-      const armP = (1 + dust.dustContrast * armWave(Rkpc, phi + lead, cfg, noiseSeed)) / denom;
-      let filP = 1;
-      if (fil > 0) {
-        const fx = Rkpc * Math.cos(phi) * fScale;
-        const fz = Rkpc * Math.sin(phi) * fScale;
-        filP = (1 - fil) + fil * ridge(fx, fz, fSeed, 2.4);
-      }
-      if (rng() <= armP * filP) break;
-      Rkpc = gamma2(rng, cfg.discScaleLength_kpc * 1.05);
-      phi = rng() * Math.PI * 2;
-    }
     if (Rkpc > cfg.rMax_kpc) Rkpc = cfg.rMax_kpc * Math.sqrt(rng());
+    // Place on the k-th arm's WARPED ridge (φ′ where armWave(R, φ′)=1), one warp-correction iteration.
+    const lnTerm = cot * Math.log(Math.max(Rkpc, 0.05) / MW.R0_kpc);
+    const k = Math.floor(rng() * m) % m;
+    let phiP = lnTerm + (2 * Math.PI * k) / m;
+    const g0 = warpAmp * fbm(Rkpc * Math.cos(phiP) * ns, Rkpc * Math.sin(phiP) * ns, noiseSeed);
+    phiP = lnTerm + (2 * Math.PI * k - g0) / m;
+    const gj = (rng() + rng() + rng() - 1.5) * 2; // ≈ N(0,1)
+    phiP += (gj * jitterSigma) / m;               // narrow perpendicular spread = the lane thickness
+    const phi = phiP - lead;                       // dust azimuth (wave is evaluated at φ′ = phi + lead)
+    // Carve the placed lane: bar cutoff, noise-randomised segmentation, cross-lane tendrils (all cull).
+    let ok = true;
+    if (barred && rng() > smoothstep(cutLo, cutHi, Rkpc)) ok = false;
+    if (ok && seg > 0) {
+      const s01 = 0.5 + 0.5 * valueNoise(Rkpc * segScale, k * 5.0, segSeed); // along-arm gaps, per arm
+      if (rng() > smoothstep(seg * 0.65, seg * 0.65 + 0.3, s01)) ok = false;
+    }
+    if (ok && fil > 0) {
+      const fx = Rkpc * Math.cos(phi) * fScale;
+      const fz = Rkpc * Math.sin(phi) * fScale;
+      if (rng() > (1 - fil) + fil * ridge(fx, fz, fSeed, 2.4)) ok = false;
+    }
     const u = Math.min(0.9995, Math.max(0.0005, rng()));
     const i3 = i * 3;
     positions[i3] = Rkpc * Math.cos(phi) * KPC_TO_WU;
     positions[i3 + 1] = hz * Math.atanh(2 * u - 1) * KPC_TO_WU;
     positions[i3 + 2] = Rkpc * Math.sin(phi) * KPC_TO_WU;
-    sizes[i] = 6 + rng() * 12;                           // finer dust so tendrils read as threads, not blobs
-    opacities[i] = dust.dustOpacity * (0.45 + 0.55 * rng());
+    sizes[i] = spr * (0.4 + 0.6 * rng());
+    opacities[i] = ok ? dust.dustOpacity * (0.45 + 0.55 * rng()) : 0; // cull carved-out grains ⇒ clean gaps
   }
   return { positions, sizes, opacities, count: n };
 }
