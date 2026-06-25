@@ -97,12 +97,14 @@ export function applyStroke(stroke: BrushStroke, editState: EditState, cells: Po
   return dirty;
 }
 
-/** Rebuild the whole EditState by replaying an op-list (used by undo). Returns the rebuilt state +
- *  the union of dirtied regions (so the caller re-bakes exactly what changed). */
-export function rebuildEditState(ops: readonly BrushStroke[], cells: PopulatedCell[]): {
-  editState: EditState; dirty: Set<string>;
-} {
+/** Rebuild the whole EditState by replaying an op-list (used by undo/scrub). An optional `seed` seeds a
+ *  base layer first (e.g. the image-density map) so the brush ops replay ON TOP of it. Returns the rebuilt
+ *  state + the union of dirtied regions from the OPS (the seed's regions are the caller's concern). */
+export function rebuildEditState(
+  ops: readonly BrushStroke[], cells: PopulatedCell[], seed?: (es: EditState) => void,
+): { editState: EditState; dirty: Set<string> } {
   const editState = emptyEditState();
+  seed?.(editState);
   const dirty = new Set<string>();
   for (const op of ops) {
     for (const rk of applyStroke(op, editState, cells)) dirty.add(rk);
