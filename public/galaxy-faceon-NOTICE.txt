@@ -1,0 +1,7 @@
+galaxy-faceon.png is derived from the NASA/JPL-Caltech artist's concept of the
+Milky Way (top-down / face-on), Spitzer Science Center release ssc2008-10a
+(https://www.spitzer.caltech.edu/image/ssc2008-10a-the-milky-way), credit
+NASA/JPL-Caltech / R. Hurt (SSC/Caltech). NASA/JPL-Caltech imagery is free to
+use with credit. Downsampled to 1024x1024 PNG and used as a luminance map to
+drive the in-plane star density of the galaxy build-out (galaxy-image-density.ts).
+The original high-resolution source is NOT committed (see /Assets in .gitignore).

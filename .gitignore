@@ -9,3 +9,6 @@ coverage
 .idea
 .vscode
 scripts/.cache/
+
+# Raw high-res source art (derive small density maps into public/ instead)
+/Assets/

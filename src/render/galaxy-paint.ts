@@ -16,6 +16,7 @@ import {
   PerspectiveCamera, Plane, Raycaster, Scene, Vector2, Vector3,
 } from 'three';
 import { WU_PER_PC } from '../core/metrics';
+import { asset } from '../core/assets';
 import { Broker } from './scale-manager';
 import { HOME_GAL_PC } from './sector/sector';
 import {
@@ -23,6 +24,9 @@ import {
   type GalaxyBuildout,
 } from './sector/galaxy-buildout';
 import { applyStroke, rebuildEditState, strokeCentroidXZ, type BrushStroke, type FalloffKind } from './galaxy-paint-ops';
+import {
+  applyImageDensity, loadFaceOnDensity, DEFAULT_IMAGE_CONFIG, type DensityImage,
+} from './galaxy-image-density';
 import { PointerSource, type BrushSample, type GestureSink } from './paint-input';
 import type { RendererContext } from './renderer';
 
@@ -246,6 +250,26 @@ export function bootGalaxyPaint(renderCtx: RendererContext, shouldRun: () => boo
   const cells = buildout.enumeration.cells;
   let pos = 0;
   let onStatus: (() => void) | null = null; // wired by the HUD below
+
+  // ── Image-density BASE layer: a face-on Milky Way drives the in-plane star density (REPLACE); brush ops
+  //    replay ON TOP of it. Re-baking all ~1.5k regions is progressive (a queue drained a few per frame),
+  //    so applying / re-tuning the image MORPHS the galaxy over a couple of seconds instead of stalling. ──
+  let densityImg: DensityImage | null = null;
+  const imgCfg = { ...DEFAULT_IMAGE_CONFIG };
+  const seedBase = (es: typeof buildout.editState): void => {
+    if (densityImg) applyImageDensity(es, cells, densityImg, imgCfg);
+  };
+  const rebakeQueue: string[] = [];
+  const queueAllRegions = (): void => {
+    rebakeQueue.length = 0;
+    for (const rk of buildout.generated.keys()) rebakeQueue.push(rk);
+  };
+  // Re-derive the whole field (image base + brush ops up to pos) and progressively re-bake every region.
+  const applyImage = (): void => {
+    buildout.editState = rebuildEditState(opList.slice(0, pos).map((o) => o.stroke), cells, seedBase).editState;
+    queueAllRegions();
+    onStatus?.();
+  };
   // A held Apple Pencil press re-emits as several down/up cycles → several commits → a stacked, blown-out
   // deposit (very bright in add, very dark in erase) while a finger stays clean. Drop a stroke that lands
   // within COALESCE_MS of the previous AND overlaps it AND shares its mode ⇒ one physical press = one dab.
@@ -282,7 +306,7 @@ export function bootGalaxyPaint(renderCtx: RendererContext, shouldRun: () => boo
     const hi = Math.max(pos, t);
     const affected = new Set<string>();
     for (let i = lo; i < hi; i++) for (const rk of opList[i].dirty) affected.add(rk);
-    buildout.editState = rebuildEditState(opList.slice(0, t).map((o) => o.stroke), cells).editState;
+    buildout.editState = rebuildEditState(opList.slice(0, t).map((o) => o.stroke), cells, seedBase).editState;
     for (const rk of affected) regenerateRegion(buildout, rk);
     pos = t;
     onStatus?.();
@@ -343,6 +367,15 @@ export function bootGalaxyPaint(renderCtx: RendererContext, shouldRun: () => boo
         <option value="linear">linear</option><option value="smooth">smooth</option><option value="ease">ease</option><option value="hard">hard</option>
       </select>
     </div>
+    <div style="margin-top:10px;border-top:1px solid #2a3340;padding-top:8px;display:flex;gap:6px">
+      <button id="pp-img" style="flex:2;padding:6px;background:#1c2530;color:#cfd8e3;border:1px solid #34404e;border-radius:5px;cursor:pointer;font:inherit">Apply&nbsp;MW</button>
+      <button id="pp-imgclear" style="flex:1;padding:6px;background:#1c2530;color:#cfd8e3;border:1px solid #34404e;border-radius:5px;cursor:pointer;font:inherit">Clear</button>
+    </div>
+    <div style="margin-top:6px;font-size:11px;opacity:0.8">density&nbsp;<span id="pp-idv">0.40</span>&nbsp;·&nbsp;contrast&nbsp;<span id="pp-icv">1.6</span><br>rot&nbsp;<span id="pp-irv">0</span>°&nbsp;·&nbsp;span&nbsp;<span id="pp-isv">32</span>kpc</div>
+    <input id="pp-id" type="range" min="0.05" max="1.5" step="0.05" value="0.4" style="width:100%;accent-color:#6aa3ff" title="overall density">
+    <input id="pp-ic" type="range" min="0.5" max="3" step="0.1" value="1.6" style="width:100%;accent-color:#6aa3ff" title="arm contrast">
+    <input id="pp-ir" type="range" min="-180" max="180" step="2" value="0" style="width:100%;accent-color:#6aa3ff" title="rotation (align Sol/arms)">
+    <input id="pp-is" type="range" min="20" max="50" step="1" value="32" style="width:100%;accent-color:#6aa3ff" title="image span (kpc)">
     <div style="margin-top:10px;display:flex;justify-content:space-between;align-items:baseline">
       <span>History</span><span id="pp-hlbl" style="opacity:0.8">0&nbsp;/&nbsp;0</span></div>
     <input id="pp-hist" type="range" min="0" max="0" step="1" value="0" style="width:100%;accent-color:#6aa3ff" title="scrub the paint history">
@@ -370,6 +403,35 @@ export function bootGalaxyPaint(renderCtx: RendererContext, shouldRun: () => boo
     eraseBtn.style.borderColor = erasing ? '#7a3a3a' : '#34404e';
   });
   falloffSel.addEventListener('change', () => { brush.falloff = falloffSel.value as FalloffKind; });
+  // ── Image-density controls. Re-applying re-bakes the whole galaxy, so debounce the sliders to rAF. ──
+  const imgBtn = hud.querySelector<HTMLButtonElement>('#pp-img')!;
+  const imgClearBtn = hud.querySelector<HTMLButtonElement>('#pp-imgclear')!;
+  const idEl = hud.querySelector<HTMLInputElement>('#pp-id')!;
+  const icEl = hud.querySelector<HTMLInputElement>('#pp-ic')!;
+  const irEl = hud.querySelector<HTMLInputElement>('#pp-ir')!;
+  const isEl = hud.querySelector<HTMLInputElement>('#pp-is')!;
+  let imgPending = false;
+  const reapplyImage = (): void => {
+    if (imgPending || !densityImg) return;
+    imgPending = true;
+    requestAnimationFrame(() => { imgPending = false; applyImage(); });
+  };
+  idEl.addEventListener('input', () => { imgCfg.strength = +idEl.value; hud.querySelector('#pp-idv')!.textContent = (+idEl.value).toFixed(2); reapplyImage(); });
+  icEl.addEventListener('input', () => { imgCfg.contrast = +icEl.value; hud.querySelector('#pp-icv')!.textContent = (+icEl.value).toFixed(1); reapplyImage(); });
+  irEl.addEventListener('input', () => { imgCfg.rotationRad = (+irEl.value * Math.PI) / 180; hud.querySelector('#pp-irv')!.textContent = irEl.value; reapplyImage(); });
+  isEl.addEventListener('input', () => { imgCfg.spanPc = +isEl.value * 1000; hud.querySelector('#pp-isv')!.textContent = isEl.value; reapplyImage(); });
+  const loadAndApply = async (): Promise<void> => {
+    if (!densityImg) {
+      imgBtn.textContent = 'loading…';
+      try { densityImg = await loadFaceOnDensity(asset('galaxy-faceon.png')); }
+      catch (e) { imgBtn.textContent = 'Apply MW'; console.warn('[galaxy-paint] density image load failed', e); return; }
+    }
+    imgBtn.textContent = 'Re-apply';
+    applyImage();
+  };
+  imgBtn.addEventListener('click', () => { void loadAndApply(); });
+  imgClearBtn.addEventListener('click', () => { densityImg = null; imgBtn.textContent = 'Apply MW'; applyImage(); });
+  void loadAndApply(); // auto-apply the face-on Milky Way on boot so the galaxy takes its shape
   // Scrub the history. rAF-debounce so a fast drag coalesces to one rebuild per frame (smooth, not janky).
   let pendingHist: number | null = null;
   let histScheduled = false;
@@ -414,7 +476,11 @@ export function bootGalaxyPaint(renderCtx: RendererContext, shouldRun: () => boo
     requestAnimationFrame(loop);
     Broker.setRebase(galacticCentreAbs); // R fixed at the galactic centre
     cam.update();
-    updateGalaxyBuildout(buildout, 4);
+    updateGalaxyBuildout(buildout, 4); // initial fill (already-baked regions pick up the image base)
+    for (let i = 0; i < 6 && rebakeQueue.length; i++) { // progressive re-bake after an image (re)apply
+      const rk = rebakeQueue.shift();
+      if (rk) regenerateRegion(buildout, rk);
+    }
     renderCtx.renderer.render(scene, camera);
   }
   loop();
