@@ -47,6 +47,7 @@ const KNOBS: Knob[] = [
   { label: 'bulge', key: 'bulgeFraction', min: 0, max: 0.4, step: 0.01 },
   { label: 'bar amount', key: 'barFraction', min: 0, max: 0.25, step: 0.01 },
   { label: 'bar length', key: 'barLength_kpc', min: 0, max: 8, step: 0.2, unit: 'kpc' },
+  { label: 'rim feather', key: 'rimFeather', min: 0, max: 1, step: 0.05 },
 ];
 
 const PREVIEW_COUNT = 550_000; // fast resample while dragging; full count on release

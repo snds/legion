@@ -66,6 +66,7 @@ const cloudFragmentShader = /* glsl */ `
   uniform float uBarLo;       // inner spiral fade-in (kpc)
   uniform float uBarHi;
   uniform float uClumpFreq;   // per kpc
+  uniform float uRimFeather;  // 0 = sharp rim … 1 = ragged, wispy feathered edge
   uniform float uIntensity;
   uniform vec3 uArmGlow;      // cool blue arm emission
   uniform vec3 uHiiGlow;      // warm pink HII knots
@@ -111,8 +112,14 @@ const cloudFragmentShader = /* glsl */ `
   float densityAt(vec3 p, out float clumpHi) {
     clumpHi = 0.0;
     float R = length(p.xz) / uKpcWu;
-    if (R > uRmax) return 0.0;
     float phi = atan(p.z, p.x);
+    // Feathered, ragged rim (matches the star rim): the truncation radius wiggles with φ and falls off
+    // softly, so the diffuse gas CONTINUES the feathering past the discrete-star streamers.
+    float rmod = uRimFeather * 0.32 * fbm2(vec2(cos(phi), sin(phi)) * 4.3 + 50.0);
+    float rmid = uRmax * (1.0 + rmod);
+    float rw = 0.06 + 0.30 * uRimFeather;
+    float rimFall = 1.0 - smoothstep(rmid * (1.0 - rw), rmid * (1.0 + rw * 0.7), R);
+    if (rimFall <= 0.002) return 0.0;
     float y = abs(p.y) / uKpcWu;
     float radial = exp(-R / uRd);
     float vert = exp(-y / uHgas);
@@ -122,7 +129,7 @@ const cloudFragmentShader = /* glsl */ `
     // the smooth arm spine survives. The bright knots (clumpHi) drive the warm HII tint.
     float cl = 0.55 + 0.45 * fbm2(p.xz / uKpcWu * uClumpFreq + vec2(p.y / uKpcWu * 0.4, 0.0));
     clumpHi = smoothstep(0.85, 1.05, cl) * ridge;
-    return radial * vert * barCut * ridge * cl;
+    return radial * vert * barCut * ridge * cl * rimFall;
   }
 
   void main() {
@@ -175,7 +182,7 @@ export interface GalaxyCloud {
 export function buildGalaxyCloud(
   cfg: PhysicalGalaxyConfig, cloud: CloudConfig = DEFAULT_CLOUD_CONFIG,
 ): GalaxyCloud {
-  const halfXZ = cfg.rMax_kpc * KPC_TO_WU * 1.05;
+  const halfXZ = cfg.rMax_kpc * KPC_TO_WU * 1.4; // room for the feathered rim to reach past rMax
   const halfY = (cloud.scaleHeight_pc / 1000) * KPC_TO_WU * 4.0; // ±4 scale heights covers the gas layer
   const geo = new BoxGeometry(halfXZ * 2, halfY * 2, halfXZ * 2);
   const material = new ShaderMaterial({
@@ -199,6 +206,7 @@ export function buildGalaxyCloud(
       uBarLo: { value: cfg.barLength_kpc * 0.55 },
       uBarHi: { value: cfg.barLength_kpc * 1.1 },
       uClumpFreq: { value: cloud.clumpScale },
+      uRimFeather: { value: cfg.rimFeather },
       uIntensity: { value: cloud.intensity },
       uArmGlow: { value: new Color(0.26, 0.42, 0.85) },
       uHiiGlow: { value: new Color(0.95, 0.5, 0.72) },
@@ -230,6 +238,7 @@ export function buildGalaxyCloud(
     u.uBarLo!.value = c.barLength_kpc * 0.55;
     u.uBarHi!.value = c.barLength_kpc * 1.1;
     u.uClumpFreq!.value = cl.clumpScale;
+    u.uRimFeather!.value = c.rimFeather;
     u.uIntensity!.value = cl.intensity;
   };
   const update = (camera: Camera, steps: number): void => {

@@ -3,7 +3,9 @@
 // (vs a smooth disc), so the structure emerges from the model rather than being painted.
 
 import { describe, it, expect } from 'vitest';
-import { samplePhysicalGalaxy, DEFAULT_PHYSICAL_CONFIG, type PhysicalGalaxyData } from './galaxy-physical';
+import {
+  samplePhysicalGalaxy, DEFAULT_PHYSICAL_CONFIG, RIM_MAX, type PhysicalGalaxyData,
+} from './galaxy-physical';
 
 const meanCrest = (d: PhysicalGalaxyData): number => {
   let s = 0;
@@ -38,6 +40,8 @@ describe('samplePhysicalGalaxy', () => {
       rMax = Math.max(rMax, Rkpc);
     }
     expect(within / d.count).toBeGreaterThan(0.6); // exponential disc ⇒ centrally concentrated
-    expect(rMax).toBeLessThanOrEqual(DEFAULT_PHYSICAL_CONFIG.rMax_kpc + 0.01); // radial cutoff honoured
+    // The rim is FEATHERED (not a hard truncation): streamers reach past rMax up to the RIM_MAX bound.
+    expect(rMax).toBeLessThanOrEqual(DEFAULT_PHYSICAL_CONFIG.rMax_kpc * RIM_MAX + 0.01);
+    expect(rMax).toBeGreaterThan(DEFAULT_PHYSICAL_CONFIG.rMax_kpc); // and it DOES feather out past rMax
   });
 });

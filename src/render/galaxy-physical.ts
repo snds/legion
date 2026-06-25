@@ -48,6 +48,8 @@ export interface PhysicalGalaxyConfig {
   armNoise: number;     // 0 = clean spiral → ~1 = flocculent (phase warp amplitude)
   armNoiseScale: number; // spatial frequency of the warp (per kpc)
   armBlue: number;      // 0 = no tint → 1 = strong blue arm tint
+  // disc rim
+  rimFeather: number;   // 0 = sharp truncation → 1 = ragged, wispy edge with arm streamers past rMax
   // star-forming knots
   clumpFraction: number; // share of disc stars gathered into knots
   clumpScale_pc: number; // knot radius
@@ -71,6 +73,7 @@ export const DEFAULT_PHYSICAL_CONFIG: PhysicalGalaxyConfig = {
   armNoise: 0.4,
   armNoiseScale: 0.55,
   armBlue: 0.7,
+  rimFeather: 0.6,
   clumpFraction: 0.13,
   clumpScale_pc: 220,
   barFraction: 0.08,
@@ -131,6 +134,20 @@ function smoothstep(a: number, b: number, x: number): number {
   return t * t * (3 - 2 * t);
 }
 
+const RIM_FREQ = 4.3;       // azimuthal frequency of the ragged rim (how many streamers/gaps round the edge)
+export const RIM_MAX = 1.4; // hard outer bound = rMax · this (streamers feather out to here at most)
+
+/** Rim acceptance ∈ [0,1]: a soft, azimuthally noise-modulated disc edge. The truncation radius itself
+ *  wiggles with φ (fbm) so the rim is RAGGED — arms feather out as streamers in some directions, pull in
+ *  as gaps in others — and the falloff widens with rimFeather (0 ≈ sharp, 1 = very wispy). */
+function rimGate(Rkpc: number, phi: number, cfg: PhysicalGalaxyConfig, noiseSeed: number): number {
+  const fe = Math.max(0, Math.min(1, cfg.rimFeather));
+  const mod = fe * 0.32 * fbm(Math.cos(phi) * RIM_FREQ, Math.sin(phi) * RIM_FREQ, noiseSeed + 5077);
+  const mid = cfg.rMax_kpc * (1 + mod);
+  const w = 0.05 + 0.28 * fe; // transition half-width: tight when sharp, broad/wispy when feathered
+  return 1 - smoothstep(mid * (1 - w), mid * (1 + w * 0.6), Rkpc);
+}
+
 /** Draw one disc star: exponential R, φ rejection-sampled into the warped arm wave AND beyond the bar —
  *  the bar TRUNCATES the inner spiral (a longer bar carves a larger hole and pushes the arms out, so bar
  *  length changes spiral density rather than overlaying particles); sech² height. */
@@ -142,14 +159,15 @@ function sampleDiscStar(rng: () => number, cfg: PhysicalGalaxyConfig, noiseSeed:
   const barred = cfg.barLength_kpc > 0.05 && cfg.barFraction > 0.001;
   let Rkpc = gamma2(rng, cfg.discScaleLength_kpc);
   let phi = rng() * Math.PI * 2;
-  for (let t = 0; t < 6; t++) {
+  for (let t = 0; t < 8; t++) {
     const armP = (1 + cfg.armContrast * armWave(Rkpc, phi, cfg, noiseSeed)) / denom;
     const barP = barred ? smoothstep(cutLo, cutHi, Rkpc) : 1;
-    if (rng() <= armP * barP) break;
+    const rimP = rimGate(Rkpc, phi, cfg, noiseSeed); // feathered, ragged disc edge (no hard truncation)
+    if (rng() <= armP * barP * rimP) break;
     Rkpc = gamma2(rng, cfg.discScaleLength_kpc);
     phi = rng() * Math.PI * 2;
   }
-  if (Rkpc > cfg.rMax_kpc) Rkpc = cfg.rMax_kpc * Math.sqrt(rng());
+  if (Rkpc > cfg.rMax_kpc * RIM_MAX) Rkpc = cfg.rMax_kpc * RIM_MAX; // hard spatial bound for the array
   const hz = cfg.thinScaleHeight_pc / 1000;
   const u = Math.min(0.9995, Math.max(0.0005, rng()));
   return {
@@ -213,8 +231,8 @@ export function samplePhysicalGalaxy(
       const u = Math.min(0.9995, Math.max(0.0005, rng()));
       let kx = c.gx + r * Math.cos(a);
       let kz = c.gz + r * Math.sin(a);
-      const kR = Math.hypot(kx, kz); // a knot scattered past the rim is pulled back to the cutoff
-      if (kR > cfg.rMax_kpc) { const f = cfg.rMax_kpc / kR; kx *= f; kz *= f; }
+      const kR = Math.hypot(kx, kz); // a knot scattered past the feathered rim is pulled back to the bound
+      if (kR > cfg.rMax_kpc * RIM_MAX) { const f = (cfg.rMax_kpc * RIM_MAX) / kR; kx *= f; kz *= f; }
       s = {
         gx: kx,
         gz: kz,
@@ -346,7 +364,7 @@ export function sampleDust(
   const spr = 2 + dust.dustThickness * 9; // finer sprites for thinner lanes
   for (let i = 0; i < n; i++) {
     let Rkpc = gamma2(rng, cfg.discScaleLength_kpc * 1.05);
-    if (Rkpc > cfg.rMax_kpc) Rkpc = cfg.rMax_kpc * Math.sqrt(rng());
+    if (Rkpc > cfg.rMax_kpc * RIM_MAX) Rkpc = cfg.rMax_kpc * RIM_MAX;
     // Place on the k-th arm's WARPED ridge (φ′ where armWave(R, φ′)=1), one warp-correction iteration.
     const lnTerm = cot * Math.log(Math.max(Rkpc, 0.05) / MW.R0_kpc);
     const k = Math.floor(rng() * m) % m;
@@ -356,9 +374,10 @@ export function sampleDust(
     const gj = (rng() + rng() + rng() - 1.5) * 2; // ≈ N(0,1)
     phiP += (gj * jitterSigma) / m;               // narrow perpendicular spread = the lane thickness
     const phi = phiP - lead;                       // dust azimuth (wave is evaluated at φ′ = phi + lead)
-    // Carve the placed lane: bar cutoff, noise-randomised segmentation, cross-lane tendrils (all cull).
+    // Carve the placed lane: feathered rim, bar cutoff, noise-randomised segmentation, tendrils (all cull).
     let ok = true;
-    if (barred && rng() > smoothstep(cutLo, cutHi, Rkpc)) ok = false;
+    if (rng() > rimGate(Rkpc, phi, cfg, noiseSeed)) ok = false; // dust lanes feather out at the rim too
+    if (ok && barred && rng() > smoothstep(cutLo, cutHi, Rkpc)) ok = false;
     if (ok && seg > 0) {
       const s01 = 0.5 + 0.5 * valueNoise(Rkpc * segScale, k * 5.0, segSeed); // along-arm gaps, per arm
       if (rng() > smoothstep(seg * 0.65, seg * 0.65 + 0.3, s01)) ok = false;
