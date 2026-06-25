@@ -11,14 +11,66 @@
 // per-region re-bake on top of this shell.
 // ═══════════════════════════════════════════════════════════════════
 
-import { Group, MathUtils, PerspectiveCamera, Scene, Vector3 } from 'three';
+import {
+  Group, MathUtils, PerspectiveCamera, Plane, Raycaster, Scene, Vector2, Vector3,
+} from 'three';
 import { WU_PER_PC } from '../core/metrics';
 import { Broker } from './scale-manager';
 import { HOME_GAL_PC } from './sector/sector';
 import {
-  createGalaxyBuildout, disposeGalaxyBuildout, updateGalaxyBuildout, type GalaxyBuildout,
+  createGalaxyBuildout, disposeGalaxyBuildout, regenerateRegion, updateGalaxyBuildout,
+  type GalaxyBuildout,
 } from './sector/galaxy-buildout';
+import { applyStroke, rebuildEditState, type BrushStroke } from './galaxy-paint-ops';
 import type { RendererContext } from './renderer';
+
+/** Density brush: LEFT-drag stamps along the galactic plane (scene y=0 ↔ galactocentric y=0). Pressure
+ *  (depth off the plane) is Phase 2; here every stamp lands on the plane. Emits a BrushStroke on release. */
+export class PaintBrush {
+  radiusPc = 1500;
+  intensity = 0.8;
+  private painting = false;
+  private path: Array<[number, number, number]> = [];
+  private readonly raycaster = new Raycaster();
+  private readonly plane = new Plane(new Vector3(0, 1, 0), 0); // scene y=0 = the galactic mid-plane
+  private readonly _ndc = new Vector2();
+  private readonly _hit = new Vector3();
+  private readonly cleanup: Array<() => void> = [];
+
+  constructor(cam: PerspectiveCamera, el: HTMLCanvasElement, onStroke: (s: BrushStroke) => void) {
+    const toGalPc = (e: PointerEvent): [number, number, number] | null => {
+      const rect = el.getBoundingClientRect();
+      this._ndc.set(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
+      this.raycaster.setFromCamera(this._ndc, cam);
+      if (!this.raycaster.ray.intersectPlane(this.plane, this._hit)) return null;
+      return [this._hit.x / WU_PER_PC, this._hit.y / WU_PER_PC, this._hit.z / WU_PER_PC];
+    };
+    const onDown = (e: PointerEvent): void => {
+      if (e.button !== 0) return; // left only
+      this.painting = true; this.path = [];
+      const p = toGalPc(e); if (p) this.path.push(p);
+    };
+    const onMove = (e: PointerEvent): void => {
+      if (!this.painting) return;
+      const p = toGalPc(e); if (p) this.path.push(p);
+    };
+    const onUp = (): void => {
+      if (!this.painting) return;
+      this.painting = false;
+      if (this.path.length) onStroke({ brushType: 'density-add', path: this.path, radiusPc: this.radiusPc, intensity: this.intensity });
+    };
+    el.addEventListener('pointerdown', onDown);
+    el.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    this.cleanup.push(
+      () => el.removeEventListener('pointerdown', onDown),
+      () => el.removeEventListener('pointermove', onMove),
+      () => window.removeEventListener('pointerup', onUp),
+    );
+  }
+
+  dispose(): void { for (const fn of this.cleanup) fn(); }
+}
 
 /** A turntable free-fly camera: drag = orbit, shift/middle-drag = pan the focus, wheel = dolly.
  *  Operates in scene space (the galaxy is centred at the origin via the pinned rebase). */
@@ -40,10 +92,11 @@ export class OrbitFlyCamera {
   constructor(readonly cam: PerspectiveCamera, el: HTMLElement, initialDistance: number) {
     this.distance = initialDistance;
     const onDown = (e: PointerEvent): void => {
+      if (e.button === 0) return; // LEFT is the brush — the camera navigates on RIGHT / MIDDLE
       this.mode = e.shiftKey || e.button === 1 ? 'pan' : 'orbit';
       this.lastX = e.clientX; this.lastY = e.clientY;
-      el.setPointerCapture?.(e.pointerId);
     };
+    const onCtx = (e: Event): void => e.preventDefault(); // right-drag orbit shouldn't open the menu
     const onMove = (e: PointerEvent): void => {
       if (!this.mode) return;
       const dx = e.clientX - this.lastX;
@@ -59,7 +112,7 @@ export class OrbitFlyCamera {
         this.target.addScaledVector(this._right, -dx * s).addScaledVector(this._up, dy * s);
       }
     };
-    const onUp = (e: PointerEvent): void => { this.mode = null; el.releasePointerCapture?.(e.pointerId); };
+    const onUp = (): void => { this.mode = null; };
     const onWheel = (e: WheelEvent): void => {
       e.preventDefault();
       this.distance = MathUtils.clamp(this.distance * Math.exp(e.deltaY * 0.001), 1e5, 2e8);
@@ -68,11 +121,13 @@ export class OrbitFlyCamera {
     el.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
     el.addEventListener('wheel', onWheel, { passive: false });
+    el.addEventListener('contextmenu', onCtx);
     this.cleanup.push(
       () => el.removeEventListener('pointerdown', onDown),
       () => el.removeEventListener('pointermove', onMove),
       () => window.removeEventListener('pointerup', onUp),
       () => el.removeEventListener('wheel', onWheel),
+      () => el.removeEventListener('contextmenu', onCtx),
     );
   }
 
@@ -90,6 +145,9 @@ export interface GalaxyPaint {
   readonly scene: Scene;
   readonly camera: PerspectiveCamera;
   readonly cam: OrbitFlyCamera;
+  readonly brush: PaintBrush;
+  readonly undo: () => void;
+  readonly opList: Array<{ stroke: BrushStroke; dirty: Set<string> }>;
   readonly buildout: GalaxyBuildout;
 }
 
@@ -104,6 +162,26 @@ export function bootGalaxyPaint(renderCtx: RendererContext, shouldRun: () => boo
 
   const buildout = createGalaxyBuildout(root);
   const cam = new OrbitFlyCamera(camera, renderCtx.canvas, 3.5e7); // frames the ~30 kpc disc
+
+  // ── The non-destructive paint loop: stroke → op-list → edit field → per-region re-bake ──
+  const opList: Array<{ stroke: BrushStroke; dirty: Set<string> }> = [];
+  const cells = buildout.enumeration.cells;
+  let onStatus: (() => void) | null = null; // wired by the HUD below
+  const onStroke = (stroke: BrushStroke): void => {
+    const dirty = applyStroke(stroke, buildout.editState, cells);
+    opList.push({ stroke, dirty });
+    for (const rk of dirty) regenerateRegion(buildout, rk);
+    onStatus?.();
+  };
+  const undo = (): void => {
+    const last = opList.pop();
+    if (!last) return;
+    const rebuilt = rebuildEditState(opList.map((o) => o.stroke), cells);
+    buildout.editState = rebuilt.editState;        // the op-list is canonical; rebuild the field from it
+    for (const rk of last.dirty) regenerateRegion(buildout, rk); // re-bake exactly what the stroke touched
+    onStatus?.();
+  };
+  const brush = new PaintBrush(camera, renderCtx.canvas, onStroke);
 
   // Pin the floating-origin rebase at the galactic centre → the galaxy sits centred at the scene
   // origin (a region at galPc renders at galPc·WU_PER_PC). Fixed, so the orbit camera is plain.
@@ -123,13 +201,40 @@ export function bootGalaxyPaint(renderCtx: RendererContext, shouldRun: () => boo
     if (el) el.style.display = 'none';
   }
 
-  const paint: GalaxyPaint = { scene, camera, cam, buildout };
+  // ── Minimal vanilla-DOM HUD (Photoshop-style panel arrives in Phase 8) ──
+  const hud = document.createElement('div');
+  hud.id = 'paint-hud';
+  hud.style.cssText = 'position:fixed;top:14px;left:14px;z-index:100000;width:210px;padding:12px 14px;'
+    + 'background:rgba(12,15,20,0.88);border:1px solid #2a3340;border-radius:8px;color:#cfd8e3;'
+    + 'font:12px/1.7 ui-monospace,SFMono-Regular,monospace;letter-spacing:0.02em;user-select:none';
+  hud.innerHTML = `
+    <div style="font-weight:600;letter-spacing:0.08em;margin-bottom:10px;color:#eaf0f7">GALAXY&nbsp;PAINT</div>
+    <div>Brush radius&nbsp;<span id="pp-rv">1500</span>&nbsp;pc</div>
+    <input id="pp-r" type="range" min="250" max="6000" step="50" value="1500" style="width:100%;accent-color:#6aa3ff">
+    <div style="margin-top:6px">Intensity&nbsp;<span id="pp-iv">0.80</span></div>
+    <input id="pp-i" type="range" min="0" max="3" step="0.05" value="0.8" style="width:100%;accent-color:#6aa3ff">
+    <button id="pp-undo" style="margin-top:10px;width:100%;padding:6px;background:#1c2530;color:#cfd8e3;
+      border:1px solid #34404e;border-radius:5px;cursor:pointer;font:inherit">Undo&nbsp;(0)</button>
+    <div id="pp-help" style="margin-top:8px;opacity:0.55;font-size:11px">
+      left-drag&nbsp;paint&nbsp;·&nbsp;right-drag&nbsp;orbit<br>shift+right&nbsp;pan&nbsp;·&nbsp;wheel&nbsp;zoom</div>`;
+  document.body.appendChild(hud);
+  const rEl = hud.querySelector<HTMLInputElement>('#pp-r')!;
+  const iEl = hud.querySelector<HTMLInputElement>('#pp-i')!;
+  const undoBtn = hud.querySelector<HTMLButtonElement>('#pp-undo')!;
+  rEl.addEventListener('input', () => { brush.radiusPc = +rEl.value; hud.querySelector('#pp-rv')!.textContent = rEl.value; });
+  iEl.addEventListener('input', () => { brush.intensity = +iEl.value; hud.querySelector('#pp-iv')!.textContent = (+iEl.value).toFixed(2); });
+  undoBtn.addEventListener('click', undo);
+  onStatus = (): void => { undoBtn.textContent = `Undo (${opList.length})`; };
+
+  const paint: GalaxyPaint = { scene, camera, cam, brush, undo, opList, buildout };
   (globalThis as Record<string, unknown>).__paint = paint;
   console.info(`[galaxy-paint] paint mode — ${buildout.queue.length} regions queued; drag=orbit, shift-drag=pan, wheel=dolly`);
 
   function loop(): void {
     if (!shouldRun()) {
       cam.dispose();
+      brush.dispose();
+      hud.remove();
       window.removeEventListener('resize', onResize);
       disposeGalaxyBuildout(buildout);
       return;
