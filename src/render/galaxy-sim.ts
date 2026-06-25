@@ -48,6 +48,14 @@ const KNOBS: Knob[] = [
   { label: 'bar amount', key: 'barFraction', min: 0, max: 0.25, step: 0.01 },
   { label: 'bar length', key: 'barLength_kpc', min: 0, max: 8, step: 0.2, unit: 'kpc' },
   { label: 'rim feather', key: 'rimFeather', min: 0, max: 1, step: 0.05 },
+  { label: 'spurs', key: 'armSpurAmp', min: 0, max: 0.8, step: 0.05 },
+  { label: 'spur open', key: 'armSpurOpen', min: 1.3, max: 3, step: 0.1 },
+  { label: 'spur count', key: 'armSpurDensity', min: 2, max: 6, step: 0.1 },
+  { label: 'spur sharp', key: 'armSpurSharp', min: 1.5, max: 6, step: 0.1 },
+  { label: 'spur warp', key: 'armSpurWarp', min: 0, max: 0.6, step: 0.05 },
+  { label: 'inter-arm', key: 'armSpurInterArm', min: 0, max: 0.6, step: 0.05 },
+  { label: 'spur flank', key: 'armSpurFlank', min: 0.1, max: 1, step: 0.05 },
+  { label: 'spur reach', key: 'armSpurReach', min: 0.2, max: 0.9, step: 0.05 },
 ];
 
 const PREVIEW_COUNT = 550_000; // fast resample while dragging; full count on release
@@ -140,6 +148,8 @@ export function bootGalaxySim(renderCtx: RendererContext, shouldRun: () => boole
     + '<input id="gs-dsegs" type="range" min="0.6" max="6" step="0.2" value="3.0" style="width:100%;accent-color:#6aa3ff">'
     + '<div style="margin-top:5px;display:flex;justify-content:space-between"><span>dust tendrils</span><span id="gs-v-dfil" style="opacity:0.8">0.7</span></div>'
     + '<input id="gs-dfil" type="range" min="0" max="1" step="0.05" value="0.7" style="width:100%;accent-color:#6aa3ff">'
+    + '<div style="margin-top:5px;display:flex;justify-content:space-between"><span>dust feather</span><span id="gs-v-dfth" style="opacity:0.8">0.6</span></div>'
+    + '<input id="gs-dfth" type="range" min="0" max="1.5" step="0.05" value="0.6" style="width:100%;accent-color:#6aa3ff">'
     + '<div style="margin-top:5px;display:flex;justify-content:space-between"><span>gas clouds</span><span id="gs-v-cloud" style="opacity:0.8">0.9</span></div>'
     + '<input id="gs-cloud" type="range" min="0" max="2" step="0.05" value="0.9" style="width:100%;accent-color:#6aa3ff">';
   html += '<div style="margin-top:9px;border-top:1px solid #2a3340;padding-top:7px;display:flex;justify-content:space-between">'
@@ -209,6 +219,13 @@ export function bootGalaxySim(renderCtx: RendererContext, shouldRun: () => boole
     previewRebuild();
   });
   dfilEl.addEventListener('change', () => { rebuild(); });
+  const dfthEl = hud.querySelector<HTMLInputElement>('#gs-dfth')!;
+  dfthEl.addEventListener('input', () => {
+    dustCfg.dustFeather = +dfthEl.value;
+    hud.querySelector('#gs-v-dfth')!.textContent = (+dfthEl.value).toFixed(2);
+    previewRebuild();
+  });
+  dfthEl.addEventListener('change', () => { rebuild(); });
   const cloudEl = hud.querySelector<HTMLInputElement>('#gs-cloud')!;
   cloudEl.addEventListener('input', () => {
     cloudCfg.intensity = +cloudEl.value;

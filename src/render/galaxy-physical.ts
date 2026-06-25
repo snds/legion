@@ -48,6 +48,15 @@ export interface PhysicalGalaxyConfig {
   armNoise: number;     // 0 = clean spiral → ~1 = flocculent (phase warp amplitude)
   armNoiseScale: number; // spatial frequency of the warp (per kpc)
   armBlue: number;      // 0 = no tint → 1 = strong blue arm tint
+  // spurs / feathers — a steeper-pitch secondary log-spiral added onto the arm ridge (one shared field)
+  armSpurAmp: number;      // master spur strength (0 = today's galaxy exactly)
+  armSpurOpen: number;     // how much MORE open spurs are than the arm (cot2 = cot/this)
+  armSpurDensity: number;  // secondary harmonic + arc-length spacing (keep NON-integer × armCount)
+  armSpurSharp: number;    // tooth power: low = broad branch-arms, high = thin wispy feathers
+  armSpurWarp: number;     // domain-warp on the spur phase (Y-branches); the one new noise tap
+  armSpurInterArm: number; // inter-arm fill: faint minor spurs in the gaps (0 = empty gaps)
+  armSpurFlank: number;    // trailing-flank gate softness (spurs sit opposite the dust lane)
+  armSpurReach: number;    // half-interarm length clamp for on-arm spurs (fraction of the gap)
   // disc rim
   rimFeather: number;   // 0 = sharp truncation → 1 = ragged, wispy edge with arm streamers past rMax
   // star-forming knots
@@ -73,6 +82,14 @@ export const DEFAULT_PHYSICAL_CONFIG: PhysicalGalaxyConfig = {
   armNoise: 0.4,
   armNoiseScale: 0.55,
   armBlue: 0.7,
+  armSpurAmp: 0.35,
+  armSpurOpen: 2.0,
+  armSpurDensity: 3.5,
+  armSpurSharp: 3.0,
+  armSpurWarp: 0.3,
+  armSpurInterArm: 0.3,
+  armSpurFlank: 0.4,
+  armSpurReach: 0.5,
   rimFeather: 0.6,
   clumpFraction: 0.13,
   clumpScale_pc: 220,
@@ -109,15 +126,62 @@ function fbm(x: number, z: number, seed: number): number {
     + 0.1 * valueNoise(x * 4.31, z * 4.31, seed + 19);
 }
 
-/** Warped m-arm density-wave value at galactocentric (R kpc, φ): +1 on an arm ridge, −1 between. The
- *  phase is bent by FBM so arms branch/feather instead of forming a perfect logarithmic spiral. */
+/** Shared spur/feather field ∈ [0,∞) ADDED onto the arm ridge (one new fbm tap). A steeper-pitch
+ *  (cot2 = cot/open) secondary log-spiral, gated to the trailing/convex flank (sin ψ > 0, opposite the
+ *  dust lane), arc-length-quasiperiodic in L=ln(R/R0) so spur COUNT rises with R, with a half-interarm
+ *  length clamp on the on-arm spurs and a faint inter-arm minor-spur copy. `flankSign`/`openMul` let the
+ *  dust feathers reuse this on the LEADING flank at a shallower pitch. amp ≤ 0 ⇒ exact back-compat. */
+function spurField(
+  Rkpc: number, phi: number, psi: number, warp: number, cot: number, L: number,
+  cfg: PhysicalGalaxyConfig, noiseSeed: number, flankSign = 1, openMul = 1, clampReach = true,
+): number {
+  const amp = cfg.armSpurAmp;
+  if (amp <= 0) return 0;
+  // bar inner-fade (identical gate to the star/dust bar cutoff) so spurs never scribble the bulge
+  const inner = (cfg.barLength_kpc > 0.05 && cfg.barFraction > 0.001)
+    ? smoothstep(cfg.barLength_kpc * 0.55, cfg.barLength_kpc * 1.1, Rkpc) : 1;
+  if (inner <= 0) return 0;
+  const cot2 = cot / (cfg.armSpurOpen * openMul); // smaller cot ⇒ more open/radial than the arm
+  const m2 = cfg.armCount * cfg.armSpurDensity;   // non-integer × m ⇒ no phase-lock into extra main arms
+  const ns2 = cfg.armNoiseScale * 1.7;
+  const w2 = cfg.armSpurWarp * Math.PI * fbm(Rkpc * Math.cos(phi) * ns2, Rkpc * Math.sin(phi) * ns2, noiseSeed + 1013);
+  const psi2 = m2 * (phi - cot2 * L) + cfg.armSpurDensity * warp + w2; // shear: tip lags rotation (trails)
+  const tooth = Math.pow(Math.max(0, Math.cos(psi2)), cfg.armSpurSharp); // thin trailing filament / comb
+  const c = Math.cos(psi); // == base ridge (reused)
+  const onArm = smoothstep(-0.2, 0.6, c);
+  const gap = 1 - smoothstep(-0.6, 0.2, c);
+  const u = flankSign * Math.sin(psi); // +u = the spur flank (trailing for stars, leading for dust)
+  const trail = smoothstep(0, cfg.armSpurFlank, u);
+  const reach = clampReach ? 1 - smoothstep(cfg.armSpurReach, Math.min(0.97, cfg.armSpurReach + 0.45), u) : 1;
+  const onArmTerm = onArm * tooth * trail * reach;
+  const gapTerm = cfg.armSpurInterArm * gap * tooth; // faint cross-gap feathers (no flank/reach clamp)
+  return amp * (onArmTerm + gapTerm) * inner;
+}
+
+/** Warped m-arm density-wave value at galactocentric (R kpc, φ): +1 on an arm ridge, −1 between, with
+ *  spur/feather offshoots added (clamped to ≤ +1 so the rejection acceptance stays in [0,1]). */
 function armWave(Rkpc: number, phi: number, cfg: PhysicalGalaxyConfig, noiseSeed: number): number {
   const cot = 1 / Math.tan(cfg.armPitch_deg * DEG2RAD);
+  const L = Math.log(Math.max(Rkpc, 0.05) / MW.R0_kpc);
   const x = Rkpc * Math.cos(phi) * cfg.armNoiseScale;
   const z = Rkpc * Math.sin(phi) * cfg.armNoiseScale;
   const warp = cfg.armNoise * Math.PI * fbm(x, z, noiseSeed);
-  const psi = cfg.armCount * (phi - cot * Math.log(Math.max(Rkpc, 0.05) / MW.R0_kpc)) + warp;
-  return Math.cos(psi);
+  const psi = cfg.armCount * (phi - cot * L) + warp;
+  const base = Math.cos(psi) + spurField(Rkpc, phi, psi, warp, cot, L, cfg, noiseSeed);
+  return Math.max(-1, Math.min(1, base));
+}
+
+/** Dust feathers: the same spur field on the LEADING/dust flank (−sin gate) at a shallower pitch, no reach
+ *  clamp (kept short by the high tooth power). Returns ≥ 0; used as a multiplicative opacity boost. */
+function dustFeatherField(
+  Rkpc: number, phiWave: number, cfg: PhysicalGalaxyConfig, noiseSeed: number,
+): number {
+  if (cfg.armSpurAmp <= 0) return 0;
+  const cot = 1 / Math.tan(cfg.armPitch_deg * DEG2RAD);
+  const L = Math.log(Math.max(Rkpc, 0.05) / MW.R0_kpc);
+  const warp = cfg.armNoise * Math.PI * fbm(Rkpc * Math.cos(phiWave) * cfg.armNoiseScale, Rkpc * Math.sin(phiWave) * cfg.armNoiseScale, noiseSeed);
+  const psi = cfg.armCount * (phiWave - cot * L) + warp;
+  return spurField(Rkpc, phiWave, psi, warp, cot, L, cfg, noiseSeed, -1, 0.65, false) / Math.max(0.01, cfg.armSpurAmp);
 }
 
 /** gamma(shape 2, scale s): the R·exp(−R/s) radial law of an exponential disc. */
@@ -307,11 +371,13 @@ export interface DustConfig {
   dustSegmentScale: number;   // segment frequency along the arm (per kpc) — smaller = longer segments/gaps
   dustFilament: number;       // 0 = smooth … 1 = spindly cross-lane tendrils that detach + recoalesce
   dustFilamentScale: number;  // spatial frequency of the tendrils (per kpc)
+  dustFeather: number;        // 0 = none … darkens leading-edge dust feathers off the arms (needs armSpurAmp)
 }
 
 export const DEFAULT_DUST_CONFIG: DustConfig = {
   dustCount: 700_000, dustOpacity: 0.16, dustScaleHeight_pc: 90, dustLeadDeg: 18,
   dustThickness: 0.16, dustSegment: 0.55, dustSegmentScale: 3.0, dustFilament: 0.7, dustFilamentScale: 2.1,
+  dustFeather: 0.6,
 };
 
 /** Ridged value-noise FBM ∈ [0,1]: thin bright RIDGES at the FBM zero-crossings — the threads/tendrils
@@ -362,6 +428,7 @@ export function sampleDust(
   const cutLo = cfg.barLength_kpc * 0.55;
   const cutHi = cfg.barLength_kpc * 1.1;
   const spr = 2 + dust.dustThickness * 9; // finer sprites for thinner lanes
+  const feath = Math.max(0, Math.min(1, dust.dustFeather));
   for (let i = 0; i < n; i++) {
     let Rkpc = gamma2(rng, cfg.discScaleLength_kpc * 1.05);
     if (Rkpc > cfg.rMax_kpc * RIM_MAX) Rkpc = cfg.rMax_kpc * RIM_MAX;
@@ -373,6 +440,12 @@ export function sampleDust(
     phiP = lnTerm + (2 * Math.PI * k - g0) / m;
     const gj = (rng() + rng() + rng() - 1.5) * 2; // ≈ N(0,1)
     phiP += (gj * jitterSigma) / m;               // narrow perpendicular spread = the lane thickness
+    // DUST FEATHERS: a dustFeather-weighted share excursions off the lane onto the leading-flank feather
+    // teeth (dark filaments branching off the dust edge), kept only where a feather actually lives.
+    if (feath > 0 && cfg.armSpurAmp > 0 && rng() < 0.5 * feath) {
+      const phiTry = phiP - (0.15 + 0.85 * rng()) * (Math.PI / m); // excursion toward the leading flank
+      if (rng() < dustFeatherField(Rkpc, phiTry, cfg, noiseSeed)) phiP = phiTry; // landed on a feather
+    }
     const phi = phiP - lead;                       // dust azimuth (wave is evaluated at φ′ = phi + lead)
     // Carve the placed lane: feathered rim, bar cutoff, noise-randomised segmentation, tendrils (all cull).
     let ok = true;
