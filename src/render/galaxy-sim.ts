@@ -7,6 +7,7 @@
 
 import { Group, PerspectiveCamera, Points, Scene, ShaderMaterial } from 'three';
 import { OrbitFlyCamera } from './galaxy-paint';
+import { MW, KMS_PER_KPC_TO_RAD_PER_MYR } from './mw-model';
 import {
   samplePhysicalGalaxy, buildPhysicalGalaxyPoints, DEFAULT_PHYSICAL_CONFIG,
   type PhysicalGalaxyConfig, type PhysicalGalaxyData,
@@ -59,6 +60,11 @@ export function bootGalaxySim(renderCtx: RendererContext, shouldRun: () => boole
   const cfg: PhysicalGalaxyConfig = { ...DEFAULT_PHYSICAL_CONFIG };
   let seed = 1;
   let current: { points: Points; material: ShaderMaterial } | null = null;
+  let warp = 0;    // warp rate (Myr per real second); 0 = frozen "moment in time"
+  let lastMs = 0;
+  // The spiral pattern rotates rigidly at the pattern speed Ωp (rad/Myr) — that's what a density wave does
+  // and it never winds; individual stars streaming THROUGH the pattern is a finer (per-star) refinement.
+  const patternOmega = MW.spiralPatternSpeed_kms_kpc * KMS_PER_KPC_TO_RAD_PER_MYR;
 
   const sim = { scene, camera } as GalaxySim;
 
@@ -106,6 +112,9 @@ export function bootGalaxySim(renderCtx: RendererContext, shouldRun: () => boole
       + `<span id="gs-v-${k.key}" style="opacity:0.8">${v}${k.unit ?? ''}</span></div>`
       + `<input id="gs-${k.key}" type="range" min="${k.min}" max="${k.max}" step="${k.step}" value="${v}" style="width:100%;accent-color:#6aa3ff">`;
   }
+  html += '<div style="margin-top:9px;border-top:1px solid #2a3340;padding-top:7px;display:flex;justify-content:space-between">'
+    + '<span>time warp</span><span id="gs-v-warp" style="opacity:0.8">0 Myr/s</span></div>'
+    + '<input id="gs-warp" type="range" min="0" max="15" step="0.5" value="0" style="width:100%;accent-color:#6aa3ff">';
   html += '<button id="gs-reseed" style="margin-top:10px;width:100%;padding:6px;background:#1c2530;color:#cfd8e3;'
     + 'border:1px solid #34404e;border-radius:5px;cursor:pointer;font:inherit">Re-seed</button>'
     + '<div style="margin-top:8px;opacity:0.55;font-size:11px">drag/2-finger orbit · pinch/wheel zoom</div>';
@@ -129,6 +138,11 @@ export function bootGalaxySim(renderCtx: RendererContext, shouldRun: () => boole
     el.addEventListener('input', () => { set(); previewRebuild(); });
     el.addEventListener('change', () => { set(); rebuild(); }); // full count on release
   }
+  const warpEl = hud.querySelector<HTMLInputElement>('#gs-warp')!;
+  warpEl.addEventListener('input', () => {
+    warp = +warpEl.value;
+    hud.querySelector('#gs-v-warp')!.textContent = `${warp} Myr/s`;
+  });
   hud.querySelector<HTMLButtonElement>('#gs-reseed')!.addEventListener('click', () => { seed++; rebuild(); });
 
   (globalThis as Record<string, unknown>).__galsim = sim;
@@ -143,6 +157,10 @@ export function bootGalaxySim(renderCtx: RendererContext, shouldRun: () => boole
       return;
     }
     requestAnimationFrame(loop);
+    const now = performance.now();
+    const dt = lastMs ? (now - lastMs) / 1000 : 0;
+    lastMs = now;
+    if (warp !== 0) root.rotation.y += patternOmega * warp * dt; // rigid pattern rotation (no winding)
     cam.update();
     renderCtx.renderer.render(scene, camera);
   }
