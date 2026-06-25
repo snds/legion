@@ -181,7 +181,14 @@ export class PointerSource {
     this.spacingPx = opts.spacingPx ?? 0;
     this.stabilize = opts.stabilize ?? 0;
     this.gestureSink = opts.gesture;
-    el.style.touchAction = 'none'; // hand every touch sequence to us (kills iOS pinch/double-tap-zoom on the canvas)
+    // iPad/Safari hardening so a Pencil tap PAINTS instead of starting a text selection / Scribble (which
+    // fires pointercancel and drops the stroke — the "inconsistent" pen). touch-action kills scroll/zoom;
+    // user-select + touch-callout kill selection + the long-press callout. preventDefault on the pointer +
+    // touch streams (below) seals it.
+    el.style.touchAction = 'none';
+    el.style.userSelect = 'none';
+    el.style.setProperty('-webkit-user-select', 'none');
+    el.style.setProperty('-webkit-touch-callout', 'none');
 
     const startStroke = (e: PointerEvent): void => {
       try { el.setPointerCapture(e.pointerId); } catch { /* best-effort: synthetic / already-released pointer */ }
@@ -218,6 +225,7 @@ export class PointerSource {
 
     const onDown = (e: PointerEvent): void => {
       if (e.pointerType === 'touch') {
+        e.preventDefault(); // stop Safari treating the touch/Pencil-tap as a selection or scroll
         this.touchPts.set(e.pointerId, { x: e.clientX, y: e.clientY });
         if (this.gestureSink && this.touchPts.size === 2) {
           // 2nd finger ⇒ promote to navigation: cancel any in-progress single-finger paint (no stray dab).
@@ -231,6 +239,7 @@ export class PointerSource {
         return;
       }
       if (!isPaintDown(e)) return; // right/middle mouse → the camera owns it
+      e.preventDefault(); // a pen/left-mouse tap PAINTS; never let it start a selection
       startStroke(e);
     };
 
@@ -278,15 +287,26 @@ export class PointerSource {
       cancelStroke(e.pointerId);
     };
 
-    el.addEventListener('pointerdown', onDown);
+    // Kill the iOS selection / Scribble / pinch defaults on the canvas. preventDefault on the touch stream
+    // does NOT suppress pointer events (separate streams), so painting still receives every pointer.
+    const suppress = (e: Event): void => e.preventDefault();
+    el.addEventListener('pointerdown', onDown, { passive: false });
     el.addEventListener('pointermove', onMove, { passive: false });
     window.addEventListener('pointerup', onUp);
     el.addEventListener('pointercancel', onCancel);
+    el.addEventListener('selectstart', suppress);
+    el.addEventListener('gesturestart', suppress); // Safari page pinch-zoom — we handle pinch ourselves
+    el.addEventListener('touchstart', suppress, { passive: false });
+    el.addEventListener('touchmove', suppress, { passive: false });
     this.cleanup.push(
       () => el.removeEventListener('pointerdown', onDown),
       () => el.removeEventListener('pointermove', onMove),
       () => window.removeEventListener('pointerup', onUp),
       () => el.removeEventListener('pointercancel', onCancel),
+      () => el.removeEventListener('selectstart', suppress),
+      () => el.removeEventListener('gesturestart', suppress),
+      () => el.removeEventListener('touchstart', suppress),
+      () => el.removeEventListener('touchmove', suppress),
     );
   }
 

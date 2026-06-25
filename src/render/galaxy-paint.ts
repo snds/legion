@@ -219,6 +219,9 @@ export interface GalaxyPaint {
   readonly cam: OrbitFlyCamera;
   readonly brush: PaintBrush;
   readonly undo: () => void;
+  readonly redo: () => void;
+  /** Scrub the paint history to an absolute op-list position (the timeline scrubber). */
+  readonly setHistory: (target: number) => void;
   readonly opList: Array<{ stroke: BrushStroke; dirty: Set<string> }>;
   readonly buildout: GalaxyBuildout;
 }
@@ -235,24 +238,38 @@ export function bootGalaxyPaint(renderCtx: RendererContext, shouldRun: () => boo
   const buildout = createGalaxyBuildout(root);
   const cam = new OrbitFlyCamera(camera, renderCtx.canvas, 3.5e7); // frames the ~30 kpc disc
 
-  // ── The non-destructive paint loop: stroke → op-list → edit field → per-region re-bake ──
+  // ── The non-destructive paint loop + a SCRUBBABLE history. opList is the canonical timeline of every
+  //    stroke ever; `pos` is how many are currently applied (field = replay of opList[0..pos)). Painting
+  //    while scrubbed back drops the redo-future (standard branching undo). The op-list being canonical is
+  //    exactly what makes a scrubber cheap — any position is just a prefix replay. ──
   const opList: Array<{ stroke: BrushStroke; dirty: Set<string> }> = [];
   const cells = buildout.enumeration.cells;
+  let pos = 0;
   let onStatus: (() => void) | null = null; // wired by the HUD below
   const onStroke = (stroke: BrushStroke): void => {
-    const dirty = applyStroke(stroke, buildout.editState, cells);
+    if (pos < opList.length) opList.length = pos; // a new stroke truncates the redo-future
+    const dirty = applyStroke(stroke, buildout.editState, cells); // editState is at `pos` → correct
     opList.push({ stroke, dirty });
+    pos = opList.length;
     for (const rk of dirty) regenerateRegion(buildout, rk);
     onStatus?.();
   };
-  const undo = (): void => {
-    const last = opList.pop();
-    if (!last) return;
-    const rebuilt = rebuildEditState(opList.map((o) => o.stroke), cells);
-    buildout.editState = rebuilt.editState;        // the op-list is canonical; rebuild the field from it
-    for (const rk of last.dirty) regenerateRegion(buildout, rk); // re-bake exactly what the stroke touched
+  // Scrub to an absolute history position: rebuild the field from that prefix, then re-bake ONLY the
+  // regions that differ (the union of dirtied sets crossed between the old and new position).
+  const setHistory = (target: number): void => {
+    const t = Math.max(0, Math.min(opList.length, Math.round(target)));
+    if (t === pos) return;
+    const lo = Math.min(pos, t);
+    const hi = Math.max(pos, t);
+    const affected = new Set<string>();
+    for (let i = lo; i < hi; i++) for (const rk of opList[i].dirty) affected.add(rk);
+    buildout.editState = rebuildEditState(opList.slice(0, t).map((o) => o.stroke), cells).editState;
+    for (const rk of affected) regenerateRegion(buildout, rk);
+    pos = t;
     onStatus?.();
   };
+  const undo = (): void => setHistory(pos - 1);
+  const redo = (): void => setHistory(pos + 1);
   // Two-finger touch navigation (Phase 2e): a 2nd finger cancels the in-progress paint and drives the
   // SAME camera state the mouse path mutates — drag → orbit, pinch → dolly. One code path, two adapters.
   const gesture: GestureSink = {
@@ -281,6 +298,14 @@ export function bootGalaxyPaint(renderCtx: RendererContext, shouldRun: () => boo
     if (el) el.style.display = 'none';
   }
 
+  // iPad: keep the PAGE itself from selecting text / rubber-band scrolling while painting (the canvas is
+  // hardened in PointerSource; this covers the body + HUD). Restored on teardown.
+  const prevUserSelect = document.body.style.userSelect;
+  const prevOverscroll = document.body.style.overscrollBehavior;
+  document.body.style.userSelect = 'none';
+  document.body.style.setProperty('-webkit-user-select', 'none');
+  document.body.style.overscrollBehavior = 'none';
+
   // ── Minimal vanilla-DOM HUD (Photoshop-style panel arrives in Phase 8) ──
   const hud = document.createElement('div');
   hud.id = 'paint-hud';
@@ -299,14 +324,21 @@ export function bootGalaxyPaint(renderCtx: RendererContext, shouldRun: () => boo
         <option value="linear">linear</option><option value="smooth">smooth</option><option value="ease">ease</option><option value="hard">hard</option>
       </select>
     </div>
-    <button id="pp-undo" style="margin-top:8px;width:100%;padding:6px;background:#1c2530;color:#cfd8e3;
-      border:1px solid #34404e;border-radius:5px;cursor:pointer;font:inherit">Undo&nbsp;(0)</button>
+    <div style="margin-top:10px;display:flex;justify-content:space-between;align-items:baseline">
+      <span>History</span><span id="pp-hlbl" style="opacity:0.8">0&nbsp;/&nbsp;0</span></div>
+    <input id="pp-hist" type="range" min="0" max="0" step="1" value="0" style="width:100%;accent-color:#6aa3ff" title="scrub the paint history">
+    <div style="display:flex;gap:6px;margin-top:6px">
+      <button id="pp-undo" style="flex:1;padding:6px;background:#1c2530;color:#cfd8e3;border:1px solid #34404e;border-radius:5px;cursor:pointer;font:inherit">Undo</button>
+      <button id="pp-redo" style="flex:1;padding:6px;background:#1c2530;color:#cfd8e3;border:1px solid #34404e;border-radius:5px;cursor:pointer;font:inherit">Redo</button>
+    </div>
     <div id="pp-help" style="margin-top:8px;opacity:0.55;font-size:11px">
       pen / 1-finger / left-drag&nbsp;paint<br>2-finger / right-drag&nbsp;orbit&nbsp;·&nbsp;pinch / wheel&nbsp;zoom</div>`;
   document.body.appendChild(hud);
   const rEl = hud.querySelector<HTMLInputElement>('#pp-r')!;
   const iEl = hud.querySelector<HTMLInputElement>('#pp-i')!;
   const undoBtn = hud.querySelector<HTMLButtonElement>('#pp-undo')!;
+  const redoBtn = hud.querySelector<HTMLButtonElement>('#pp-redo')!;
+  const histEl = hud.querySelector<HTMLInputElement>('#pp-hist')!;
   const eraseBtn = hud.querySelector<HTMLButtonElement>('#pp-erase')!;
   const falloffSel = hud.querySelector<HTMLSelectElement>('#pp-falloff')!;
   rEl.addEventListener('input', () => { brush.radiusPc = +rEl.value; hud.querySelector('#pp-rv')!.textContent = rEl.value; });
@@ -319,10 +351,32 @@ export function bootGalaxyPaint(renderCtx: RendererContext, shouldRun: () => boo
     eraseBtn.style.borderColor = erasing ? '#7a3a3a' : '#34404e';
   });
   falloffSel.addEventListener('change', () => { brush.falloff = falloffSel.value as FalloffKind; });
+  // Scrub the history. rAF-debounce so a fast drag coalesces to one rebuild per frame (smooth, not janky).
+  let pendingHist: number | null = null;
+  let histScheduled = false;
+  histEl.addEventListener('input', () => {
+    pendingHist = +histEl.value;
+    if (histScheduled) return;
+    histScheduled = true;
+    requestAnimationFrame(() => {
+      histScheduled = false;
+      if (pendingHist !== null) { setHistory(pendingHist); pendingHist = null; }
+    });
+  });
   undoBtn.addEventListener('click', undo);
-  onStatus = (): void => { undoBtn.textContent = `Undo (${opList.length})`; };
+  redoBtn.addEventListener('click', redo);
+  onStatus = (): void => {
+    histEl.max = String(opList.length);
+    if (pendingHist === null) histEl.value = String(pos); // don't fight the user mid-drag
+    hud.querySelector('#pp-hlbl')!.textContent = `${pos} / ${opList.length}`;
+    undoBtn.disabled = pos === 0;
+    redoBtn.disabled = pos === opList.length;
+    undoBtn.style.opacity = pos === 0 ? '0.4' : '1';
+    redoBtn.style.opacity = pos === opList.length ? '0.4' : '1';
+  };
+  onStatus();
 
-  const paint: GalaxyPaint = { scene, camera, cam, brush, undo, opList, buildout };
+  const paint: GalaxyPaint = { scene, camera, cam, brush, undo, redo, setHistory, opList, buildout };
   (globalThis as Record<string, unknown>).__paint = paint;
   console.info(`[galaxy-paint] paint mode — ${buildout.queue.length} regions queued; drag=orbit, shift-drag=pan, wheel=dolly`);
 
@@ -331,6 +385,9 @@ export function bootGalaxyPaint(renderCtx: RendererContext, shouldRun: () => boo
       cam.dispose();
       brush.dispose();
       hud.remove();
+      document.body.style.userSelect = prevUserSelect;
+      document.body.style.removeProperty('-webkit-user-select');
+      document.body.style.overscrollBehavior = prevOverscroll;
       window.removeEventListener('resize', onResize);
       disposeGalaxyBuildout(buildout);
       return;
