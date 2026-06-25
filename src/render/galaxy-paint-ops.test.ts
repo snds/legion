@@ -35,6 +35,20 @@ describe('applyStroke', () => {
     expect(dirty.has('R:10|0|0')).toBe(false);
   });
 
+  it('scales each cell\'s deposit by its strongest stamp\'s pen pressure (feather vs firm)', () => {
+    const editState = emptyEditState();
+    const stroke: BrushStroke = {
+      brushType: 'density-add',
+      path: [[125, 125, 125], [375, 125, 125]], // stamp on cell (0,0,0), stamp on cell (1,0,0)
+      pressures: [1, 0.5],                       // firm on cell 0, feather on cell 1
+      radiusPc: 200,                             // r<250 ⇒ each stamp only reaches its own cell
+      intensity: 1,
+    };
+    applyStroke(stroke, editState, cells);
+    expect(editState.modifiers.get('0|0|0')!.densityFactor).toBeCloseTo(2.0, 5); // 1 + 1*1*1
+    expect(editState.modifiers.get('1|0|0')!.densityFactor).toBeCloseTo(1.5, 5); // 1 + 1*1*0.5
+  });
+
   it('accumulates across strokes; rebuildEditState replays the op-list deterministically', () => {
     const stroke: BrushStroke = { brushType: 'density-add', path: [[125, 125, 125]], radiusPc: 200, intensity: 0.5 };
     const a = emptyEditState();

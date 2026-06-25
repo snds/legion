@@ -22,17 +22,19 @@ import {
   type GalaxyBuildout,
 } from './sector/galaxy-buildout';
 import { applyStroke, rebuildEditState, type BrushStroke } from './galaxy-paint-ops';
-import { PointerSource } from './paint-input';
+import { PointerSource, type BrushSample } from './paint-input';
 import type { RendererContext } from './renderer';
 
 /** Density brush: a paint pointer (pen, touch, or LEFT mouse) drags stamps along the galactic plane
  *  (scene y=0 ↔ galactocentric y=0). Input arrives already normalized as BrushSamples from PointerSource,
- *  so pen / touch / mouse are one path and each sample carries pressure + tilt for Phase 2b/2f. Off-plane
- *  depth is a later mode; here every stamp lands on the plane. Emits a BrushStroke on release. */
+ *  so pen / touch / mouse are one path. Phase 2b records each stamp's PRESSURE alongside the path, so a
+ *  firm pen press lays a dense core and a feather touch seeds faint density (mouse resolves to pressure 1
+ *  ⇒ desktop is byte-identical). Off-plane depth is a later mode; here every stamp lands on the plane. */
 export class PaintBrush {
   radiusPc = 1500;
   intensity = 0.8;
   private path: Array<[number, number, number]> = [];
+  private pressures: number[] = [];
   private readonly raycaster = new Raycaster();
   private readonly plane = new Plane(new Vector3(0, 1, 0), 0); // scene y=0 = the galactic mid-plane
   private readonly _ndc = new Vector2();
@@ -40,23 +42,25 @@ export class PaintBrush {
   private readonly source: PointerSource;
 
   constructor(cam: PerspectiveCamera, el: HTMLCanvasElement, onStroke: (s: BrushStroke) => void) {
-    // Raycast a canvas-relative CSS-px point (already rect-corrected by PointerSource) onto the plane.
-    const push = (sx: number, sy: number): void => {
+    // Raycast a sample (canvas-relative CSS px, already rect-corrected by PointerSource) onto the plane;
+    // record its pressure aligned 1:1 with the path so the deposit can vary along the drag.
+    const push = (s: BrushSample): void => {
       const rect = el.getBoundingClientRect();
-      this._ndc.set((sx / rect.width) * 2 - 1, -(sy / rect.height) * 2 + 1);
+      this._ndc.set((s.x / rect.width) * 2 - 1, -(s.y / rect.height) * 2 + 1);
       this.raycaster.setFromCamera(this._ndc, cam);
       if (this.raycaster.ray.intersectPlane(this.plane, this._hit)) {
         this.path.push([this._hit.x / WU_PER_PC, this._hit.y / WU_PER_PC, this._hit.z / WU_PER_PC]);
+        this.pressures.push(s.pressure);
       }
     };
-    // Phase 2a: passthrough (no coalesce / resample / stabilize) ⇒ byte-identical to the old mouse path.
+    // Phase 2a/2b: passthrough (no coalesce / resample / stabilize) ⇒ byte-identical to the old mouse path.
     this.source = new PointerSource(el, {}, {
-      onStrokeBegin: (s) => { this.path = []; push(s.x, s.y); },
-      onStrokeSample: (s) => push(s.x, s.y),
+      onStrokeBegin: (s) => { this.path = []; this.pressures = []; push(s); },
+      onStrokeSample: (s) => push(s),
       onStrokeEnd: () => {
-        if (this.path.length) onStroke({ brushType: 'density-add', path: this.path, radiusPc: this.radiusPc, intensity: this.intensity });
+        if (this.path.length) onStroke({ brushType: 'density-add', path: this.path, pressures: this.pressures, radiusPc: this.radiusPc, intensity: this.intensity });
       },
-      onStrokeCancel: () => { this.path = []; },
+      onStrokeCancel: () => { this.path = []; this.pressures = []; },
     });
   }
 
