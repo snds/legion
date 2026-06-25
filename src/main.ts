@@ -148,6 +148,14 @@ async function boot(): Promise<void> {
   _hmr.renderer = renderCtx.renderer;
   console.info(`[Legion] Renderer: ${renderCtx.backend.toUpperCase()}`);
 
+  // ── N-body micro-benchmark (?nbody-bench, P1) — measure the real all-pairs force-solver ceiling on
+  // THIS hardware (laptop + iPad) to ground the "no live N-body at 2-3M" decision with our own numbers. ──
+  if (new URLSearchParams(location.search).has('nbody-bench')) {
+    const { runNbodyBench } = await import('./render/nbody-bench');
+    void runNbodyBench();
+    return;
+  }
+
   // ── Independent galaxy PAINT MODE (?paint-mode) — the standalone painting-tool shell: only the
   // full-galaxy build-out + a free-fly camera, none of the system-tier streaming/transitions. ──
   if (new URLSearchParams(location.search).has('paint-mode')) {
