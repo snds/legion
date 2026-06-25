@@ -4,7 +4,8 @@
 
 import { describe, it, expect } from 'vitest';
 import {
-  DEFAULT_PRESSURE, resolvePressure, tiltToAltAz, passesSpacing, applyStabilize, type BrushSample,
+  DEFAULT_PRESSURE, resolvePressure, tiltToAltAz, passesSpacing, applyStabilize, twoFingerState,
+  type BrushSample,
 } from './paint-input';
 
 const sample = (x: number, y: number): BrushSample => ({
@@ -58,6 +59,19 @@ describe('passesSpacing', () => {
     expect(passesSpacing(sample(0, 0), 100, 0, 0)).toBe(true);  // spacing off
     expect(passesSpacing(sample(0, 0), 3, 0, 6)).toBe(false);   // 3px < 6px ⇒ skip
     expect(passesSpacing(sample(0, 0), 8, 0, 6)).toBe(true);    // 8px ≥ 6px ⇒ accept
+  });
+});
+
+describe('twoFingerState', () => {
+  it('computes the centroid and finger spread that two-finger orbit/pinch are diffed from', () => {
+    const flat = twoFingerState(0, 0, 10, 0);
+    expect(flat.cx).toBe(5);
+    expect(flat.cy).toBe(0);
+    expect(flat.spread).toBe(10);
+    const diag = twoFingerState(0, 0, 6, 8); // 6-8-10 triangle
+    expect(diag.cx).toBe(3);
+    expect(diag.cy).toBe(4);
+    expect(diag.spread).toBeCloseTo(10, 6);
   });
 });
 

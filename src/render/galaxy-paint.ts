@@ -22,7 +22,7 @@ import {
   type GalaxyBuildout,
 } from './sector/galaxy-buildout';
 import { applyStroke, rebuildEditState, type BrushStroke } from './galaxy-paint-ops';
-import { PointerSource, type BrushSample } from './paint-input';
+import { PointerSource, type BrushSample, type GestureSink } from './paint-input';
 import type { RendererContext } from './renderer';
 
 /** Density brush: a paint pointer (pen, touch, or LEFT mouse) drags stamps along the galactic plane
@@ -41,7 +41,7 @@ export class PaintBrush {
   private readonly _hit = new Vector3();
   private readonly source: PointerSource;
 
-  constructor(cam: PerspectiveCamera, el: HTMLCanvasElement, onStroke: (s: BrushStroke) => void) {
+  constructor(cam: PerspectiveCamera, el: HTMLCanvasElement, onStroke: (s: BrushStroke) => void, gesture?: GestureSink) {
     // Raycast a sample (canvas-relative CSS px, already rect-corrected by PointerSource) onto the plane;
     // record its pressure aligned 1:1 with the path so the deposit can vary along the drag.
     const push = (s: BrushSample): void => {
@@ -54,7 +54,8 @@ export class PaintBrush {
       }
     };
     // Phase 2a/2b: passthrough (no coalesce / resample / stabilize) ⇒ byte-identical to the old mouse path.
-    this.source = new PointerSource(el, {}, {
+    // The gesture sink (Phase 2e) routes a 2nd touch finger to two-finger navigation.
+    this.source = new PointerSource(el, { gesture }, {
       onStrokeBegin: (s) => { this.path = []; this.pressures = []; push(s); },
       onStrokeSample: (s) => push(s),
       onStrokeEnd: () => {
@@ -67,8 +68,11 @@ export class PaintBrush {
   dispose(): void { this.source.dispose(); }
 }
 
-/** A turntable free-fly camera: drag = orbit, shift/middle-drag = pan the focus, wheel = dolly.
- *  Operates in scene space (the galaxy is centred at the origin via the pinned rebase). */
+const ORBIT_SPEED = 0.005; // rad per screen px, shared by mouse-drag and two-finger orbit
+
+/** A turntable free-fly camera. Mouse: right-drag = orbit, shift/middle-drag = pan, wheel = dolly.
+ *  Touch (via the gesture sink): two-finger drag = orbit, pinch = dolly. Operates in scene space
+ *  (the galaxy is centred at the origin via the pinned rebase). */
 export class OrbitFlyCamera {
   /** Scene-space orbit centre (starts at the galaxy centre = origin); pan moves it = "fly". */
   readonly target = new Vector3(0, 0, 0);
@@ -98,8 +102,7 @@ export class OrbitFlyCamera {
       const dy = e.clientY - this.lastY;
       this.lastX = e.clientX; this.lastY = e.clientY;
       if (this.mode === 'orbit') {
-        this.azimuth -= dx * 0.005;
-        this.elevation = MathUtils.clamp(this.elevation + dy * 0.005, -1.5, 1.5);
+        this.orbitBy(dx, dy);
       } else {
         this.cam.updateMatrixWorld();
         this.cam.matrixWorld.extractBasis(this._right, this._up, this._off);
@@ -110,7 +113,7 @@ export class OrbitFlyCamera {
     const onUp = (): void => { this.mode = null; };
     const onWheel = (e: WheelEvent): void => {
       e.preventDefault();
-      this.distance = MathUtils.clamp(this.distance * Math.exp(e.deltaY * 0.001), 1e5, 2e8);
+      this.dolly(Math.exp(e.deltaY * 0.001));
     };
     el.addEventListener('pointerdown', onDown);
     el.addEventListener('pointermove', onMove);
@@ -124,6 +127,17 @@ export class OrbitFlyCamera {
       () => el.removeEventListener('wheel', onWheel),
       () => el.removeEventListener('contextmenu', onCtx),
     );
+  }
+
+  /** Orbit by a screen-px delta — shared by the mouse drag and the two-finger gesture. */
+  orbitBy(dxPx: number, dyPx: number): void {
+    this.azimuth -= dxPx * ORBIT_SPEED;
+    this.elevation = MathUtils.clamp(this.elevation + dyPx * ORBIT_SPEED, -1.5, 1.5);
+  }
+
+  /** Scale the orbit distance — shared by the wheel and the pinch. factor < 1 zooms in. */
+  dolly(factor: number): void {
+    this.distance = MathUtils.clamp(this.distance * factor, 1e5, 2e8);
   }
 
   update(): void {
@@ -176,7 +190,15 @@ export function bootGalaxyPaint(renderCtx: RendererContext, shouldRun: () => boo
     for (const rk of last.dirty) regenerateRegion(buildout, rk); // re-bake exactly what the stroke touched
     onStatus?.();
   };
-  const brush = new PaintBrush(camera, renderCtx.canvas, onStroke);
+  // Two-finger touch navigation (Phase 2e): a 2nd finger cancels the in-progress paint and drives the
+  // SAME camera state the mouse path mutates — drag → orbit, pinch → dolly. One code path, two adapters.
+  const gesture: GestureSink = {
+    onGestureUpdate: (d) => {
+      cam.orbitBy(d.orbitDx, d.orbitDy);
+      if (d.pinchRatio > 0) cam.dolly(1 / d.pinchRatio); // spread apart (ratio>1) ⇒ zoom in
+    },
+  };
+  const brush = new PaintBrush(camera, renderCtx.canvas, onStroke, gesture);
 
   // Pin the floating-origin rebase at the galactic centre → the galaxy sits centred at the scene
   // origin (a region at galPc renders at galPc·WU_PER_PC). Fixed, so the orbit camera is plain.
@@ -211,7 +233,7 @@ export function bootGalaxyPaint(renderCtx: RendererContext, shouldRun: () => boo
     <button id="pp-undo" style="margin-top:10px;width:100%;padding:6px;background:#1c2530;color:#cfd8e3;
       border:1px solid #34404e;border-radius:5px;cursor:pointer;font:inherit">Undo&nbsp;(0)</button>
     <div id="pp-help" style="margin-top:8px;opacity:0.55;font-size:11px">
-      left-drag&nbsp;paint&nbsp;·&nbsp;right-drag&nbsp;orbit<br>shift+right&nbsp;pan&nbsp;·&nbsp;wheel&nbsp;zoom</div>`;
+      pen / 1-finger / left-drag&nbsp;paint<br>2-finger / right-drag&nbsp;orbit&nbsp;·&nbsp;pinch / wheel&nbsp;zoom</div>`;
   document.body.appendChild(hud);
   const rEl = hud.querySelector<HTMLInputElement>('#pp-r')!;
   const iEl = hud.querySelector<HTMLInputElement>('#pp-i')!;

@@ -63,6 +63,9 @@ export interface PointerSourceOptions {
   readonly spacingPx?: number;
   /** Lazy-rope / EMA position smoothing 0..1 (0 = none, ~0.35 = Procreate-ish). Default 0 (Phase 2a). */
   readonly stabilize?: number;
+  /** Two-finger touch navigation sink. Present ⇒ a 2nd finger promotes to navigation (cancelling any
+   *  in-progress single-finger paint); absent ⇒ extra touches are inert and the first finger keeps painting. */
+  readonly gesture?: GestureSink;
 }
 
 /** Sinks the brush (or any consumer) implements. Hover is preview-only; a stroke is begin→sample*→end. */
@@ -76,6 +79,27 @@ export interface PointerSink {
   onStrokeEnd?: (stroke: BrushStrokeSamples) => void;
   /** pointercancel (system gesture / app switch) — roll back any in-progress op. */
   onStrokeCancel?: (pointerId: number) => void;
+}
+
+/** Per-update delta of a two-finger touch gesture (client-px space; rect offset cancels in the deltas). */
+export interface GestureDelta {
+  /** Centroid translation since the last update → drives orbit (Δazimuth/Δelevation). */
+  readonly orbitDx: number;
+  readonly orbitDy: number;
+  /** Finger-spread ratio since the last update (>1 = pinch apart / zoom in, <1 = pinch together / out). */
+  readonly pinchRatio: number;
+}
+
+/** The touch-navigation sink (wired to the camera). A drag orbits, a pinch dollies. */
+export interface GestureSink {
+  onGestureBegin?: () => void;
+  onGestureUpdate: (d: GestureDelta) => void;
+  onGestureEnd?: () => void;
+}
+
+/** Centroid + spread of two touch points — the raw state a two-finger gesture is diffed from. */
+export function twoFingerState(ax: number, ay: number, bx: number, by: number): { cx: number; cy: number; spread: number } {
+  return { cx: (ax + bx) / 2, cy: (ay + by) / 2, spread: Math.hypot(ax - bx, ay - by) };
 }
 
 const DEG2RAD = Math.PI / 180;
@@ -137,10 +161,14 @@ interface ActiveStroke {
  *  mouse), so the two coexist on the same element without forking. */
 export class PointerSource {
   private readonly active = new Map<number, ActiveStroke>();
+  private readonly touchPts = new Map<number, { x: number; y: number }>(); // live position of each touch
   private readonly model: PressureModel;
   private readonly coalesce: boolean;
   private readonly spacingPx: number;
   private readonly stabilize: number;
+  private readonly gestureSink?: GestureSink;
+  private gesturing = false;
+  private prevTwoFinger: { cx: number; cy: number; spread: number } | null = null;
   private readonly cleanup: Array<() => void> = [];
 
   constructor(
@@ -152,22 +180,16 @@ export class PointerSource {
     this.coalesce = opts.coalesce ?? false;
     this.spacingPx = opts.spacingPx ?? 0;
     this.stabilize = opts.stabilize ?? 0;
+    this.gestureSink = opts.gesture;
     el.style.touchAction = 'none'; // hand every touch sequence to us (kills iOS pinch/double-tap-zoom on the canvas)
 
-    const onDown = (e: PointerEvent): void => {
-      if (!isPaintDown(e)) return; // right/middle mouse → the camera owns it
+    const startStroke = (e: PointerEvent): void => {
       try { el.setPointerCapture(e.pointerId); } catch { /* best-effort: synthetic / already-released pointer */ }
       const s = this.toSample(e, false);
       this.active.set(e.pointerId, { kind: s.kind, samples: [s], lastAccepted: s });
       this.sink.onStrokeBegin?.(s);
     };
-
-    const onMove = (e: PointerEvent): void => {
-      const buf = this.active.get(e.pointerId);
-      if (!buf) { // not drawing → a hover move (only bother if someone's listening)
-        if (this.sink.onHover && e.buttons === 0) this.sink.onHover(this.toSample(e, true));
-        return;
-      }
+    const sampleStroke = (e: PointerEvent, buf: ActiveStroke): void => {
       const raw = this.coalesce && typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : [e];
       for (const ce of raw) {
         if (!passesSpacing(buf.lastAccepted, ce.clientX, ce.clientY, this.spacingPx)) continue;
@@ -177,16 +199,83 @@ export class PointerSource {
         this.sink.onStrokeSample?.(s);
       }
     };
+    const endStroke = (id: number): void => {
+      const buf = this.active.get(id);
+      if (!buf) return;
+      this.active.delete(id);
+      this.sink.onStrokeEnd?.({ kind: buf.kind, samples: buf.samples });
+    };
+    const cancelStroke = (id: number): void => {
+      if (this.active.delete(id)) this.sink.onStrokeCancel?.(id);
+    };
+    const endGestureIfDepleted = (): void => {
+      if (this.gesturing && this.touchPts.size < 2) {
+        this.gesturing = false;
+        this.prevTwoFinger = null;
+        this.gestureSink?.onGestureEnd?.();
+      }
+    };
+
+    const onDown = (e: PointerEvent): void => {
+      if (e.pointerType === 'touch') {
+        this.touchPts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (this.gestureSink && this.touchPts.size === 2) {
+          // 2nd finger ⇒ promote to navigation: cancel any in-progress single-finger paint (no stray dab).
+          for (const id of [...this.active.keys()]) cancelStroke(id);
+          this.gesturing = true;
+          this.prevTwoFinger = this.twoFinger();
+          this.gestureSink.onGestureBegin?.();
+        } else if (this.touchPts.size === 1 && !this.gesturing) {
+          startStroke(e); // first finger paints (cancelled later if a 2nd lands)
+        }
+        return;
+      }
+      if (!isPaintDown(e)) return; // right/middle mouse → the camera owns it
+      startStroke(e);
+    };
+
+    const onMove = (e: PointerEvent): void => {
+      if (e.pointerType === 'touch') {
+        if (!this.touchPts.has(e.pointerId)) return;
+        this.touchPts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (this.gesturing) {
+          const now = this.twoFinger();
+          if (now && this.prevTwoFinger && this.gestureSink) {
+            const prev = this.prevTwoFinger;
+            this.gestureSink.onGestureUpdate({
+              orbitDx: now.cx - prev.cx,
+              orbitDy: now.cy - prev.cy,
+              pinchRatio: prev.spread > 0 ? now.spread / prev.spread : 1,
+            });
+            this.prevTwoFinger = now;
+          }
+          return;
+        }
+        const buf = this.active.get(e.pointerId);
+        if (buf) sampleStroke(e, buf);
+        return;
+      }
+      const buf = this.active.get(e.pointerId);
+      if (!buf) { // not drawing → a hover move (only bother if someone's listening)
+        if (this.sink.onHover && e.buttons === 0) this.sink.onHover(this.toSample(e, true));
+        return;
+      }
+      sampleStroke(e, buf);
+    };
 
     const onUp = (e: PointerEvent): void => {
-      const buf = this.active.get(e.pointerId);
-      if (!buf) return;
-      this.active.delete(e.pointerId);
-      this.sink.onStrokeEnd?.({ kind: buf.kind, samples: buf.samples });
+      if (e.pointerType === 'touch') {
+        this.touchPts.delete(e.pointerId);
+        if (this.gesturing) { endGestureIfDepleted(); return; }
+        endStroke(e.pointerId);
+        return;
+      }
+      endStroke(e.pointerId);
     };
 
     const onCancel = (e: PointerEvent): void => {
-      if (this.active.delete(e.pointerId)) this.sink.onStrokeCancel?.(e.pointerId);
+      if (e.pointerType === 'touch') { this.touchPts.delete(e.pointerId); endGestureIfDepleted(); }
+      cancelStroke(e.pointerId);
     };
 
     el.addEventListener('pointerdown', onDown);
@@ -199,6 +288,15 @@ export class PointerSource {
       () => window.removeEventListener('pointerup', onUp),
       () => el.removeEventListener('pointercancel', onCancel),
     );
+  }
+
+  /** Current two-finger state from the first two active touches (insertion order), or null if <2. */
+  private twoFinger(): { cx: number; cy: number; spread: number } | null {
+    if (this.touchPts.size < 2) return null;
+    const it = this.touchPts.values();
+    const a = it.next().value as { x: number; y: number };
+    const b = it.next().value as { x: number; y: number };
+    return twoFingerState(a.x, a.y, b.x, b.y);
   }
 
   private toSample(e: PointerEvent | { clientX: number; clientY: number; pointerType?: string; pressure?: number; buttons?: number; tiltX?: number; tiltY?: number; timeStamp?: number } & Partial<{ altitudeAngle: number; azimuthAngle: number }>, hover: boolean): BrushSample {
