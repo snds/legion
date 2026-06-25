@@ -40,6 +40,7 @@ const KNOBS: Knob[] = [
   { label: 'arms (m)', key: 'armCount', min: 1, max: 5, step: 1 },
   { label: 'pitch', key: 'armPitch_deg', min: 5, max: 32, step: 1, unit: '°' },
   { label: 'arm contrast', key: 'armContrast', min: 0, max: 1, step: 0.05 },
+  { label: 'arm width', key: 'armWidth', min: 0.3, max: 1, step: 0.05 },
   { label: 'flocculence', key: 'armNoise', min: 0, max: 1.2, step: 0.05 },
   { label: 'noise scale', key: 'armNoiseScale', min: 0.1, max: 1.5, step: 0.05 },
   { label: 'arm blue', key: 'armBlue', min: 0, max: 1, step: 0.05 },
