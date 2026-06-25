@@ -9,8 +9,9 @@ import { Group, PerspectiveCamera, Points, Scene, ShaderMaterial } from 'three';
 import { OrbitFlyCamera } from './galaxy-paint';
 import { MW, KMS_PER_KPC_TO_RAD_PER_MYR } from './mw-model';
 import {
-  samplePhysicalGalaxy, buildPhysicalGalaxyPoints, DEFAULT_PHYSICAL_CONFIG,
-  type PhysicalGalaxyConfig, type PhysicalGalaxyData,
+  samplePhysicalGalaxy, buildPhysicalGalaxyPoints, sampleDust, buildDustPoints,
+  DEFAULT_PHYSICAL_CONFIG, DEFAULT_DUST_CONFIG,
+  type PhysicalGalaxyConfig, type PhysicalGalaxyData, type DustConfig,
 } from './galaxy-physical';
 import type { RendererContext } from './renderer';
 
@@ -58,8 +59,10 @@ export function bootGalaxySim(renderCtx: RendererContext, shouldRun: () => boole
   scene.add(root);
 
   const cfg: PhysicalGalaxyConfig = { ...DEFAULT_PHYSICAL_CONFIG };
+  const dustCfg: DustConfig = { ...DEFAULT_DUST_CONFIG };
   let seed = 1;
-  let current: { points: Points; material: ShaderMaterial } | null = null;
+  let dustOpacity = 1.0; // live opacity scale (uOpacityScale)
+  let current: { points: Points; material: ShaderMaterial; dust: Points; dustMat: ShaderMaterial } | null = null;
   let warp = 0;    // warp rate (Myr per real second); 0 = frozen "moment in time"
   let lastMs = 0;
   // The spiral pattern rotates rigidly at the pattern speed Ωp (rad/Myr) — that's what a density wave does
@@ -70,13 +73,18 @@ export function bootGalaxySim(renderCtx: RendererContext, shouldRun: () => boole
 
   const rebuild = (count = cfg.count): void => {
     if (current) {
-      root.remove(current.points);
-      current.points.geometry.dispose();
-      current.material.dispose();
+      root.remove(current.points); current.points.geometry.dispose(); current.material.dispose();
+      root.remove(current.dust); current.dust.geometry.dispose(); current.dustMat.dispose();
     }
     const data = samplePhysicalGalaxy({ ...cfg, count }, seed);
-    current = buildPhysicalGalaxyPoints(data);
-    root.add(current.points);
+    const g = buildPhysicalGalaxyPoints(data);
+    const frac = Math.max(0.1, count / cfg.count); // thin the dust on the preview resample too
+    const dd = sampleDust(cfg, { ...dustCfg, dustCount: Math.round(dustCfg.dustCount * frac) }, seed);
+    const d = buildDustPoints(dd);
+    d.material.uniforms.uOpacityScale.value = dustOpacity;
+    root.add(g.points);
+    root.add(d.points);
+    current = { points: g.points, material: g.material, dust: d.points, dustMat: d.material };
     sim.data = data;
   };
   rebuild();
@@ -113,6 +121,11 @@ export function bootGalaxySim(renderCtx: RendererContext, shouldRun: () => boole
       + `<input id="gs-${k.key}" type="range" min="${k.min}" max="${k.max}" step="${k.step}" value="${v}" style="width:100%;accent-color:#6aa3ff">`;
   }
   html += '<div style="margin-top:9px;border-top:1px solid #2a3340;padding-top:7px;display:flex;justify-content:space-between">'
+    + '<span>dust</span><span id="gs-v-dust" style="opacity:0.8">1.0</span></div>'
+    + '<input id="gs-dust" type="range" min="0" max="2.5" step="0.1" value="1" style="width:100%;accent-color:#6aa3ff">'
+    + '<div style="margin-top:5px;display:flex;justify-content:space-between"><span>dust lead</span><span id="gs-v-dlead" style="opacity:0.8">18°</span></div>'
+    + '<input id="gs-dlead" type="range" min="-40" max="40" step="2" value="18" style="width:100%;accent-color:#6aa3ff">';
+  html += '<div style="margin-top:9px;border-top:1px solid #2a3340;padding-top:7px;display:flex;justify-content:space-between">'
     + '<span>time warp</span><span id="gs-v-warp" style="opacity:0.8">0 Myr/s</span></div>'
     + '<input id="gs-warp" type="range" min="0" max="15" step="0.5" value="0" style="width:100%;accent-color:#6aa3ff">';
   html += '<button id="gs-reseed" style="margin-top:10px;width:100%;padding:6px;background:#1c2530;color:#cfd8e3;'
@@ -138,6 +151,19 @@ export function bootGalaxySim(renderCtx: RendererContext, shouldRun: () => boole
     el.addEventListener('input', () => { set(); previewRebuild(); });
     el.addEventListener('change', () => { set(); rebuild(); }); // full count on release
   }
+  const dustEl = hud.querySelector<HTMLInputElement>('#gs-dust')!;
+  dustEl.addEventListener('input', () => {
+    dustOpacity = +dustEl.value;
+    hud.querySelector('#gs-v-dust')!.textContent = dustOpacity.toFixed(1);
+    if (current) current.dustMat.uniforms.uOpacityScale.value = dustOpacity; // live, no resample
+  });
+  const dleadEl = hud.querySelector<HTMLInputElement>('#gs-dlead')!;
+  dleadEl.addEventListener('input', () => {
+    dustCfg.dustLeadDeg = +dleadEl.value;
+    hud.querySelector('#gs-v-dlead')!.textContent = `${dleadEl.value}°`;
+    previewRebuild();
+  });
+  dleadEl.addEventListener('change', () => { rebuild(); });
   const warpEl = hud.querySelector<HTMLInputElement>('#gs-warp')!;
   warpEl.addEventListener('input', () => {
     warp = +warpEl.value;
@@ -151,7 +177,10 @@ export function bootGalaxySim(renderCtx: RendererContext, shouldRun: () => boole
   function loop(): void {
     if (!shouldRun()) {
       cam.dispose();
-      if (current) { current.points.geometry.dispose(); current.material.dispose(); }
+      if (current) {
+        current.points.geometry.dispose(); current.material.dispose();
+        current.dust.geometry.dispose(); current.dustMat.dispose();
+      }
       hud.remove();
       window.removeEventListener('resize', onResize);
       return;
