@@ -124,12 +124,28 @@ function gamma2(rng: () => number, s: number): number {
 
 interface Star { gx: number; gz: number; gy: number; crest: number } // galactocentric kpc + arm proximity
 
-/** Draw one disc star: exponential R, φ rejection-sampled into the warped arm wave, sech² height. */
+/** Smoothstep ∈ [0,1]: 0 below a, 1 above b, Hermite in between. */
+function smoothstep(a: number, b: number, x: number): number {
+  if (b <= a) return x >= b ? 1 : 0;
+  const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
+  return t * t * (3 - 2 * t);
+}
+
+/** Draw one disc star: exponential R, φ rejection-sampled into the warped arm wave AND beyond the bar —
+ *  the bar TRUNCATES the inner spiral (a longer bar carves a larger hole and pushes the arms out, so bar
+ *  length changes spiral density rather than overlaying particles); sech² height. */
 function sampleDiscStar(rng: () => number, cfg: PhysicalGalaxyConfig, noiseSeed: number): Star {
+  const denom = 1 + cfg.armContrast;
+  // Inner spiral fades in across [0.55·Lbar, 1.1·Lbar]: disc stars don't form where the bar dominates.
+  const cutLo = cfg.barLength_kpc * 0.55;
+  const cutHi = cfg.barLength_kpc * 1.1;
+  const barred = cfg.barLength_kpc > 0.05 && cfg.barFraction > 0.001;
   let Rkpc = gamma2(rng, cfg.discScaleLength_kpc);
   let phi = rng() * Math.PI * 2;
-  const denom = 1 + cfg.armContrast;
-  for (let t = 0; t < 5 && rng() > (1 + cfg.armContrast * armWave(Rkpc, phi, cfg, noiseSeed)) / denom; t++) {
+  for (let t = 0; t < 6; t++) {
+    const armP = (1 + cfg.armContrast * armWave(Rkpc, phi, cfg, noiseSeed)) / denom;
+    const barP = barred ? smoothstep(cutLo, cutHi, Rkpc) : 1;
+    if (rng() <= armP * barP) break;
     Rkpc = gamma2(rng, cfg.discScaleLength_kpc);
     phi = rng() * Math.PI * 2;
   }
@@ -179,8 +195,9 @@ export function samplePhysicalGalaxy(
         crest: 0.15,
       };
     } else if (roll < cfg.barFraction + cfg.bulgeFraction) {
-      // Central bulge: concentrated rounded spheroid, old/red.
-      const Rb = gamma2(rng, cfg.bulgeScaleLength_kpc);
+      // Central bulge: concentrated rounded spheroid, old/red. Cap the gamma tail at 6 scale lengths so
+      // a rare draw can't fling a "bulge" star to the disc edge (unphysical, and it broke the radial cutoff).
+      const Rb = Math.min(gamma2(rng, cfg.bulgeScaleLength_kpc), cfg.bulgeScaleLength_kpc * 6);
       const ph = rng() * Math.PI * 2;
       s = {
         gx: Rb * Math.cos(ph),
@@ -194,9 +211,13 @@ export function samplePhysicalGalaxy(
       const r = clumpSigma * Math.sqrt(-2 * Math.log(1 - rng()));
       const a = rng() * Math.PI * 2;
       const u = Math.min(0.9995, Math.max(0.0005, rng()));
+      let kx = c.gx + r * Math.cos(a);
+      let kz = c.gz + r * Math.sin(a);
+      const kR = Math.hypot(kx, kz); // a knot scattered past the rim is pulled back to the cutoff
+      if (kR > cfg.rMax_kpc) { const f = cfg.rMax_kpc / kR; kx *= f; kz *= f; }
       s = {
-        gx: c.gx + r * Math.cos(a),
-        gz: c.gz + r * Math.sin(a),
+        gx: kx,
+        gz: kz,
         gy: hz * 0.7 * Math.atanh(2 * u - 1),
         crest: Math.max(c.crest, 0.8), // knots are young/blue
       };
@@ -264,11 +285,21 @@ export interface DustConfig {
   dustScaleHeight_pc: number; // thinner than the stars ⇒ a crisp midplane lane
   dustLeadDeg: number;        // phase lead: dust sits on the inner/leading edge of the arms
   dustContrast: number;       // how tightly dust hugs the arms
+  dustFilament: number;       // 0 = smooth lane … 1 = spindly tendrils that detach + recoalesce
+  dustFilamentScale: number;  // spatial frequency of the tendrils (per kpc)
 }
 
 export const DEFAULT_DUST_CONFIG: DustConfig = {
   dustCount: 700_000, dustOpacity: 0.16, dustScaleHeight_pc: 120, dustLeadDeg: 18, dustContrast: 0.92,
+  dustFilament: 0.7, dustFilamentScale: 2.1,
 };
+
+/** Ridged value-noise FBM ∈ [0,1]: thin bright RIDGES at the FBM zero-crossings — the threads/tendrils
+ *  that break and rejoin. `sharp` thins them; multiple octaves make them detach and recoalesce. */
+function ridge(x: number, z: number, seed: number, sharp: number): number {
+  const r = 1 - Math.abs(fbm(x, z, seed));
+  return Math.pow(Math.max(0, r), sharp);
+}
 
 export interface DustData {
   readonly positions: Float32Array; // galactocentric WU
@@ -290,10 +321,23 @@ export function sampleDust(
   const hz = dust.dustScaleHeight_pc / 1000;
   const lead = (dust.dustLeadDeg * DEG2RAD) / Math.max(1, cfg.armCount);
   const denom = 1 + dust.dustContrast;
+  const fil = Math.max(0, Math.min(1, dust.dustFilament));
+  const fScale = dust.dustFilamentScale;
+  const fSeed = noiseSeed + 1013;
   for (let i = 0; i < n; i++) {
     let Rkpc = gamma2(rng, cfg.discScaleLength_kpc * 1.05);
     let phi = rng() * Math.PI * 2;
-    for (let t = 0; t < 5 && rng() > (1 + dust.dustContrast * armWave(Rkpc, phi + lead, cfg, noiseSeed)) / denom; t++) {
+    // Accept onto the arm leading-edge wave AND onto a high-frequency ridged-noise filament field, so the
+    // dust breaks into spindly tendrils that detach and recoalesce along the arm instead of a smooth lane.
+    for (let t = 0; t < 7; t++) {
+      const armP = (1 + dust.dustContrast * armWave(Rkpc, phi + lead, cfg, noiseSeed)) / denom;
+      let filP = 1;
+      if (fil > 0) {
+        const fx = Rkpc * Math.cos(phi) * fScale;
+        const fz = Rkpc * Math.sin(phi) * fScale;
+        filP = (1 - fil) + fil * ridge(fx, fz, fSeed, 2.4);
+      }
+      if (rng() <= armP * filP) break;
       Rkpc = gamma2(rng, cfg.discScaleLength_kpc * 1.05);
       phi = rng() * Math.PI * 2;
     }
@@ -303,7 +347,7 @@ export function sampleDust(
     positions[i3] = Rkpc * Math.cos(phi) * KPC_TO_WU;
     positions[i3 + 1] = hz * Math.atanh(2 * u - 1) * KPC_TO_WU;
     positions[i3 + 2] = Rkpc * Math.sin(phi) * KPC_TO_WU;
-    sizes[i] = 10 + rng() * 16;                          // soft dust blobs, larger than star points
+    sizes[i] = 6 + rng() * 12;                           // finer dust so tendrils read as threads, not blobs
     opacities[i] = dust.dustOpacity * (0.45 + 0.55 * rng());
   }
   return { positions, sizes, opacities, count: n };
