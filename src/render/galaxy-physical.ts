@@ -45,6 +45,7 @@ export interface PhysicalGalaxyConfig {
   armCount: number;     // m: 2 = grand-design, 4 = multi-arm
   armPitch_deg: number;
   armContrast: number;  // 0 = smooth disc → 1 = stars strongly piled into arms
+  armWidth: number;     // arm tightness: 1 = broad arms, lower = stars hug the ridge/spurs tighter
   armNoise: number;     // 0 = clean spiral → ~1 = flocculent (phase warp amplitude)
   armNoiseScale: number; // spatial frequency of the warp (per kpc)
   armBlue: number;      // 0 = no tint → 1 = strong blue arm tint
@@ -79,6 +80,7 @@ export const DEFAULT_PHYSICAL_CONFIG: PhysicalGalaxyConfig = {
   armCount: 2,
   armPitch_deg: 14,
   armContrast: 0.85,
+  armWidth: 0.55,
   armNoise: 0.4,
   armNoiseScale: 0.55,
   armBlue: 0.7,
@@ -217,14 +219,17 @@ function rimGate(Rkpc: number, phi: number, cfg: PhysicalGalaxyConfig, noiseSeed
  *  length changes spiral density rather than overlaying particles); sech² height. */
 function sampleDiscStar(rng: () => number, cfg: PhysicalGalaxyConfig, noiseSeed: number): Star {
   const denom = 1 + cfg.armContrast;
+  // Arm tightness: raise the acceptance to 1/armWidth ⇒ stars cluster on the ridge/spurs, inter-arm empties
+  // (the diffuse gas then fills the softer area). armWidth=1 ⇒ exponent 1 ⇒ today's broad arms.
+  const armExp = 1 / Math.max(0.2, cfg.armWidth);
   // Inner spiral fades in across [0.55·Lbar, 1.1·Lbar]: disc stars don't form where the bar dominates.
   const cutLo = cfg.barLength_kpc * 0.55;
   const cutHi = cfg.barLength_kpc * 1.1;
   const barred = cfg.barLength_kpc > 0.05 && cfg.barFraction > 0.001;
   let Rkpc = gamma2(rng, cfg.discScaleLength_kpc);
   let phi = rng() * Math.PI * 2;
-  for (let t = 0; t < 8; t++) {
-    const armP = (1 + cfg.armContrast * armWave(Rkpc, phi, cfg, noiseSeed)) / denom;
+  for (let t = 0; t < 10; t++) {
+    const armP = Math.pow((1 + cfg.armContrast * armWave(Rkpc, phi, cfg, noiseSeed)) / denom, armExp);
     const barP = barred ? smoothstep(cutLo, cutHi, Rkpc) : 1;
     const rimP = rimGate(Rkpc, phi, cfg, noiseSeed); // feathered, ragged disc edge (no hard truncation)
     if (rng() <= armP * barP * rimP) break;
