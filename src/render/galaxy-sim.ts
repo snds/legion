@@ -124,7 +124,9 @@ export function bootGalaxySim(renderCtx: RendererContext, shouldRun: () => boole
     + '<span>dust</span><span id="gs-v-dust" style="opacity:0.8">1.0</span></div>'
     + '<input id="gs-dust" type="range" min="0" max="2.5" step="0.1" value="1" style="width:100%;accent-color:#6aa3ff">'
     + '<div style="margin-top:5px;display:flex;justify-content:space-between"><span>dust lead</span><span id="gs-v-dlead" style="opacity:0.8">18°</span></div>'
-    + '<input id="gs-dlead" type="range" min="-40" max="40" step="2" value="18" style="width:100%;accent-color:#6aa3ff">';
+    + '<input id="gs-dlead" type="range" min="-40" max="40" step="2" value="18" style="width:100%;accent-color:#6aa3ff">'
+    + '<div style="margin-top:5px;display:flex;justify-content:space-between"><span>dust tendrils</span><span id="gs-v-dfil" style="opacity:0.8">0.7</span></div>'
+    + '<input id="gs-dfil" type="range" min="0" max="1" step="0.05" value="0.7" style="width:100%;accent-color:#6aa3ff">';
   html += '<div style="margin-top:9px;border-top:1px solid #2a3340;padding-top:7px;display:flex;justify-content:space-between">'
     + '<span>time warp</span><span id="gs-v-warp" style="opacity:0.8">0 Myr/s</span></div>'
     + '<input id="gs-warp" type="range" min="0" max="15" step="0.5" value="0" style="width:100%;accent-color:#6aa3ff">';
@@ -164,6 +166,13 @@ export function bootGalaxySim(renderCtx: RendererContext, shouldRun: () => boole
     previewRebuild();
   });
   dleadEl.addEventListener('change', () => { rebuild(); });
+  const dfilEl = hud.querySelector<HTMLInputElement>('#gs-dfil')!;
+  dfilEl.addEventListener('input', () => {
+    dustCfg.dustFilament = +dfilEl.value;
+    hud.querySelector('#gs-v-dfil')!.textContent = (+dfilEl.value).toFixed(2);
+    previewRebuild();
+  });
+  dfilEl.addEventListener('change', () => { rebuild(); });
   const warpEl = hud.querySelector<HTMLInputElement>('#gs-warp')!;
   warpEl.addEventListener('input', () => {
     warp = +warpEl.value;
