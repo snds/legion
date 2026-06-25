@@ -226,6 +226,7 @@ export class PointerSource {
     const onDown = (e: PointerEvent): void => {
       if (e.pointerType === 'touch') {
         e.preventDefault(); // stop Safari treating the touch/Pencil-tap as a selection or scroll
+        if (this.touchPts.has(e.pointerId)) return; // duplicate down (Safari Pencil/touch quirk) — ignore
         this.touchPts.set(e.pointerId, { x: e.clientX, y: e.clientY });
         if (this.gestureSink && this.touchPts.size === 2) {
           // 2nd finger ⇒ promote to navigation: cancel any in-progress single-finger paint (no stray dab).
@@ -240,6 +241,7 @@ export class PointerSource {
       }
       if (!isPaintDown(e)) return; // right/middle mouse → the camera owns it
       e.preventDefault(); // a pen/left-mouse tap PAINTS; never let it start a selection
+      if (this.active.has(e.pointerId)) return; // duplicate down with no intervening up (Pencil quirk)
       startStroke(e);
     };
 

@@ -5,7 +5,7 @@ import { describe, it, expect } from 'vitest';
 import { Vector3 } from 'three';
 import type { PopulatedCell } from './sector/galaxy-enumerate';
 import { emptyEditState } from './sector/galaxy-edit';
-import { applyStroke, rebuildEditState, MAX_DENSITY_FACTOR, type BrushStroke } from './galaxy-paint-ops';
+import { applyStroke, rebuildEditState, strokeCentroidXZ, MAX_DENSITY_FACTOR, type BrushStroke } from './galaxy-paint-ops';
 
 const mk = (i: number, k: number): PopulatedCell => ({
   cell: { i, j: 0, k },
@@ -99,5 +99,13 @@ describe('applyStroke — erase / falloff / opacity ceiling (Phase 2d)', () => {
     expect(h).toBeCloseTo(2.0, 5);   // full deposit through the disc
     expect(h).toBeGreaterThan(l);
     expect(l).toBeGreaterThan(e);    // ease tapers faster toward the edge
+  });
+});
+
+describe('strokeCentroidXZ', () => {
+  it('averages the path on the galactic plane (x,z) for the held-press coalesce test', () => {
+    expect(strokeCentroidXZ([[0, 5, 0], [200, 5, 100]])).toEqual([100, 50]);
+    expect(strokeCentroidXZ([[125, 5, 125]])).toEqual([125, 125]); // a single press → its own centre
+    expect(strokeCentroidXZ([])).toEqual([0, 0]);                  // empty guard (no divide-by-zero)
   });
 });

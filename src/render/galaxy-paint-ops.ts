@@ -37,6 +37,16 @@ function cellKeyOf(pc: PopulatedCell): string {
   return `${pc.cell.i}|${pc.cell.j}|${pc.cell.k}`;
 }
 
+/** Centroid (x, z) of a stroke path on the galactic plane. Used to detect a single held Apple-Pencil
+ *  press that the OS re-emits as several overlapping strokes (so we coalesce them into one dab). */
+export function strokeCentroidXZ(path: BrushStroke['path']): readonly [number, number] {
+  let sx = 0;
+  let sz = 0;
+  for (const p of path) { sx += p[0]; sz += p[2]; }
+  const n = Math.max(1, path.length);
+  return [sx / n, sz / n];
+}
+
 /** Falloff ramp at normalized distance t∈[0,1) (1 at centre → 0 at the radius). 'hard' is a flat disc. */
 function rampAt(t: number, kind: FalloffKind): number {
   if (t >= 1) return 0;
