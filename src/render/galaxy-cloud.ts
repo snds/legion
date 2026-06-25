@@ -67,6 +67,14 @@ const cloudFragmentShader = /* glsl */ `
   uniform float uBarHi;
   uniform float uClumpFreq;   // per kpc
   uniform float uRimFeather;  // 0 = sharp rim … 1 = ragged, wispy feathered edge
+  uniform float uSpurAmp;     // spur/feather field (shared with galaxy-physical.ts)
+  uniform float uSpurOpen;
+  uniform float uSpurDensity;
+  uniform float uSpurSharp;
+  uniform float uSpurWarp;
+  uniform float uSpurInterArm;
+  uniform float uSpurFlank;
+  uniform float uSpurReach;
   uniform float uIntensity;
   uniform vec3 uArmGlow;      // cool blue arm emission
   uniform vec3 uHiiGlow;      // warm pink HII knots
@@ -94,13 +102,36 @@ const cloudFragmentShader = /* glsl */ `
     return 0.6 * vnoise(p) + 0.3 * vnoise(p * 2.13) + 0.1 * vnoise(p * 4.31);
   }
 
-  // The galaxy's warped m-arm density wave: +1 on a ridge, −1 between (same form as galaxy-physical.ts).
+  // Shared spur/feather field — exact twin of galaxy-physical.ts spurField (star-side: trailing flank).
+  float spurField(float R, float phi, float psi, float warp, float cot, float L) {
+    if (uSpurAmp <= 0.0) return 0.0;
+    float inner = smoothstep(uBarLo, uBarHi, R);
+    if (inner <= 0.0) return 0.0;
+    float cot2 = cot / uSpurOpen;
+    float m2 = uArmCount * uSpurDensity;
+    float ns2 = uNoiseScale * 1.7;
+    vec2 q2 = vec2(R * cos(phi), R * sin(phi)) * ns2;
+    float w2 = uSpurWarp * PI * fbm2(q2 + 137.0); // +137 ≈ JS seed offset (geometry-match, not bit-exact)
+    float psi2 = m2 * (phi - cot2 * L) + uSpurDensity * warp + w2;
+    float tooth = pow(max(0.0, cos(psi2)), uSpurSharp);
+    float c = cos(psi);
+    float onArm = smoothstep(-0.2, 0.6, c);
+    float gap = 1.0 - smoothstep(-0.6, 0.2, c);
+    float u = sin(psi);
+    float trail = smoothstep(0.0, uSpurFlank, u);
+    float reach = 1.0 - smoothstep(uSpurReach, min(0.97, uSpurReach + 0.45), u);
+    return uSpurAmp * (onArm * tooth * trail * reach + uSpurInterArm * gap * tooth) * inner;
+  }
+
+  // The galaxy's warped m-arm density wave + spur offshoots: +1 on a ridge, −1 between (twin of physical).
   float armWave(float R, float phi) {
     float cot = 1.0 / uPitchTan;
+    float L = log(max(R, 0.05) / uR0);
     vec2 q = vec2(R * cos(phi), R * sin(phi)) * uNoiseScale;
     float warp = uArmNoise * PI * fbm2(q);
-    float psi = uArmCount * (phi - cot * log(max(R, 0.05) / uR0)) + warp;
-    return cos(psi);
+    float psi = uArmCount * (phi - cot * L) + warp;
+    float base = cos(psi) + spurField(R, phi, psi, warp, cot, L);
+    return clamp(base, -1.0, 1.0);
   }
 
   float ign(vec2 px) {
@@ -207,6 +238,14 @@ export function buildGalaxyCloud(
       uBarHi: { value: cfg.barLength_kpc * 1.1 },
       uClumpFreq: { value: cloud.clumpScale },
       uRimFeather: { value: cfg.rimFeather },
+      uSpurAmp: { value: cfg.armSpurAmp },
+      uSpurOpen: { value: cfg.armSpurOpen },
+      uSpurDensity: { value: cfg.armSpurDensity },
+      uSpurSharp: { value: cfg.armSpurSharp },
+      uSpurWarp: { value: cfg.armSpurWarp },
+      uSpurInterArm: { value: cfg.armSpurInterArm },
+      uSpurFlank: { value: cfg.armSpurFlank },
+      uSpurReach: { value: cfg.armSpurReach },
       uIntensity: { value: cloud.intensity },
       uArmGlow: { value: new Color(0.26, 0.42, 0.85) },
       uHiiGlow: { value: new Color(0.95, 0.5, 0.72) },
@@ -239,6 +278,14 @@ export function buildGalaxyCloud(
     u.uBarHi!.value = c.barLength_kpc * 1.1;
     u.uClumpFreq!.value = cl.clumpScale;
     u.uRimFeather!.value = c.rimFeather;
+    u.uSpurAmp!.value = c.armSpurAmp;
+    u.uSpurOpen!.value = c.armSpurOpen;
+    u.uSpurDensity!.value = c.armSpurDensity;
+    u.uSpurSharp!.value = c.armSpurSharp;
+    u.uSpurWarp!.value = c.armSpurWarp;
+    u.uSpurInterArm!.value = c.armSpurInterArm;
+    u.uSpurFlank!.value = c.armSpurFlank;
+    u.uSpurReach!.value = c.armSpurReach;
     u.uIntensity!.value = cl.intensity;
   };
   const update = (camera: Camera, steps: number): void => {
