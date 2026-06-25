@@ -232,6 +232,11 @@ const MIN_BUILDOUT_STARS = 6;
  *  uniformly makes the 250 pc layers blend into a smooth disc rather than a banded box-staircase. */
 /** Sub-slices for the per-cell vertical emission CDF (placement ∝ the real profile, see below). */
 const BUILDOUT_VERTICAL_SLICES = 6;
+/** Sub-cells per axis for the per-cell HORIZONTAL (x,z) emission CDF. Placing stars ∝ the real in-plane
+ *  emission (instead of uniformly per 250 pc cell) makes the rendered density track the CONTINUOUS field
+ *  — the per-cell normalization cancels — so adjacent cells blend and the 250 pc "grid" dissolves. The
+ *  residual structure is the K-times-finer sub-cell (~41 pc at K=6), well below perceptible at galaxy zoom. */
+const BUILDOUT_HORIZONTAL_SLICES = 6;
 
 /** Build-out FAST path — generate a cell's stars from its ALREADY-KNOWN emission (the enumeration
  *  gate value), with NO full Monte-Carlo integral: count = REF_STARS · emission/REF capped, x,z placed
@@ -265,8 +270,7 @@ export function generateSectorStarsFast(
   const crests = new Float32Array(count);
   // Vertical emission CDF for this cell: sample the REAL emission at a few heights down the cell and
   // accumulate, so stars place ∝ the actual vertical profile and adjacent layers meet the model
-  // continuously (no horizontal banding edge-on). x,z stay uniform — the radial/azimuthal grid is far
-  // finer and its per-region banding was removed separately.
+  // continuously (no horizontal banding edge-on).
   const NV = BUILDOUT_VERTICAL_SLICES;
   const yStep = edgePc / NV;
   const y0 = -edgePc * 0.5; // bottom of the cell, relative to centre
@@ -275,15 +279,34 @@ export function generateSectorStarsFast(
     vcdf[s + 1] = vcdf[s]! + Math.max(0, emissionAtGalPc(centerPc.x, centerPc.y + y0 + (s + 0.5) * yStep, centerPc.z));
   }
   const vTot = vcdf[NV]! || 1;
+  // In-plane (x,z) emission CDF: a K×K grid of the REAL emission across the cell footprint, accumulated,
+  // so stars place ∝ the continuous field (not uniformly per square) and the 250 pc grid dissolves.
+  const NH = BUILDOUT_HORIZONTAL_SLICES;
+  const hStep = edgePc / NH;
+  const h0 = -edgePc * 0.5;
+  const hcdf = new Float64Array(NH * NH + 1);
+  for (let iz = 0; iz < NH; iz++) {
+    for (let ix = 0; ix < NH; ix++) {
+      const ex = centerPc.x + h0 + (ix + 0.5) * hStep;
+      const ez = centerPc.z + h0 + (iz + 0.5) * hStep;
+      hcdf[iz * NH + ix + 1] = hcdf[iz * NH + ix]! + Math.max(0, emissionAtGalPc(ex, centerPc.y, ez));
+    }
+  }
+  const hTot = hcdf[NH * NH]! || 1;
   let placed = 0;
   for (let i = 0; i < count; i++) {
-    const ox = (rng() - 0.5) * edgePc;
+    // in-plane position from the 2D emission CDF: inverse lookup → sub-cell, then uniform jitter within it
+    const uxz = rng() * hTot;
+    let hs = 1;
+    while (hs < NH * NH && hcdf[hs]! < uxz) hs++;
+    const sub = hs - 1;
+    const ox = h0 + ((sub % NH) + rng()) * hStep;
+    const oz = h0 + (((sub / NH) | 0) + rng()) * hStep;
     // sample the height from the vertical emission CDF (inverse lookup + linear interp within a slice)
     const u = rng() * vTot;
     let vs = 1;
     while (vs < NV && vcdf[vs]! < u) vs++;
     const oy = y0 + (vs - 1 + (u - vcdf[vs - 1]!) / Math.max(vcdf[vs]! - vcdf[vs - 1]!, 1e-12)) * yStep;
-    const oz = (rng() - 0.5) * edgePc;
     const crest = ARM_AWARE_STARS ? crestinessAtGalPc(centerPc.x + ox, centerPc.z + oz) : 0;
     const star: readonly [number, number, number, number] = ARM_AWARE_STARS
       ? (crest > HII_BEAD_CREST && rng() < HII_BEAD_PROB
