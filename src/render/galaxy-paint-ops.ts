@@ -15,8 +15,11 @@ export interface BrushStroke {
   readonly brushType: 'density-add';
   /** Stamp centres sampled along the drag. */
   readonly path: ReadonlyArray<readonly [number, number, number]>;
+  /** Per-stamp pen pressure 0..1, aligned 1:1 with `path`. Absent (or a non-pen device, which resolves
+   *  to pressure 1) ⇒ treated as 1 everywhere, so the deposit is byte-identical to the no-pressure path. */
+  readonly pressures?: ReadonlyArray<number>;
   readonly radiusPc: number;
-  /** Per-stamp strength added to densityFactor at the centre (linear falloff to 0 at the radius). */
+  /** Base strength added to densityFactor at a stamp centre (× that stamp's pressure × linear falloff). */
   readonly intensity: number;
 }
 
@@ -25,22 +28,29 @@ function cellKeyOf(pc: PopulatedCell): string {
 }
 
 /** Apply one stroke into `editState`'s per-cell density modifiers; returns the dirtied regionKeys
- *  (the regions whose merged Points must re-bake). Falloff is linear from the nearest path point. */
+ *  (the regions whose merged Points must re-bake). A cell's deposit comes from its STRONGEST stamp
+ *  (max linear falloff), weighted by that stamp's pen pressure — so a feather press seeds faint density
+ *  and a firm press lays a dense core, varying along the drag. */
 export function applyStroke(stroke: BrushStroke, editState: EditState, cells: PopulatedCell[]): Set<string> {
   const dirty = new Set<string>();
   const r = stroke.radiusPc;
   const r2 = r * r;
+  const pressures = stroke.pressures;
   for (const pc of cells) {
-    let falloff = 0;
-    for (const p of stroke.path) {
+    let bestFalloff = 0;
+    let bestPressure = 1;
+    for (let i = 0; i < stroke.path.length; i++) {
+      const p = stroke.path[i];
       const dx = pc.centerPc.x - p[0];
       const dy = pc.centerPc.y - p[1];
       const dz = pc.centerPc.z - p[2];
       const d2 = dx * dx + dy * dy + dz * dz;
-      if (d2 < r2) falloff = Math.max(falloff, 1 - Math.sqrt(d2) / r);
+      if (d2 >= r2) continue;
+      const f = 1 - Math.sqrt(d2) / r;
+      if (f > bestFalloff) { bestFalloff = f; bestPressure = pressures?.[i] ?? 1; }
     }
-    if (falloff <= 0) continue;
-    const add = stroke.intensity * falloff;
+    if (bestFalloff <= 0) continue;
+    const add = stroke.intensity * bestFalloff * bestPressure;
     const ck = cellKeyOf(pc);
     const m = editState.modifiers.get(ck);
     if (m) m.densityFactor += add;
