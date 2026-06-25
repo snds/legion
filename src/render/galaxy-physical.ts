@@ -12,7 +12,8 @@
 // ═══════════════════════════════════════════════════════════════════
 
 import {
-  AdditiveBlending, BufferGeometry, Float32BufferAttribute, Points, ShaderMaterial, Vector3,
+  AdditiveBlending, BufferGeometry, Color, Float32BufferAttribute, NormalBlending, Points, ShaderMaterial,
+  Vector3,
 } from 'three';
 import { WU_PER_PC } from '../core/metrics';
 import { galacticStarsVertexShader, galacticStarsFragmentShader } from './shaders/galactic-stars';
@@ -245,6 +246,118 @@ export function buildPhysicalGalaxyPoints(data: PhysicalGalaxyData): { points: P
   });
   const points = new Points(geo, material);
   points.name = 'galaxy-physical';
+  points.frustumCulled = false;
+  return { points, material };
+}
+
+// ── DUST EXTINCTION ─────────────────────────────────────────────────────────────────────────────────
+// Real absorption, not fog. Dust is a thin midplane layer concentrated on the arms' leading edge (where
+// the gas shocks). It renders as dark soft sprites with NORMAL (alpha) blending AFTER the additive stars:
+// a near-black sprite of alpha a multiplies the framebuffer by (1−a), so overlapping dust genuinely DARKENS
+// (self-shadows) the starlight behind it — the dark dust lanes face-on and the dark band edge-on. The dust
+// is slightly warm so what light leaks through is reddened. (View-exact front/back occlusion via a
+// depth-aware pass is a later refinement; a thin dark midplane already reads as the lane from any angle.)
+
+export interface DustConfig {
+  dustCount: number;
+  dustOpacity: number;        // per-particle base alpha (optical depth)
+  dustScaleHeight_pc: number; // thinner than the stars ⇒ a crisp midplane lane
+  dustLeadDeg: number;        // phase lead: dust sits on the inner/leading edge of the arms
+  dustContrast: number;       // how tightly dust hugs the arms
+}
+
+export const DEFAULT_DUST_CONFIG: DustConfig = {
+  dustCount: 700_000, dustOpacity: 0.16, dustScaleHeight_pc: 120, dustLeadDeg: 18, dustContrast: 0.92,
+};
+
+export interface DustData {
+  readonly positions: Float32Array; // galactocentric WU
+  readonly sizes: Float32Array;
+  readonly opacities: Float32Array;
+  readonly count: number;
+}
+
+/** Sample the dust as a thin, arm-leading-edge layer using the SAME density-wave as the stars. */
+export function sampleDust(
+  cfg: PhysicalGalaxyConfig, dust: DustConfig = DEFAULT_DUST_CONFIG, seed = 1,
+): DustData {
+  const rng = mulberry32((seed ^ 0x9e3779b9) >>> 0);
+  const noiseSeed = ((seed * 2654435761) >>> 0) + 1;
+  const n = dust.dustCount;
+  const positions = new Float32Array(n * 3);
+  const sizes = new Float32Array(n);
+  const opacities = new Float32Array(n);
+  const hz = dust.dustScaleHeight_pc / 1000;
+  const lead = (dust.dustLeadDeg * DEG2RAD) / Math.max(1, cfg.armCount);
+  const denom = 1 + dust.dustContrast;
+  for (let i = 0; i < n; i++) {
+    let Rkpc = gamma2(rng, cfg.discScaleLength_kpc * 1.05);
+    let phi = rng() * Math.PI * 2;
+    for (let t = 0; t < 5 && rng() > (1 + dust.dustContrast * armWave(Rkpc, phi + lead, cfg, noiseSeed)) / denom; t++) {
+      Rkpc = gamma2(rng, cfg.discScaleLength_kpc * 1.05);
+      phi = rng() * Math.PI * 2;
+    }
+    if (Rkpc > cfg.rMax_kpc) Rkpc = cfg.rMax_kpc * Math.sqrt(rng());
+    const u = Math.min(0.9995, Math.max(0.0005, rng()));
+    const i3 = i * 3;
+    positions[i3] = Rkpc * Math.cos(phi) * KPC_TO_WU;
+    positions[i3 + 1] = hz * Math.atanh(2 * u - 1) * KPC_TO_WU;
+    positions[i3 + 2] = Rkpc * Math.sin(phi) * KPC_TO_WU;
+    sizes[i] = 10 + rng() * 16;                          // soft dust blobs, larger than star points
+    opacities[i] = dust.dustOpacity * (0.45 + 0.55 * rng());
+  }
+  return { positions, sizes, opacities, count: n };
+}
+
+const dustVertexShader = /* glsl */ `
+  attribute float aSize;
+  attribute float aOpacity;
+  uniform float uPixelRatio;
+  uniform float uOpacityScale;
+  varying float vOpacity;
+  void main() {
+    vOpacity = aOpacity * uOpacityScale;
+    vec4 mv = modelViewMatrix * vec4(position, 1.0);
+    float depth = max(-mv.z, 0.001);
+    float lod = clamp(80000.0 / depth, 0.2, 1.0);
+    gl_PointSize = aSize * uPixelRatio * lod;
+    gl_Position = projectionMatrix * mv;
+  }
+`;
+const dustFragmentShader = /* glsl */ `
+  uniform vec3 uDustColor;
+  varying float vOpacity;
+  void main() {
+    vec2 p = gl_PointCoord - 0.5;
+    float d = length(p) * 2.0;
+    if (d > 1.0) discard;
+    float a = pow(1.0 - d, 1.5) * vOpacity; // soft edge × optical depth
+    gl_FragColor = vec4(uDustColor, a);     // NormalBlending: near-black ⇒ multiplies the stars down
+  }
+`;
+
+/** Build the dust Points: dark soft sprites, NORMAL-blended over the additive stars to occlude them. */
+export function buildDustPoints(data: DustData): { points: Points; material: ShaderMaterial } {
+  const geo = new BufferGeometry();
+  geo.setAttribute('position', new Float32BufferAttribute(data.positions, 3));
+  geo.setAttribute('aSize', new Float32BufferAttribute(data.sizes, 1));
+  geo.setAttribute('aOpacity', new Float32BufferAttribute(data.opacities, 1));
+  const material = new ShaderMaterial({
+    vertexShader: dustVertexShader,
+    fragmentShader: dustFragmentShader,
+    uniforms: {
+      uPixelRatio: { value: typeof window !== 'undefined' ? Math.min(window.devicePixelRatio, 2) : 1 },
+      uOpacityScale: { value: 1.0 },
+      uDustColor: { value: new Color(0.05, 0.03, 0.02) }, // very dark, faintly warm (reddened transmission)
+    },
+    transparent: true,
+    depthWrite: false,
+    depthTest: false,
+    blending: NormalBlending,
+  });
+  const points = new Points(geo, material);
+  points.name = 'galaxy-dust';
+  points.renderOrder = 10; // after the stars (which are renderOrder 0) so it darkens them
   points.frustumCulled = false;
   return { points, material };
 }
