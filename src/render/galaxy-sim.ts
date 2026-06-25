@@ -131,6 +131,12 @@ export function bootGalaxySim(renderCtx: RendererContext, shouldRun: () => boole
     + '<input id="gs-dust" type="range" min="0" max="2.5" step="0.1" value="1" style="width:100%;accent-color:#6aa3ff">'
     + '<div style="margin-top:5px;display:flex;justify-content:space-between"><span>dust lead</span><span id="gs-v-dlead" style="opacity:0.8">18°</span></div>'
     + '<input id="gs-dlead" type="range" min="-40" max="40" step="2" value="18" style="width:100%;accent-color:#6aa3ff">'
+    + '<div style="margin-top:5px;display:flex;justify-content:space-between"><span>dust thickness</span><span id="gs-v-dthk" style="opacity:0.8">0.16</span></div>'
+    + '<input id="gs-dthk" type="range" min="0.02" max="1" step="0.02" value="0.16" style="width:100%;accent-color:#6aa3ff">'
+    + '<div style="margin-top:5px;display:flex;justify-content:space-between"><span>dust segments</span><span id="gs-v-dseg" style="opacity:0.8">0.55</span></div>'
+    + '<input id="gs-dseg" type="range" min="0" max="1" step="0.05" value="0.55" style="width:100%;accent-color:#6aa3ff">'
+    + '<div style="margin-top:5px;display:flex;justify-content:space-between"><span>segment freq</span><span id="gs-v-dsegs" style="opacity:0.8">3.0</span></div>'
+    + '<input id="gs-dsegs" type="range" min="0.6" max="6" step="0.2" value="3.0" style="width:100%;accent-color:#6aa3ff">'
     + '<div style="margin-top:5px;display:flex;justify-content:space-between"><span>dust tendrils</span><span id="gs-v-dfil" style="opacity:0.8">0.7</span></div>'
     + '<input id="gs-dfil" type="range" min="0" max="1" step="0.05" value="0.7" style="width:100%;accent-color:#6aa3ff">'
     + '<div style="margin-top:5px;display:flex;justify-content:space-between"><span>gas clouds</span><span id="gs-v-cloud" style="opacity:0.8">0.9</span></div>'
@@ -174,6 +180,27 @@ export function bootGalaxySim(renderCtx: RendererContext, shouldRun: () => boole
     previewRebuild();
   });
   dleadEl.addEventListener('change', () => { rebuild(); });
+  const dthkEl = hud.querySelector<HTMLInputElement>('#gs-dthk')!;
+  dthkEl.addEventListener('input', () => {
+    dustCfg.dustThickness = +dthkEl.value;
+    hud.querySelector('#gs-v-dthk')!.textContent = (+dthkEl.value).toFixed(2);
+    previewRebuild();
+  });
+  dthkEl.addEventListener('change', () => { rebuild(); });
+  const dsegEl = hud.querySelector<HTMLInputElement>('#gs-dseg')!;
+  dsegEl.addEventListener('input', () => {
+    dustCfg.dustSegment = +dsegEl.value;
+    hud.querySelector('#gs-v-dseg')!.textContent = (+dsegEl.value).toFixed(2);
+    previewRebuild();
+  });
+  dsegEl.addEventListener('change', () => { rebuild(); });
+  const dsegsEl = hud.querySelector<HTMLInputElement>('#gs-dsegs')!;
+  dsegsEl.addEventListener('input', () => {
+    dustCfg.dustSegmentScale = +dsegsEl.value;
+    hud.querySelector('#gs-v-dsegs')!.textContent = (+dsegsEl.value).toFixed(1);
+    previewRebuild();
+  });
+  dsegsEl.addEventListener('change', () => { rebuild(); });
   const dfilEl = hud.querySelector<HTMLInputElement>('#gs-dfil')!;
   dfilEl.addEventListener('input', () => {
     dustCfg.dustFilament = +dfilEl.value;
