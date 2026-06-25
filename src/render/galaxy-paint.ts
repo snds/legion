@@ -22,7 +22,7 @@ import {
   createGalaxyBuildout, disposeGalaxyBuildout, regenerateRegion, updateGalaxyBuildout,
   type GalaxyBuildout,
 } from './sector/galaxy-buildout';
-import { applyStroke, rebuildEditState, type BrushStroke, type FalloffKind } from './galaxy-paint-ops';
+import { applyStroke, rebuildEditState, strokeCentroidXZ, type BrushStroke, type FalloffKind } from './galaxy-paint-ops';
 import { PointerSource, type BrushSample, type GestureSink } from './paint-input';
 import type { RendererContext } from './renderer';
 
@@ -246,7 +246,26 @@ export function bootGalaxyPaint(renderCtx: RendererContext, shouldRun: () => boo
   const cells = buildout.enumeration.cells;
   let pos = 0;
   let onStatus: (() => void) | null = null; // wired by the HUD below
+  // A held Apple Pencil press re-emits as several down/up cycles → several commits → a stacked, blown-out
+  // deposit (very bright in add, very dark in erase) while a finger stays clean. Drop a stroke that lands
+  // within COALESCE_MS of the previous AND overlaps it AND shares its mode ⇒ one physical press = one dab.
+  // Distinct locations (stippling) and continuous drags are untouched.
+  const COALESCE_MS = 220;
+  let lastMs = -1e9;
+  let lastCx = 0;
+  let lastCz = 0;
+  let lastType: BrushStroke['brushType'] | null = null;
+  const nowMs = (): number => (typeof performance !== 'undefined' ? performance.now() : 0);
   const onStroke = (stroke: BrushStroke): void => {
+    if (!stroke.path.length) return;
+    const [cx, cz] = strokeCentroidXZ(stroke.path);
+    const t = nowMs();
+    if (lastType === stroke.brushType && t - lastMs < COALESCE_MS) {
+      const dx = cx - lastCx;
+      const dz = cz - lastCz;
+      if (dx * dx + dz * dz < (stroke.radiusPc * 0.6) ** 2) { lastMs = t; return; } // duplicate press → skip
+    }
+    lastMs = t; lastCx = cx; lastCz = cz; lastType = stroke.brushType;
     if (pos < opList.length) opList.length = pos; // a new stroke truncates the redo-future
     const dirty = applyStroke(stroke, buildout.editState, cells); // editState is at `pos` → correct
     opList.push({ stroke, dirty });
