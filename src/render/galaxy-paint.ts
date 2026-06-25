@@ -12,7 +12,8 @@
 // ═══════════════════════════════════════════════════════════════════
 
 import {
-  Group, MathUtils, PerspectiveCamera, Plane, Raycaster, Scene, Vector2, Vector3,
+  BufferGeometry, Float32BufferAttribute, Group, LineBasicMaterial, LineLoop, MathUtils, Object3D,
+  PerspectiveCamera, Plane, Raycaster, Scene, Vector2, Vector3,
 } from 'three';
 import { WU_PER_PC } from '../core/metrics';
 import { Broker } from './scale-manager';
@@ -40,22 +41,41 @@ export class PaintBrush {
   private readonly _ndc = new Vector2();
   private readonly _hit = new Vector3();
   private readonly source: PointerSource;
+  /** Phase 2c: a footprint ring on the plane that follows hover (preview) + the active stroke. */
+  private readonly ring: LineLoop | null;
 
-  constructor(cam: PerspectiveCamera, el: HTMLCanvasElement, onStroke: (s: BrushStroke) => void, gesture?: GestureSink) {
-    // Raycast a sample (canvas-relative CSS px, already rect-corrected by PointerSource) onto the plane;
-    // record its pressure aligned 1:1 with the path so the deposit can vary along the drag.
-    const push = (s: BrushSample): void => {
+  constructor(
+    cam: PerspectiveCamera, el: HTMLCanvasElement, onStroke: (s: BrushStroke) => void,
+    gesture?: GestureSink, previewParent?: Object3D,
+  ) {
+    this.ring = previewParent ? makePreviewRing() : null;
+    if (this.ring && previewParent) previewParent.add(this.ring);
+
+    // Raycast a sample (canvas-relative CSS px, already rect-corrected by PointerSource) onto the plane.
+    const project = (sx: number, sy: number): boolean => {
       const rect = el.getBoundingClientRect();
-      this._ndc.set((s.x / rect.width) * 2 - 1, -(s.y / rect.height) * 2 + 1);
+      this._ndc.set((sx / rect.width) * 2 - 1, -(sy / rect.height) * 2 + 1);
       this.raycaster.setFromCamera(this._ndc, cam);
-      if (this.raycaster.ray.intersectPlane(this.plane, this._hit)) {
-        this.path.push([this._hit.x / WU_PER_PC, this._hit.y / WU_PER_PC, this._hit.z / WU_PER_PC]);
-        this.pressures.push(s.pressure);
-      }
+      return this.raycaster.ray.intersectPlane(this.plane, this._hit) !== null;
+    };
+    // Park the footprint ring at the current _hit, sized to the brush radius (WU = pc·WU_PER_PC).
+    const showRing = (): void => {
+      if (!this.ring) return;
+      this.ring.position.copy(this._hit);
+      this.ring.scale.setScalar(this.radiusPc * WU_PER_PC);
+      this.ring.visible = true;
+    };
+    // Record a stamp's galPc + pressure (aligned 1:1) so the deposit can vary along the drag.
+    const push = (s: BrushSample): void => {
+      if (!project(s.x, s.y)) return;
+      this.path.push([this._hit.x / WU_PER_PC, this._hit.y / WU_PER_PC, this._hit.z / WU_PER_PC]);
+      this.pressures.push(s.pressure);
+      showRing(); // the ring follows the active stroke too
     };
     // Phase 2a/2b: passthrough (no coalesce / resample / stabilize) ⇒ byte-identical to the old mouse path.
     // The gesture sink (Phase 2e) routes a 2nd touch finger to two-finger navigation.
     this.source = new PointerSource(el, { gesture }, {
+      onHover: (s) => { if (this.ring) { if (project(s.x, s.y)) showRing(); else this.ring.visible = false; } },
       onStrokeBegin: (s) => { this.path = []; this.pressures = []; push(s); },
       onStrokeSample: (s) => push(s),
       onStrokeEnd: () => {
@@ -65,7 +85,33 @@ export class PaintBrush {
     });
   }
 
-  dispose(): void { this.source.dispose(); }
+  dispose(): void {
+    this.source.dispose();
+    if (this.ring) {
+      this.ring.removeFromParent();
+      this.ring.geometry.dispose();
+      (this.ring.material as LineBasicMaterial).dispose();
+    }
+  }
+}
+
+/** A 64-segment unit circle laid flat in the XZ plane (LineLoop) — the brush footprint ring. Scaled to
+ *  the brush radius (WU) + parked at the hover/stroke point; depthTest off so it floats over the stars. */
+function makePreviewRing(): LineLoop {
+  const SEG = 64;
+  const pos = new Float32Array(SEG * 3);
+  for (let i = 0; i < SEG; i++) {
+    const a = (i / SEG) * Math.PI * 2;
+    pos[i * 3] = Math.cos(a);
+    pos[i * 3 + 2] = Math.sin(a);
+  }
+  const geo = new BufferGeometry();
+  geo.setAttribute('position', new Float32BufferAttribute(pos, 3));
+  const mat = new LineBasicMaterial({ color: 0x6aa3ff, transparent: true, opacity: 0.6, depthTest: false });
+  const ring = new LineLoop(geo, mat);
+  ring.renderOrder = 999;
+  ring.visible = false;
+  return ring;
 }
 
 const ORBIT_SPEED = 0.005; // rad per screen px, shared by mouse-drag and two-finger orbit
@@ -198,7 +244,7 @@ export function bootGalaxyPaint(renderCtx: RendererContext, shouldRun: () => boo
       if (d.pinchRatio > 0) cam.dolly(1 / d.pinchRatio); // spread apart (ratio>1) ⇒ zoom in
     },
   };
-  const brush = new PaintBrush(camera, renderCtx.canvas, onStroke, gesture);
+  const brush = new PaintBrush(camera, renderCtx.canvas, onStroke, gesture, scene);
 
   // Pin the floating-origin rebase at the galactic centre → the galaxy sits centred at the scene
   // origin (a region at galPc renders at galPc·WU_PER_PC). Fixed, so the orbit camera is plain.
