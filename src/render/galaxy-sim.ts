@@ -13,6 +13,7 @@ import {
   DEFAULT_PHYSICAL_CONFIG, DEFAULT_DUST_CONFIG,
   type PhysicalGalaxyConfig, type PhysicalGalaxyData, type DustConfig,
 } from './galaxy-physical';
+import { buildGalaxyCloud, DEFAULT_CLOUD_CONFIG, type GalaxyCloud, type CloudConfig } from './galaxy-cloud';
 import type { RendererContext } from './renderer';
 
 export interface GalaxySim {
@@ -60,6 +61,8 @@ export function bootGalaxySim(renderCtx: RendererContext, shouldRun: () => boole
 
   const cfg: PhysicalGalaxyConfig = { ...DEFAULT_PHYSICAL_CONFIG };
   const dustCfg: DustConfig = { ...DEFAULT_DUST_CONFIG };
+  const cloudCfg: CloudConfig = { ...DEFAULT_CLOUD_CONFIG };
+  let cloud: GalaxyCloud | null = null;
   let seed = 1;
   let dustOpacity = 1.0; // live opacity scale (uOpacityScale)
   let current: { points: Points; material: ShaderMaterial; dust: Points; dustMat: ShaderMaterial } | null = null;
@@ -85,9 +88,12 @@ export function bootGalaxySim(renderCtx: RendererContext, shouldRun: () => boole
     root.add(g.points);
     root.add(d.points);
     current = { points: g.points, material: g.material, dust: d.points, dustMat: d.material };
+    if (cloud) cloud.sync(cfg, cloudCfg); // re-trace the gas onto the (possibly retuned) arms
     sim.data = data;
   };
   rebuild();
+  cloud = buildGalaxyCloud(cfg, cloudCfg); // gas/nebulosity volume — created once, rides the rotating root
+  root.add(cloud.mesh);
 
   const cam = new OrbitFlyCamera(camera, renderCtx.canvas, 3.4e7); // frames the ~32 kpc disc
   (sim as { cam: OrbitFlyCamera }).cam = cam;
@@ -126,7 +132,9 @@ export function bootGalaxySim(renderCtx: RendererContext, shouldRun: () => boole
     + '<div style="margin-top:5px;display:flex;justify-content:space-between"><span>dust lead</span><span id="gs-v-dlead" style="opacity:0.8">18°</span></div>'
     + '<input id="gs-dlead" type="range" min="-40" max="40" step="2" value="18" style="width:100%;accent-color:#6aa3ff">'
     + '<div style="margin-top:5px;display:flex;justify-content:space-between"><span>dust tendrils</span><span id="gs-v-dfil" style="opacity:0.8">0.7</span></div>'
-    + '<input id="gs-dfil" type="range" min="0" max="1" step="0.05" value="0.7" style="width:100%;accent-color:#6aa3ff">';
+    + '<input id="gs-dfil" type="range" min="0" max="1" step="0.05" value="0.7" style="width:100%;accent-color:#6aa3ff">'
+    + '<div style="margin-top:5px;display:flex;justify-content:space-between"><span>gas clouds</span><span id="gs-v-cloud" style="opacity:0.8">0.9</span></div>'
+    + '<input id="gs-cloud" type="range" min="0" max="2" step="0.05" value="0.9" style="width:100%;accent-color:#6aa3ff">';
   html += '<div style="margin-top:9px;border-top:1px solid #2a3340;padding-top:7px;display:flex;justify-content:space-between">'
     + '<span>time warp</span><span id="gs-v-warp" style="opacity:0.8">0 Myr/s</span></div>'
     + '<input id="gs-warp" type="range" min="0" max="15" step="0.5" value="0" style="width:100%;accent-color:#6aa3ff">';
@@ -173,6 +181,12 @@ export function bootGalaxySim(renderCtx: RendererContext, shouldRun: () => boole
     previewRebuild();
   });
   dfilEl.addEventListener('change', () => { rebuild(); });
+  const cloudEl = hud.querySelector<HTMLInputElement>('#gs-cloud')!;
+  cloudEl.addEventListener('input', () => {
+    cloudCfg.intensity = +cloudEl.value;
+    hud.querySelector('#gs-v-cloud')!.textContent = (+cloudEl.value).toFixed(2);
+    if (cloud) cloud.material.uniforms.uIntensity!.value = cloudCfg.intensity; // live, no resample
+  });
   const warpEl = hud.querySelector<HTMLInputElement>('#gs-warp')!;
   warpEl.addEventListener('input', () => {
     warp = +warpEl.value;
@@ -190,6 +204,7 @@ export function bootGalaxySim(renderCtx: RendererContext, shouldRun: () => boole
         current.points.geometry.dispose(); current.material.dispose();
         current.dust.geometry.dispose(); current.dustMat.dispose();
       }
+      if (cloud) { cloud.mesh.geometry.dispose(); cloud.material.dispose(); }
       hud.remove();
       window.removeEventListener('resize', onResize);
       return;
@@ -199,6 +214,7 @@ export function bootGalaxySim(renderCtx: RendererContext, shouldRun: () => boole
     const dt = lastMs ? (now - lastMs) / 1000 : 0;
     lastMs = now;
     if (warp !== 0) root.rotation.y += patternOmega * warp * dt; // rigid pattern rotation (no winding)
+    if (cloud) cloud.update(camera, cloudCfg.intensity > 0 ? 26 : 0); // skip the march when gas is off
     cam.update();
     renderCtx.renderer.render(scene, camera);
   }
