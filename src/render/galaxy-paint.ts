@@ -22,54 +22,45 @@ import {
   type GalaxyBuildout,
 } from './sector/galaxy-buildout';
 import { applyStroke, rebuildEditState, type BrushStroke } from './galaxy-paint-ops';
+import { PointerSource } from './paint-input';
 import type { RendererContext } from './renderer';
 
-/** Density brush: LEFT-drag stamps along the galactic plane (scene y=0 ↔ galactocentric y=0). Pressure
- *  (depth off the plane) is Phase 2; here every stamp lands on the plane. Emits a BrushStroke on release. */
+/** Density brush: a paint pointer (pen, touch, or LEFT mouse) drags stamps along the galactic plane
+ *  (scene y=0 ↔ galactocentric y=0). Input arrives already normalized as BrushSamples from PointerSource,
+ *  so pen / touch / mouse are one path and each sample carries pressure + tilt for Phase 2b/2f. Off-plane
+ *  depth is a later mode; here every stamp lands on the plane. Emits a BrushStroke on release. */
 export class PaintBrush {
   radiusPc = 1500;
   intensity = 0.8;
-  private painting = false;
   private path: Array<[number, number, number]> = [];
   private readonly raycaster = new Raycaster();
   private readonly plane = new Plane(new Vector3(0, 1, 0), 0); // scene y=0 = the galactic mid-plane
   private readonly _ndc = new Vector2();
   private readonly _hit = new Vector3();
-  private readonly cleanup: Array<() => void> = [];
+  private readonly source: PointerSource;
 
   constructor(cam: PerspectiveCamera, el: HTMLCanvasElement, onStroke: (s: BrushStroke) => void) {
-    const toGalPc = (e: PointerEvent): [number, number, number] | null => {
+    // Raycast a canvas-relative CSS-px point (already rect-corrected by PointerSource) onto the plane.
+    const push = (sx: number, sy: number): void => {
       const rect = el.getBoundingClientRect();
-      this._ndc.set(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
+      this._ndc.set((sx / rect.width) * 2 - 1, -(sy / rect.height) * 2 + 1);
       this.raycaster.setFromCamera(this._ndc, cam);
-      if (!this.raycaster.ray.intersectPlane(this.plane, this._hit)) return null;
-      return [this._hit.x / WU_PER_PC, this._hit.y / WU_PER_PC, this._hit.z / WU_PER_PC];
+      if (this.raycaster.ray.intersectPlane(this.plane, this._hit)) {
+        this.path.push([this._hit.x / WU_PER_PC, this._hit.y / WU_PER_PC, this._hit.z / WU_PER_PC]);
+      }
     };
-    const onDown = (e: PointerEvent): void => {
-      if (e.button !== 0) return; // left only
-      this.painting = true; this.path = [];
-      const p = toGalPc(e); if (p) this.path.push(p);
-    };
-    const onMove = (e: PointerEvent): void => {
-      if (!this.painting) return;
-      const p = toGalPc(e); if (p) this.path.push(p);
-    };
-    const onUp = (): void => {
-      if (!this.painting) return;
-      this.painting = false;
-      if (this.path.length) onStroke({ brushType: 'density-add', path: this.path, radiusPc: this.radiusPc, intensity: this.intensity });
-    };
-    el.addEventListener('pointerdown', onDown);
-    el.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp);
-    this.cleanup.push(
-      () => el.removeEventListener('pointerdown', onDown),
-      () => el.removeEventListener('pointermove', onMove),
-      () => window.removeEventListener('pointerup', onUp),
-    );
+    // Phase 2a: passthrough (no coalesce / resample / stabilize) ⇒ byte-identical to the old mouse path.
+    this.source = new PointerSource(el, {}, {
+      onStrokeBegin: (s) => { this.path = []; push(s.x, s.y); },
+      onStrokeSample: (s) => push(s.x, s.y),
+      onStrokeEnd: () => {
+        if (this.path.length) onStroke({ brushType: 'density-add', path: this.path, radiusPc: this.radiusPc, intensity: this.intensity });
+      },
+      onStrokeCancel: () => { this.path = []; },
+    });
   }
 
-  dispose(): void { for (const fn of this.cleanup) fn(); }
+  dispose(): void { this.source.dispose(); }
 }
 
 /** A turntable free-fly camera: drag = orbit, shift/middle-drag = pan the focus, wheel = dolly.
