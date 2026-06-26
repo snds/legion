@@ -160,7 +160,11 @@ export function createPhysicalGalaxy(opts: { withPanel?: boolean } = {}): Physic
         num('armSpurReach', 'spur reach', 0.2, 0.9, 0.05),
       ] },
       { title: 'Stars', key: 'stars', ctrls: [
-        num('clumpFraction', 'knots', 0, 0.4, 0.01),
+        num('starProminence', 'prominence', 0, 1, 0.05),
+        num('starFaintDim', 'faint dim', 0, 1, 0.05),
+        num('clumpFraction', 'clusters', 0, 0.4, 0.01),
+        num('clumpScale_pc', 'cluster size', 60, 600, 10, undefined, 'pc'),
+        num('clusterArm', 'cluster arm', 0, 1, 0.05),
       ] },
       { title: 'Dust', key: 'dust', ctrls: [
         { label: 'dust', min: 0, max: 2.5, step: 0.1, get: () => dustOpacity, set: (v) => { dustOpacity = v; },
