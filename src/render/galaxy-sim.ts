@@ -14,8 +14,9 @@
 // Promotion to the live game (folding interim into the code defaults) is a separate, manual step.
 // ═══════════════════════════════════════════════════════════════════
 
-import { type Camera, Group, PerspectiveCamera, Points, Scene, ShaderMaterial } from 'three';
+import { type Camera, Group, PerspectiveCamera, Points, Scene, ShaderMaterial, Vector3 } from 'three';
 import { OrbitFlyCamera } from './galaxy-paint';
+import { WU_PER_PC } from '../core/metrics';
 import { MW, KMS_PER_KPC_TO_RAD_PER_MYR } from './mw-model';
 import {
   samplePhysicalGalaxy, buildPhysicalGalaxyPoints, sampleDust, buildDustPoints,
@@ -52,6 +53,20 @@ interface Ctrl {
 interface Section { title: string; key: string; ctrls: Ctrl[] }
 
 const PREVIEW_COUNT = 550_000; // fast resample while dragging; full count on release
+const KPC_WU = 1000 * WU_PER_PC; // unified frame: 1 kpc = 1e6 WU (matches galaxy-physical positions)
+const _camPos = new Vector3();
+const _ctr = new Vector3();
+
+/** Distance-ramped raymarch step count (quick-win perf): the diffuse gas needs FEW steps — ~14 when the
+ *  disc fills the view, ramping to ~6 when it's small/far, and 0 when off (intensity 0 or zoomed away). The
+ *  bake (phase 2) makes each step a single texture fetch; this just cuts the count the live FBM march pays. */
+function cloudSteps(camera: Camera, root: Group, rMax_kpc: number, active: boolean): number {
+  if (!active) return 0;
+  camera.getWorldPosition(_camPos);
+  root.getWorldPosition(_ctr);
+  const rel = _camPos.distanceTo(_ctr) / Math.max(1, rMax_kpc * KPC_WU); // ~1 at the rim, grows when far
+  return Math.max(6, Math.min(14, Math.round(16 - rel * 4)));
+}
 const STORE_KEY = 'legion.galaxy.interim';   // saved interim defaults (cfg/dust/cloud)
 const COLLAPSE_KEY = 'legion.galaxy.collapsed'; // which panel sections are collapsed
 
@@ -290,7 +305,7 @@ export function createPhysicalGalaxy(opts: { withPanel?: boolean } = {}): Physic
 
   const update = (camera: Camera, dt: number, cloudActive = true): void => {
     if (warp !== 0) root.rotation.y += patternOmega * warp * dt; // rigid pattern rotation (no winding)
-    const steps = cloudActive && cloudCfg.intensity > 0 ? 26 : 0; // skip the march when off/zoomed away
+    const steps = cloudSteps(camera, root, cfg.rMax_kpc, cloudActive && cloudCfg.intensity > 0);
     if (cloud) cloud.update(camera, steps);
   };
   const dispose = (): void => {
