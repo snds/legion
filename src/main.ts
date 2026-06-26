@@ -74,6 +74,7 @@ import {
 } from './render/scene-objects';
 import { createGalaxy, getGalaxyOffset, getGalaxyCrossfade, updateGalaxyAnimations, updateGalaxyLOD, updateGalaxyMarkerScale, updateGalaxyFrame, updateStarStreaks, createSectorOrb, setDiscVisual } from './render/galaxy';
 import { createGalaxyBuildout, updateGalaxyBuildout, buildoutStatus, type GalaxyBuildout } from './render/sector/galaxy-buildout';
+import { createPhysicalGalaxy, type PhysicalGalaxySystem } from './render/galaxy-sim';
 import { createSectorPrototype, updateSectorPrototype } from './render/sector/sector-prototype';
 import { createSectorManager, updateSectorManager, type SectorManager } from './render/sector/sector-manager';
 import { createRegionManager, regionTelemetry, updateRegionManager, type RegionManager } from './render/sector/region-manager';
@@ -506,6 +507,12 @@ async function boot(): Promise<void> {
     }
     if (worldExtras.sectorFill) updateSectorFill(worldExtras.sectorFill); // capped corridor fill
     if (worldExtras.galaxyBuildout) updateGalaxyBuildout(worldExtras.galaxyBuildout); // full-galaxy fill
+    if (worldExtras.physGalaxy) {
+      // Ride the galactic-tier floating origin (same centre as the legacy galaxy group), then rotate the
+      // pattern + refresh the cloud's world→local matrix. Gas raymarch only near galaxy scale.
+      worldExtras.physGalaxy.root.position.copy(getGalaxyOffset());
+      worldExtras.physGalaxy.update(camera, frameTime, Game.data.camDist > 1e6);
+    }
 
     // 7. Audio
     Audio.updateMix(frameTime);
@@ -615,6 +622,7 @@ interface WorldExtras {
   regionMgr: RegionManager | null;
   sectorFill: SectorFill | null;
   galaxyBuildout: GalaxyBuildout | null;
+  physGalaxy: PhysicalGalaxySystem | null;
 }
 
 function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol'): WorldExtras {
@@ -839,14 +847,29 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol'): WorldExtras {
     console.info(`[sector-fill] filling ${sectorFill.queue.length} sectors home→core — __fillStatus() for progress`);
   }
 
-  // FULL-GALAXY build-out (?proto-galaxy) — the whole disc rendered as region-merged sector stars,
-  // with the disc emission visual disabled for performance. Enumerates synchronously at boot (~1s).
-  const galaxyBuildout = params.has('proto-galaxy') ? createGalaxyBuildout(sceneRoot) : null;
+  // LEGACY full-galaxy build-out (?proto-buildout) — the whole disc rendered as region-merged sector stars,
+  // with the disc emission visual disabled for performance. Superseded by the physical galaxy below; kept
+  // reachable for comparison. Enumerates synchronously at boot (~1s).
+  const galaxyBuildout = params.has('proto-buildout') ? createGalaxyBuildout(sceneRoot) : null;
   if (galaxyBuildout) {
     setDiscVisual(false);
     (globalThis as Record<string, unknown>).__buildout = galaxyBuildout;
     (globalThis as Record<string, unknown>).__buildoutStatus = () => buildoutStatus(galaxyBuildout);
     console.info(`[galaxy-buildout] ${galaxyBuildout.enumeration.cells.length} cells / ${galaxyBuildout.queue.length} regions — disc disabled; __buildoutStatus()`);
+  }
+
+  // PHYSICAL GALAXY (?proto-galaxy) — the globally-sampled density-wave galaxy (stars + dust + raymarched
+  // gas) as the in-game galaxy visual, replacing the legacy raymarched disc. Its root rides the galactic-
+  // tier floating origin (re-rooted each frame in the loop), at scale 1.0 since the physical positions are
+  // ALREADY in the unified frame (1 kpc = 1e6 WU) — no ×GALAXY_MODEL_SCALE. The full tuning panel rides
+  // along so the look can keep being refined in-context.
+  const physGalaxy = params.has('proto-galaxy') ? createPhysicalGalaxy({ withPanel: true }) : null;
+  if (physGalaxy) {
+    physGalaxy.root.position.copy(getGalaxyOffset()); // galactic-tier centre; re-rooted per frame in the loop
+    sceneRoot.add(physGalaxy.root);
+    setDiscVisual(false); // the physical galaxy IS the disc visual now
+    (globalThis as Record<string, unknown>).__physGalaxy = physGalaxy;
+    console.info('[proto-galaxy] physical galaxy active — legacy disc hidden; tune via the panel');
   }
 
   // ── Sector orb (Homeworld-style sensor bubble, visible at sector tier) ──
@@ -860,7 +883,7 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol'): WorldExtras {
   const sectorOrb = createSectorOrb(19.1 * LY_TO_WU);
   sceneRoot.add(sectorOrb);
 
-  return { eclipticGrid, oortCloud, galaxyArms: galaxyGroup, sectorOrb, bobEids, protoSector, sectorMgr, regionMgr, sectorFill, galaxyBuildout };
+  return { eclipticGrid, oortCloud, galaxyArms: galaxyGroup, sectorOrb, bobEids, protoSector, sectorMgr, regionMgr, sectorFill, galaxyBuildout, physGalaxy };
 }
 
 // ── Start ────────────────────────────────────────────────────────
