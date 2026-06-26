@@ -49,6 +49,11 @@ export interface PhysicalGalaxyConfig {
   armNoise: number;     // 0 = clean spiral → ~1 = flocculent (phase warp amplitude)
   armNoiseScale: number; // spatial frequency of the warp (per kpc)
   armBlue: number;      // 0 = no tint → 1 = strong blue arm tint
+  // stellar prominence — a per-star luminosity draw (skewed faint, like a real luminosity function) that
+  // scales BOTH apparent brightness and sprite size, so you can raise `count` for a volumetric haze while a
+  // sparse set of luminous stars carry the eye. 0/0 reproduces the flat IMF look exactly.
+  starProminence: number; // 0 = uniform → 1 = strong few-bright-many-faint (size + brightness spread)
+  starFaintDim: number;   // 0 = none → 1 = faint majority dimmed toward the floor
   // spurs / feathers — a steeper-pitch secondary log-spiral added onto the arm ridge (one shared field)
   armSpurAmp: number;      // master spur strength (0 = today's galaxy exactly)
   armSpurOpen: number;     // how much MORE open spurs are than the arm (cot2 = cot/this)
@@ -60,9 +65,10 @@ export interface PhysicalGalaxyConfig {
   armSpurReach: number;    // half-interarm length clamp for on-arm spurs (fraction of the gap)
   // disc rim
   rimFeather: number;   // 0 = sharp truncation → 1 = ragged, wispy edge with arm streamers past rMax
-  // star-forming knots
+  // star-forming knots / clusters
   clumpFraction: number; // share of disc stars gathered into knots
-  clumpScale_pc: number; // knot radius
+  clumpScale_pc: number; // knot/cluster radius
+  clusterArm: number;    // 0 = round clusters → 1 = clusters elongate along the local arm direction
   // bar
   barFraction: number;
   barLength_kpc: number;
@@ -84,6 +90,8 @@ export const DEFAULT_PHYSICAL_CONFIG: PhysicalGalaxyConfig = {
   armNoise: 0.4,
   armNoiseScale: 0.55,
   armBlue: 0.7,
+  starProminence: 0.45,
+  starFaintDim: 0.4,
   armSpurAmp: 0.35,
   armSpurOpen: 2.0,
   armSpurDensity: 3.5,
@@ -95,6 +103,7 @@ export const DEFAULT_PHYSICAL_CONFIG: PhysicalGalaxyConfig = {
   rimFeather: 0.6,
   clumpFraction: 0.13,
   clumpScale_pc: 220,
+  clusterArm: 0.5,
   barFraction: 0.08,
   barLength_kpc: 4.2,
   barAxisRatio: 0.32,
@@ -293,13 +302,26 @@ export function samplePhysicalGalaxy(
         crest: 0,
       };
     } else if (rng() < cfg.clumpFraction) {
-      // Star-forming knot: scatter around a clump centre on an arm (bright, blue).
+      // Star-forming knot/cluster: scatter around a clump centre on an arm (bright, blue). The scatter is
+      // anisotropic — stretched ALONG the local arm tangent by clusterArm — so clusters elongate down the
+      // arm instead of sitting as round blobs. Two Box-Muller normals (same rng count as the old r,a pair,
+      // so determinism + clusterArm=0 ≡ the old isotropic Gaussian).
       const c = clumps[(Math.floor(rng() * NC)) % NC]!;
-      const r = clumpSigma * Math.sqrt(-2 * Math.log(1 - rng()));
-      const a = rng() * Math.PI * 2;
+      const u1 = Math.min(0.9999, Math.max(1e-6, rng()));
+      const u2 = rng();
+      const mag = Math.sqrt(-2 * Math.log(u1));
+      const g1 = mag * Math.cos(2 * Math.PI * u2);
+      const g2 = mag * Math.sin(2 * Math.PI * u2);
+      const phiC = Math.atan2(c.gz, c.gx);
+      const ca = Math.cos(phiC), sa = Math.sin(phiC);
+      const pitchR = cfg.armPitch_deg * DEG2RAD;
+      const tx = -sa * Math.cos(pitchR) + ca * Math.sin(pitchR); // local arm tangent (azimuthal tilted by pitch)
+      const tz = ca * Math.cos(pitchR) + sa * Math.sin(pitchR);
+      const along = clumpSigma * (1 + cfg.clusterArm * 2.2) * g1;
+      const perp = clumpSigma * (1 - cfg.clusterArm * 0.45) * g2;
       const u = Math.min(0.9995, Math.max(0.0005, rng()));
-      let kx = c.gx + r * Math.cos(a);
-      let kz = c.gz + r * Math.sin(a);
+      let kx = c.gx + along * tx + perp * (-tz);
+      let kz = c.gz + along * tz + perp * tx;
       const kR = Math.hypot(kx, kz); // a knot scattered past the feathered rim is pulled back to the bound
       if (kR > cfg.rMax_kpc * RIM_MAX) { const f = (cfg.rMax_kpc * RIM_MAX) / kR; kx *= f; kz *= f; }
       s = {
@@ -314,14 +336,19 @@ export function samplePhysicalGalaxy(
 
     const [r, g, b, sz] = sampleArmStar(rng, s.crest);
     const t = Math.min(1, cfg.armBlue * s.crest); // pull arm stars toward young blue
+    // Stellar prominence: a faint-skewed luminosity draw (power-law) scales BOTH apparent brightness and
+    // sprite size, layered on the IMF base. 0/0 ⇒ identity (bright=1, sizeMul=1).
+    const lum = Math.pow(rng(), 1 + cfg.starProminence * 4); // 0..1, more faint-skewed as prominence rises
+    const bright = 1 - cfg.starFaintDim * (1 - lum);          // faint majority dimmed toward (1−faintDim)
+    const sizeMul = 1 + cfg.starProminence * (2.0 * lum - 0.7); // bright stars bloom bigger, faint shrink
     const i3 = i * 3;
     positions[i3] = s.gx * KPC_TO_WU;
     positions[i3 + 1] = s.gy * KPC_TO_WU;
     positions[i3 + 2] = s.gz * KPC_TO_WU;
-    colors[i3] = r * (1 - t) + 0.45 * t;
-    colors[i3 + 1] = g * (1 - t) + 0.66 * t;
-    colors[i3 + 2] = b * (1 - t) + 1.0 * t;
-    sizes[i] = sz;
+    colors[i3] = (r * (1 - t) + 0.45 * t) * bright;
+    colors[i3 + 1] = (g * (1 - t) + 0.66 * t) * bright;
+    colors[i3 + 2] = (b * (1 - t) + 1.0 * t) * bright;
+    sizes[i] = sz * Math.max(0.15, sizeMul);
     crests[i] = s.crest;
   }
   return { positions, colors, sizes, crests, count: n };
