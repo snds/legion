@@ -4,11 +4,14 @@
 // extinction layer and a low-res raymarched gas volume, plus a hand-tuning control panel.
 //
 //   createPhysicalGalaxy() — the REUSABLE factory: builds stars+dust+cloud into its own root Group, wires
-//     the control panel, and returns { root, update, dispose }. The CALLER owns where the root lives and
-//     when update() runs, so it serves BOTH the standalone ?galaxy-sim harness AND the in-game ?proto-galaxy
-//     (where the root rides the galactic-tier floating origin alongside the legacy markers).
-//   bootGalaxySim() — the thin standalone shell (?galaxy-sim): a Scene + free-fly camera + render loop
-//     around one createPhysicalGalaxy(), for tuning in isolation.
+//     the control panel (collapsible sections + Save/Revert persistence), returns { root, update, dispose }.
+//     Serves BOTH the standalone ?galaxy-sim harness AND the in-game ?proto-galaxy.
+//   bootGalaxySim() — the thin standalone shell (?galaxy-sim): a Scene + free-fly camera + render loop.
+//
+// PERSISTENCE: the panel's Save stores the current settings to localStorage as INTERIM DEFAULTS (the code
+// DEFAULT_* constants are the untouched originals). On next boot the interim defaults load on top of the
+// originals, so a saved look persists across reloads. Revert clears the interim → back to the originals.
+// Promotion to the live game (folding interim into the code defaults) is a separate, manual step.
 // ═══════════════════════════════════════════════════════════════════
 
 import { type Camera, Group, PerspectiveCamera, Points, Scene, ShaderMaterial } from 'three';
@@ -33,42 +36,24 @@ export interface PhysicalGalaxySystem {
   dispose(): void;
 }
 
-/** One tunable knob: a config key, its UI range, and an optional display scale (e.g. count in millions). */
-interface Knob {
+/** One panel slider: a value getter/setter onto some config, its UI range, and whether it applies LIVE
+ *  (no resample) or triggers a resample. Generic over which config object it targets. */
+interface Ctrl {
   label: string;
-  key: keyof PhysicalGalaxyConfig;
   min: number;
   max: number;
   step: number;
-  scale?: number; // cfg value = slider value × scale (default 1)
+  scale?: number; // displayed value = real value / scale (e.g. stars in millions)
   unit?: string;
+  get: () => number;
+  set: (v: number) => void;
+  live?: () => void; // present ⇒ a LIVE control (apply on input, never resample)
 }
-
-const KNOBS: Knob[] = [
-  { label: 'stars', key: 'count', min: 0.3, max: 3, step: 0.1, scale: 1e6, unit: 'M' },
-  { label: 'arms (m)', key: 'armCount', min: 1, max: 5, step: 1 },
-  { label: 'pitch', key: 'armPitch_deg', min: 5, max: 32, step: 1, unit: '°' },
-  { label: 'arm contrast', key: 'armContrast', min: 0, max: 1, step: 0.05 },
-  { label: 'arm width', key: 'armWidth', min: 0.3, max: 1, step: 0.05 },
-  { label: 'flocculence', key: 'armNoise', min: 0, max: 1.2, step: 0.05 },
-  { label: 'noise scale', key: 'armNoiseScale', min: 0.1, max: 1.5, step: 0.05 },
-  { label: 'arm blue', key: 'armBlue', min: 0, max: 1, step: 0.05 },
-  { label: 'knots', key: 'clumpFraction', min: 0, max: 0.4, step: 0.01 },
-  { label: 'bulge', key: 'bulgeFraction', min: 0, max: 0.4, step: 0.01 },
-  { label: 'bar amount', key: 'barFraction', min: 0, max: 0.25, step: 0.01 },
-  { label: 'bar length', key: 'barLength_kpc', min: 0, max: 8, step: 0.2, unit: 'kpc' },
-  { label: 'rim feather', key: 'rimFeather', min: 0, max: 1, step: 0.05 },
-  { label: 'spurs', key: 'armSpurAmp', min: 0, max: 0.8, step: 0.05 },
-  { label: 'spur open', key: 'armSpurOpen', min: 1.3, max: 3, step: 0.1 },
-  { label: 'spur count', key: 'armSpurDensity', min: 2, max: 6, step: 0.1 },
-  { label: 'spur sharp', key: 'armSpurSharp', min: 1.5, max: 6, step: 0.1 },
-  { label: 'spur warp', key: 'armSpurWarp', min: 0, max: 0.6, step: 0.05 },
-  { label: 'inter-arm', key: 'armSpurInterArm', min: 0, max: 0.6, step: 0.05 },
-  { label: 'spur flank', key: 'armSpurFlank', min: 0.1, max: 1, step: 0.05 },
-  { label: 'spur reach', key: 'armSpurReach', min: 0.2, max: 0.9, step: 0.05 },
-];
+interface Section { title: string; key: string; ctrls: Ctrl[] }
 
 const PREVIEW_COUNT = 550_000; // fast resample while dragging; full count on release
+const STORE_KEY = 'legion.galaxy.interim';   // saved interim defaults (cfg/dust/cloud)
+const COLLAPSE_KEY = 'legion.galaxy.collapsed'; // which panel sections are collapsed
 
 type StarDust = { points: Points; material: ShaderMaterial; dust: Points; dustMat: ShaderMaterial };
 
@@ -82,10 +67,22 @@ export function createPhysicalGalaxy(opts: { withPanel?: boolean } = {}): Physic
   const cfg: PhysicalGalaxyConfig = { ...DEFAULT_PHYSICAL_CONFIG };
   const dustCfg: DustConfig = { ...DEFAULT_DUST_CONFIG };
   const cloudCfg: CloudConfig = { ...DEFAULT_CLOUD_CONFIG };
-  let cloud: GalaxyCloud | null = null;
-  let seed = 1;
   let dustOpacity = 1.0;  // live opacity scale (uOpacityScale)
   let warp = 0;           // warp rate (Myr per real second); 0 = frozen "moment in time"
+  // Interim defaults (a previously-Saved look) load on top of the code originals so they persist per browser.
+  try {
+    const j = JSON.parse(localStorage.getItem(STORE_KEY) ?? 'null') as
+      { cfg?: Partial<PhysicalGalaxyConfig>; dust?: Partial<DustConfig>; cloud?: Partial<CloudConfig>; dustOpacity?: number } | null;
+    if (j) {
+      Object.assign(cfg, j.cfg ?? {});
+      Object.assign(dustCfg, j.dust ?? {});
+      Object.assign(cloudCfg, j.cloud ?? {});
+      if (typeof j.dustOpacity === 'number') dustOpacity = j.dustOpacity;
+    }
+  } catch { /* corrupt storage → originals */ }
+
+  let cloud: GalaxyCloud | null = null;
+  let seed = 1;
   let current: StarDust | null = null;
   let data: PhysicalGalaxyData;
   // The spiral pattern rotates rigidly at the pattern speed Ωp (rad/Myr) — that's what a density wave does
@@ -121,117 +118,170 @@ export function createPhysicalGalaxy(opts: { withPanel?: boolean } = {}): Physic
   };
 
   if (withPanel) {
-    document.getElementById('galsim-hud')?.remove(); // drop any stale panel (HMR / re-boot)
+    // ── declarative controls, grouped into collapsible sections ──
+    const num = (
+      key: keyof PhysicalGalaxyConfig, label: string, min: number, max: number, step: number,
+      scale?: number, unit?: string,
+    ): Ctrl => ({
+      label, min, max, step, ...(scale !== undefined ? { scale } : {}), ...(unit !== undefined ? { unit } : {}),
+      get: () => (cfg[key] as number) / (scale ?? 1),
+      set: (v) => { (cfg[key] as number) = v * (scale ?? 1); },
+    });
+    const dnum = (
+      key: keyof DustConfig, label: string, min: number, max: number, step: number, unit?: string,
+    ): Ctrl => ({
+      label, min, max, step, ...(unit !== undefined ? { unit } : {}),
+      get: () => dustCfg[key] as number,
+      set: (v) => { (dustCfg[key] as number) = v; },
+    });
+    const sections: Section[] = [
+      { title: 'Disc & Arms', key: 'disc', ctrls: [
+        num('count', 'stars', 0.3, 3, 0.1, 1e6, 'M'),
+        num('armCount', 'arms (m)', 1, 5, 1),
+        num('armPitch_deg', 'pitch', 5, 32, 1, undefined, '°'),
+        num('armContrast', 'arm contrast', 0, 1, 0.05),
+        num('armWidth', 'arm width', 0.3, 1, 0.05),
+        num('armNoise', 'flocculence', 0, 1.2, 0.05),
+        num('armNoiseScale', 'noise scale', 0.1, 1.5, 0.05),
+        num('armBlue', 'arm blue', 0, 1, 0.05),
+        num('bulgeFraction', 'bulge', 0, 0.4, 0.01),
+        num('barFraction', 'bar amount', 0, 0.25, 0.01),
+        num('barLength_kpc', 'bar length', 0, 8, 0.2, undefined, 'kpc'),
+        num('rimFeather', 'rim feather', 0, 1, 0.05),
+      ] },
+      { title: 'Spurs & Feathers', key: 'spurs', ctrls: [
+        num('armSpurAmp', 'spurs', 0, 0.8, 0.05),
+        num('armSpurOpen', 'spur open', 1.3, 3, 0.1),
+        num('armSpurDensity', 'spur count', 2, 6, 0.1),
+        num('armSpurSharp', 'spur sharp', 1.5, 6, 0.1),
+        num('armSpurWarp', 'spur warp', 0, 0.6, 0.05),
+        num('armSpurInterArm', 'inter-arm', 0, 0.6, 0.05),
+        num('armSpurFlank', 'spur flank', 0.1, 1, 0.05),
+        num('armSpurReach', 'spur reach', 0.2, 0.9, 0.05),
+      ] },
+      { title: 'Stars', key: 'stars', ctrls: [
+        num('clumpFraction', 'knots', 0, 0.4, 0.01),
+      ] },
+      { title: 'Dust', key: 'dust', ctrls: [
+        { label: 'dust', min: 0, max: 2.5, step: 0.1, get: () => dustOpacity, set: (v) => { dustOpacity = v; },
+          live: () => { if (current) current.dustMat.uniforms.uOpacityScale.value = dustOpacity; } },
+        dnum('dustLeadDeg', 'dust lead', -40, 40, 2, '°'),
+        dnum('dustThickness', 'dust thickness', 0.02, 1, 0.02),
+        dnum('dustSegment', 'dust segments', 0, 1, 0.05),
+        dnum('dustSegmentScale', 'segment freq', 0.6, 6, 0.2),
+        dnum('dustFilament', 'dust tendrils', 0, 1, 0.05),
+        dnum('dustFeather', 'dust feather', 0, 1.5, 0.05),
+      ] },
+      { title: 'Gas', key: 'gas', ctrls: [
+        { label: 'gas clouds', min: 0, max: 2, step: 0.05, get: () => cloudCfg.intensity, set: (v) => { cloudCfg.intensity = v; },
+          live: () => { if (cloud) cloud.material.uniforms.uIntensity!.value = cloudCfg.intensity; } },
+      ] },
+      { title: 'Motion', key: 'motion', ctrls: [
+        { label: 'time warp', min: 0, max: 15, step: 0.5, unit: ' Myr/s', get: () => warp, set: (v) => { warp = v; }, live: () => {} },
+      ] },
+    ];
+
+    const collapsed = new Set<string>((() => {
+      try { return JSON.parse(localStorage.getItem(COLLAPSE_KEY) ?? '[]') as string[]; } catch { return []; }
+    })());
+
     hud = document.createElement('div');
     hud.id = 'galsim-hud';
-    hud.style.cssText = 'position:fixed;top:14px;left:14px;z-index:100000;width:210px;padding:12px 14px;'
-      + 'background:rgba(12,15,20,0.9);border:1px solid #2a3340;border-radius:8px;color:#cfd8e3;'
+    hud.style.cssText = 'position:fixed;top:14px;left:14px;z-index:100000;width:212px;padding:10px 12px;'
+      + 'background:rgba(12,15,20,0.92);border:1px solid #2a3340;border-radius:8px;color:#cfd8e3;'
       + 'font:12px/1.5 ui-monospace,SFMono-Regular,monospace;letter-spacing:0.02em;user-select:none;'
       + 'max-height:calc(100vh - 28px);overflow:auto';
-    let html = '<div style="font-weight:600;letter-spacing:0.08em;margin-bottom:8px;color:#eaf0f7">GALAXY&nbsp;SIM</div>';
-    for (const k of KNOBS) {
-      const v = (cfg[k.key] as number) / (k.scale ?? 1);
-      html += `<div style="margin-top:7px;display:flex;justify-content:space-between"><span>${k.label}</span>`
-        + `<span id="gs-v-${k.key}" style="opacity:0.8">${v}${k.unit ?? ''}</span></div>`
-        + `<input id="gs-${k.key}" type="range" min="${k.min}" max="${k.max}" step="${k.step}" value="${v}" style="width:100%;accent-color:#6aa3ff">`;
-    }
-    html += '<div style="margin-top:9px;border-top:1px solid #2a3340;padding-top:7px;display:flex;justify-content:space-between">'
-      + '<span>dust</span><span id="gs-v-dust" style="opacity:0.8">1.0</span></div>'
-      + '<input id="gs-dust" type="range" min="0" max="2.5" step="0.1" value="1" style="width:100%;accent-color:#6aa3ff">'
-      + '<div style="margin-top:5px;display:flex;justify-content:space-between"><span>dust lead</span><span id="gs-v-dlead" style="opacity:0.8">18°</span></div>'
-      + '<input id="gs-dlead" type="range" min="-40" max="40" step="2" value="18" style="width:100%;accent-color:#6aa3ff">'
-      + '<div style="margin-top:5px;display:flex;justify-content:space-between"><span>dust thickness</span><span id="gs-v-dthk" style="opacity:0.8">0.16</span></div>'
-      + '<input id="gs-dthk" type="range" min="0.02" max="1" step="0.02" value="0.16" style="width:100%;accent-color:#6aa3ff">'
-      + '<div style="margin-top:5px;display:flex;justify-content:space-between"><span>dust segments</span><span id="gs-v-dseg" style="opacity:0.8">0.55</span></div>'
-      + '<input id="gs-dseg" type="range" min="0" max="1" step="0.05" value="0.55" style="width:100%;accent-color:#6aa3ff">'
-      + '<div style="margin-top:5px;display:flex;justify-content:space-between"><span>segment freq</span><span id="gs-v-dsegs" style="opacity:0.8">3.0</span></div>'
-      + '<input id="gs-dsegs" type="range" min="0.6" max="6" step="0.2" value="3.0" style="width:100%;accent-color:#6aa3ff">'
-      + '<div style="margin-top:5px;display:flex;justify-content:space-between"><span>dust tendrils</span><span id="gs-v-dfil" style="opacity:0.8">0.7</span></div>'
-      + '<input id="gs-dfil" type="range" min="0" max="1" step="0.05" value="0.7" style="width:100%;accent-color:#6aa3ff">'
-      + '<div style="margin-top:5px;display:flex;justify-content:space-between"><span>dust feather</span><span id="gs-v-dfth" style="opacity:0.8">0.6</span></div>'
-      + '<input id="gs-dfth" type="range" min="0" max="1.5" step="0.05" value="0.6" style="width:100%;accent-color:#6aa3ff">'
-      + '<div style="margin-top:5px;display:flex;justify-content:space-between"><span>gas clouds</span><span id="gs-v-cloud" style="opacity:0.8">0.9</span></div>'
-      + '<input id="gs-cloud" type="range" min="0" max="2" step="0.05" value="0.9" style="width:100%;accent-color:#6aa3ff">';
-    html += '<div style="margin-top:9px;border-top:1px solid #2a3340;padding-top:7px;display:flex;justify-content:space-between">'
-      + '<span>time warp</span><span id="gs-v-warp" style="opacity:0.8">0 Myr/s</span></div>'
-      + '<input id="gs-warp" type="range" min="0" max="15" step="0.5" value="0" style="width:100%;accent-color:#6aa3ff">';
-    html += '<button id="gs-reseed" style="margin-top:10px;width:100%;padding:6px;background:#1c2530;color:#cfd8e3;'
-      + 'border:1px solid #34404e;border-radius:5px;cursor:pointer;font:inherit">Re-seed</button>'
-      + '<div style="margin-top:8px;opacity:0.55;font-size:11px">drag/2-finger orbit · pinch/wheel zoom</div>';
-    hud.innerHTML = html;
-    document.body.appendChild(hud);
+    const existing = document.getElementById('galsim-hud');
+    if (existing) existing.replaceWith(hud); else document.body.appendChild(hud); // self-clean on HMR/re-boot
 
-    for (const k of KNOBS) {
-      const el = hud.querySelector<HTMLInputElement>(`#gs-${k.key}`)!;
-      const lbl = hud.querySelector(`#gs-v-${k.key}`)!;
-      const set = (): void => {
-        const val = +el.value;
-        (cfg[k.key] as number) = val * (k.scale ?? 1);
-        lbl.textContent = `${val}${k.unit ?? ''}`;
-      };
-      el.addEventListener('input', () => { set(); previewRebuild(); });
-      el.addEventListener('change', () => { set(); rebuild(); }); // full count on release
+    const title = document.createElement('div');
+    title.style.cssText = 'font-weight:600;letter-spacing:0.08em;margin-bottom:6px;color:#eaf0f7';
+    title.textContent = 'GALAXY';
+    hud.appendChild(title);
+
+    const refreshers: Array<() => void> = []; // re-sync every slider's value+label (used by Revert)
+
+    const addCtrl = (host: HTMLElement, c: Ctrl): void => {
+      const row = document.createElement('div');
+      row.style.cssText = 'margin-top:6px;display:flex;justify-content:space-between';
+      const name = document.createElement('span'); name.textContent = c.label;
+      const val = document.createElement('span'); val.style.opacity = '0.8';
+      row.append(name, val);
+      const input = document.createElement('input');
+      input.type = 'range';
+      input.min = String(c.min); input.max = String(c.max); input.step = String(c.step);
+      input.style.cssText = 'width:100%;accent-color:#6aa3ff';
+      const fmt = (v: number): string => `${Number.isInteger(c.step) && !c.scale ? v : +v.toFixed(2)}${c.unit ?? ''}`;
+      const sync = (): void => { const v = c.get(); input.value = String(v); val.textContent = fmt(v); };
+      sync();
+      input.addEventListener('input', () => {
+        c.set(+input.value); val.textContent = fmt(+input.value);
+        if (c.live) c.live(); else previewRebuild();
+      });
+      if (!c.live) input.addEventListener('change', () => { rebuild(); });
+      host.append(row, input);
+      refreshers.push(sync);
+    };
+
+    for (const sec of sections) {
+      const header = document.createElement('div');
+      header.style.cssText = 'margin-top:9px;padding-top:6px;border-top:1px solid #222b36;cursor:pointer;'
+        + 'display:flex;justify-content:space-between;color:#9fb0c3;font-size:11px;letter-spacing:0.06em';
+      const body = document.createElement('div');
+      const caret = document.createElement('span');
+      const label = document.createElement('span'); label.textContent = sec.title.toUpperCase();
+      header.append(label, caret);
+      const setOpen = (open: boolean): void => { body.style.display = open ? '' : 'none'; caret.textContent = open ? '▾' : '▸'; };
+      setOpen(!collapsed.has(sec.key));
+      header.addEventListener('click', () => {
+        const open = body.style.display === 'none';
+        setOpen(open);
+        if (open) collapsed.delete(sec.key); else collapsed.add(sec.key);
+        try { localStorage.setItem(COLLAPSE_KEY, JSON.stringify([...collapsed])); } catch { /* ignore */ }
+      });
+      hud.append(header, body);
+      for (const c of sec.ctrls) addCtrl(body, c);
     }
-    const dustEl = hud.querySelector<HTMLInputElement>('#gs-dust')!;
-    dustEl.addEventListener('input', () => {
-      dustOpacity = +dustEl.value;
-      hud!.querySelector('#gs-v-dust')!.textContent = dustOpacity.toFixed(1);
-      if (current) current.dustMat.uniforms.uOpacityScale.value = dustOpacity; // live, no resample
+
+    // ── footer: Re-seed · Save (interim defaults) · Revert (originals) ──
+    const footer = document.createElement('div');
+    footer.style.cssText = 'margin-top:11px;border-top:1px solid #2a3340;padding-top:8px;display:flex;gap:5px';
+    const btn = (text: string, onClick: () => void): HTMLButtonElement => {
+      const b = document.createElement('button');
+      b.textContent = text;
+      b.style.cssText = 'flex:1;padding:6px 2px;background:#1c2530;color:#cfd8e3;border:1px solid #34404e;'
+        + 'border-radius:5px;cursor:pointer;font:inherit;font-size:11px';
+      b.addEventListener('click', onClick);
+      return b;
+    };
+    const flash = (b: HTMLButtonElement, text: string): void => {
+      const orig = b.textContent; b.textContent = text;
+      setTimeout(() => { b.textContent = orig; }, 900);
+    };
+    const saveBtn = btn('Save', () => {
+      try {
+        localStorage.setItem(STORE_KEY, JSON.stringify({ cfg, dust: dustCfg, cloud: cloudCfg, dustOpacity }));
+        flash(saveBtn, 'Saved ✓');
+      } catch { flash(saveBtn, 'Failed'); }
     });
-    const dleadEl = hud.querySelector<HTMLInputElement>('#gs-dlead')!;
-    dleadEl.addEventListener('input', () => {
-      dustCfg.dustLeadDeg = +dleadEl.value;
-      hud!.querySelector('#gs-v-dlead')!.textContent = `${dleadEl.value}°`;
-      previewRebuild();
+    const revertBtn = btn('Revert', () => {
+      try { localStorage.removeItem(STORE_KEY); } catch { /* ignore */ }
+      Object.assign(cfg, DEFAULT_PHYSICAL_CONFIG);
+      Object.assign(dustCfg, DEFAULT_DUST_CONFIG);
+      Object.assign(cloudCfg, DEFAULT_CLOUD_CONFIG);
+      dustOpacity = 1.0; warp = 0;
+      for (const r of refreshers) r();
+      if (cloud) cloud.material.uniforms.uIntensity!.value = cloudCfg.intensity;
+      rebuild();
+      flash(revertBtn, 'Originals');
     });
-    dleadEl.addEventListener('change', () => { rebuild(); });
-    const dthkEl = hud.querySelector<HTMLInputElement>('#gs-dthk')!;
-    dthkEl.addEventListener('input', () => {
-      dustCfg.dustThickness = +dthkEl.value;
-      hud!.querySelector('#gs-v-dthk')!.textContent = (+dthkEl.value).toFixed(2);
-      previewRebuild();
-    });
-    dthkEl.addEventListener('change', () => { rebuild(); });
-    const dsegEl = hud.querySelector<HTMLInputElement>('#gs-dseg')!;
-    dsegEl.addEventListener('input', () => {
-      dustCfg.dustSegment = +dsegEl.value;
-      hud!.querySelector('#gs-v-dseg')!.textContent = (+dsegEl.value).toFixed(2);
-      previewRebuild();
-    });
-    dsegEl.addEventListener('change', () => { rebuild(); });
-    const dsegsEl = hud.querySelector<HTMLInputElement>('#gs-dsegs')!;
-    dsegsEl.addEventListener('input', () => {
-      dustCfg.dustSegmentScale = +dsegsEl.value;
-      hud!.querySelector('#gs-v-dsegs')!.textContent = (+dsegsEl.value).toFixed(1);
-      previewRebuild();
-    });
-    dsegsEl.addEventListener('change', () => { rebuild(); });
-    const dfilEl = hud.querySelector<HTMLInputElement>('#gs-dfil')!;
-    dfilEl.addEventListener('input', () => {
-      dustCfg.dustFilament = +dfilEl.value;
-      hud!.querySelector('#gs-v-dfil')!.textContent = (+dfilEl.value).toFixed(2);
-      previewRebuild();
-    });
-    dfilEl.addEventListener('change', () => { rebuild(); });
-    const dfthEl = hud.querySelector<HTMLInputElement>('#gs-dfth')!;
-    dfthEl.addEventListener('input', () => {
-      dustCfg.dustFeather = +dfthEl.value;
-      hud!.querySelector('#gs-v-dfth')!.textContent = (+dfthEl.value).toFixed(2);
-      previewRebuild();
-    });
-    dfthEl.addEventListener('change', () => { rebuild(); });
-    const cloudEl = hud.querySelector<HTMLInputElement>('#gs-cloud')!;
-    cloudEl.addEventListener('input', () => {
-      cloudCfg.intensity = +cloudEl.value;
-      hud!.querySelector('#gs-v-cloud')!.textContent = (+cloudEl.value).toFixed(2);
-      if (cloud) cloud.material.uniforms.uIntensity!.value = cloudCfg.intensity; // live, no resample
-    });
-    const warpEl = hud.querySelector<HTMLInputElement>('#gs-warp')!;
-    warpEl.addEventListener('input', () => {
-      warp = +warpEl.value;
-      hud!.querySelector('#gs-v-warp')!.textContent = `${warp} Myr/s`;
-    });
-    hud.querySelector<HTMLButtonElement>('#gs-reseed')!.addEventListener('click', () => { seed++; rebuild(); });
+    footer.append(btn('Re-seed', () => { seed++; rebuild(); }), saveBtn, revertBtn);
+    hud.appendChild(footer);
+
+    const help = document.createElement('div');
+    help.style.cssText = 'margin-top:7px;opacity:0.5;font-size:10px';
+    help.textContent = 'Save → interim defaults · Revert → originals';
+    hud.appendChild(help);
   }
 
   const update = (camera: Camera, dt: number, cloudActive = true): void => {
