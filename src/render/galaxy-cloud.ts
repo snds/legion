@@ -219,7 +219,7 @@ const cloudFragmentShader = DENSITY_GLSL + /* glsl */ `
       if (uUseVolume > 0.5) {
         vec3 tc = (p - uBoxMin) / boxSize;        // (xFrac, yFrac, zFrac)
         vec4 v = sampleVolume(vec3(tc.x, tc.z, tc.y)); // atlas: XZ in-tile, Y → slice
-        d = v.a; col = v.rgb;
+        d = v.a * v.a; col = v.rgb;                // decode sqrt-encoded density (see bake shader)
       } else {
         float chi; d = densityAt(p, chi); col = mix(uArmGlow, uHiiGlow, chi);
       }
@@ -243,7 +243,10 @@ const bakeFragmentShader = DENSITY_GLSL + /* glsl */ `
     vec3 p = vec3(mix(uBoxMin.x, uBoxMax.x, vUv.x), uSliceY, mix(uBoxMin.z, uBoxMax.z, vUv.y));
     float chi;
     float d = densityAt(p, chi);
-    gl_FragColor = vec4(mix(uArmGlow, uHiiGlow, chi), clamp(d, 0.0, 1.0));
+    // sqrt-encode density into the 8-bit alpha (decoded as a*a at march time). The gas peaks near ~0.1 and is
+    // mostly ≪0.01, which a LINEAR 8-bit store crushes to 0–2/255 (~25× too faint); sqrt redistributes the
+    // range toward the faint end (d=0.01 → 25/255 instead of 2/255).
+    gl_FragColor = vec4(mix(uArmGlow, uHiiGlow, chi), sqrt(clamp(d, 0.0, 1.0)));
   }
 `;
 
@@ -290,14 +293,18 @@ function bakeCloudAtlas(renderer: WebGLRenderer, cloudMat: ShaderMaterial): Data
   const prevTarget = renderer.getRenderTarget();
   const prevScissorTest = renderer.getScissorTest();
   renderer.getViewport(_prevVP);
+  // three.js multiplies setViewport/setScissor args by the renderer pixel ratio. The render target is sized in
+  // raw pixels (ATLAS_W×ATLAS_H), so divide by the ratio → each tile maps to exactly TILE×TILE *RT* pixels.
+  // (Without this, at DPR 2 every slice rendered at 2× and 24 of 32 fell off the RT — the "mislocated" bug.)
+  const ipr = 1 / renderer.getPixelRatio();
   renderer.setRenderTarget(rt);
   renderer.setScissorTest(true);
   for (let s = 0; s < SLICES; s++) {
     const col = s % A_COLS;
     const row = Math.floor(s / A_COLS);
     mat.uniforms.uSliceY!.value = boxMin.y + ((s + 0.5) / SLICES) * (boxMax.y - boxMin.y);
-    renderer.setViewport(col * TILE, row * TILE, TILE, TILE);
-    renderer.setScissor(col * TILE, row * TILE, TILE, TILE);
+    renderer.setViewport(col * TILE * ipr, row * TILE * ipr, TILE * ipr, TILE * ipr);
+    renderer.setScissor(col * TILE * ipr, row * TILE * ipr, TILE * ipr, TILE * ipr);
     renderer.render(_bakeScene!, _bakeCam!);
   }
   const buf = new Uint8Array(ATLAS_W * ATLAS_H * 4);
