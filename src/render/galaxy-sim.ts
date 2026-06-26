@@ -14,7 +14,7 @@
 // Promotion to the live game (folding interim into the code defaults) is a separate, manual step.
 // ═══════════════════════════════════════════════════════════════════
 
-import { type Camera, Group, PerspectiveCamera, Points, Scene, ShaderMaterial, Vector3 } from 'three';
+import { type Camera, Group, PerspectiveCamera, Points, Scene, ShaderMaterial, Vector3, type WebGLRenderer } from 'three';
 import { OrbitFlyCamera } from './galaxy-paint';
 import { WU_PER_PC } from '../core/metrics';
 import { MW, KMS_PER_KPC_TO_RAD_PER_MYR } from './mw-model';
@@ -74,7 +74,7 @@ type StarDust = { points: Points; material: ShaderMaterial; dust: Points; dustMa
 
 /** Build a physical galaxy into its own root Group (+ optional tuning panel). Caller adds `root` to a scene
  *  and drives update(). The spiral pattern rotates rigidly at Ωp when the time-warp slider is non-zero. */
-export function createPhysicalGalaxy(opts: { withPanel?: boolean } = {}): PhysicalGalaxySystem {
+export function createPhysicalGalaxy(opts: { withPanel?: boolean; renderer?: WebGLRenderer } = {}): PhysicalGalaxySystem {
   const withPanel = opts.withPanel ?? true;
   const root = new Group();
   root.name = 'physical-galaxy';
@@ -121,7 +121,9 @@ export function createPhysicalGalaxy(opts: { withPanel?: boolean } = {}): Physic
     if (cloud) cloud.sync(cfg, cloudCfg); // re-trace the gas onto the (possibly retuned) arms
   };
   rebuild();
-  cloud = buildGalaxyCloud(cfg, cloudCfg); // gas/nebulosity volume — created once, rides the rotating root
+  // gas/nebulosity volume — created once, rides the rotating root. The renderer (passed, or the registered
+  // bake renderer) bakes the static field to a slice atlas; without one it falls back to the live march.
+  cloud = buildGalaxyCloud(cfg, cloudCfg, opts.renderer);
   root.add(cloud.mesh);
 
   let hud: HTMLDivElement | null = null;
@@ -313,7 +315,7 @@ export function createPhysicalGalaxy(opts: { withPanel?: boolean } = {}): Physic
       root.remove(current.points); current.points.geometry.dispose(); current.material.dispose();
       root.remove(current.dust); current.dust.geometry.dispose(); current.dustMat.dispose();
     }
-    if (cloud) { root.remove(cloud.mesh); cloud.mesh.geometry.dispose(); cloud.material.dispose(); }
+    if (cloud) { root.remove(cloud.mesh); cloud.mesh.geometry.dispose(); cloud.material.dispose(); cloud.dispose(); }
     hud?.remove();
   };
 
@@ -324,7 +326,7 @@ export function createPhysicalGalaxy(opts: { withPanel?: boolean } = {}): Physic
 export function bootGalaxySim(renderCtx: RendererContext, shouldRun: () => boolean): unknown {
   const scene = new Scene();
   const camera = new PerspectiveCamera(55, window.innerWidth / window.innerHeight, 100, 2e8);
-  const galaxy = createPhysicalGalaxy({ withPanel: true });
+  const galaxy = createPhysicalGalaxy({ withPanel: true, renderer: renderCtx.renderer });
   scene.add(galaxy.root);
 
   const cam = new OrbitFlyCamera(camera, renderCtx.canvas, 3.4e7); // frames the ~32 kpc disc

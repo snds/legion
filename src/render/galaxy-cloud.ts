@@ -1,24 +1,36 @@
 // ═══════════════════════════════════════════════════════════════════
 // GALAXY CLOUD — a low-res emission raymarch of the interstellar GAS/nebulosity that follows the SAME
-// spiral structure as the physically-sampled stars (galaxy-physical.ts). It reuses the disc-volume
-// raymarch METHOD (ray-AABB into a box, log-distributed jittered steps) but swaps the density for a GLSL
-// port of this galaxy's armWave (log-spiral density wave + value-noise warp), so the glowing clouds trace
-// the generated flocculent arms rather than a separate analytic model. Emission-only + additive: the gas
-// adds a soft blue/HII glow ON the arms; the dust layer (renderOrder 10) then occludes it. Deliberately
-// few steps — "volume + resolution can be lower" — and every arm parameter is a uniform synced from the
-// PhysicalGalaxyConfig so the clouds re-trace the arms live as the panel knobs move.
+// spiral structure as the physically-sampled stars (galaxy-physical.ts). Emission-only + additive: the gas
+// adds a soft blue/HII glow ON the arms; the dust layer (renderOrder 10) then occludes it.
+//
+// PERF (the static-field bake): the gas density is a FROZEN MOMENT (only root.rotation.y moves), so the
+// march re-evaluated an identical FBM-heavy integral every frame — pure waste. We now BAKE densityAt() ONCE
+// into a 2D SLICE ATLAS (32 thin Y-layers packed 8×4 into a 2048×1024 RGBA8 texture: RGB = pre-tinted
+// emission, A = density) using the offscreen render+readback harness, then the SAME ray-AABB box-march reads
+// one manual-trilinear texture fetch per step instead of ~2 FBM. The baked atlas rides the rigid rotation
+// for free (the march runs in the local frame), so it stays correct face-on / edge-on / dive-in with no
+// re-bake — re-bake only on sync() (the same knob-change event that resamples the stars). A plain 2D atlas
+// (not a 3D texture) keeps it GLSL-ES-1.00 + universally portable (iPad WebGL2). If no bake renderer is
+// available the shader falls back to the LIVE march (uUseVolume=0), so it can never fail closed.
 // ═══════════════════════════════════════════════════════════════════
 
 import {
-  AdditiveBlending, BoxGeometry, Color, Matrix4, Mesh, ShaderMaterial, Vector3, BackSide,
-  type Camera,
+  AdditiveBlending, BackSide, BoxGeometry, ClampToEdgeWrapping, Color, DataTexture, LinearFilter,
+  Matrix4, Mesh, NoBlending, OrthographicCamera, PlaneGeometry, RGBAFormat, Scene, ShaderMaterial,
+  UnsignedByteType, Vector3, Vector4, WebGLRenderTarget,
+  type Camera, type WebGLRenderer,
 } from 'three';
 import { WU_PER_PC } from '../core/metrics';
+import { getBakeRenderer } from './texture-baker';
 import { MW } from './mw-model';
 import type { PhysicalGalaxyConfig } from './galaxy-physical';
 
 const KPC_TO_WU = 1000 * WU_PER_PC;
 const DEG2RAD = Math.PI / 180;
+
+// Slice-atlas dimensions: 32 Y-layers packed 8 cols × 4 rows of 256² tiles → one 2048×1024 RGBA8 texture.
+const TILE = 256, A_COLS = 8, A_ROWS = 4, SLICES = A_COLS * A_ROWS; // 32
+const ATLAS_W = TILE * A_COLS, ATLAS_H = TILE * A_ROWS;             // 2048 × 1024
 
 export interface CloudConfig {
   scaleHeight_pc: number; // gas layer thickness (thicker than dust, thinner than stars)
@@ -36,21 +48,13 @@ export const DEFAULT_CLOUD_CONFIG: CloudConfig = {
 // carry the structure. Radial scale length = stellar × this.
 const GAS_RADIAL_FACTOR = 1.7;
 
-const cloudVertexShader = /* glsl */ `
-  varying vec3 vWorldPos;
-  void main() {
-    vec4 wp = modelMatrix * vec4(position, 1.0);
-    vWorldPos = wp.xyz;
-    gl_Position = projectionMatrix * viewMatrix * wp;
-  }
-`;
-
-const cloudFragmentShader = /* glsl */ `
+// ── Shared density GLSL: the SHAPE uniforms + noise + armWave + spurField + densityAt. Included VERBATIM by
+//    both the bake quad AND the runtime fallback, so they evaluate an identical field (zero aesthetic drift).
+const DENSITY_GLSL = /* glsl */ `
   precision highp float;
-  varying vec3 vWorldPos;
+  #define PI 3.14159265
 
-  uniform mat4 uInvModel;     // world → galaxy local (rotating) frame
-  uniform vec3 uBoxMin;       // local-space AABB
+  uniform vec3 uBoxMin;       // local-space AABB (WU)
   uniform vec3 uBoxMax;
   uniform float uKpcWu;       // WU per kpc
   uniform float uRd;          // disc radial scale length (kpc)
@@ -75,17 +79,9 @@ const cloudFragmentShader = /* glsl */ `
   uniform float uSpurInterArm;
   uniform float uSpurFlank;
   uniform float uSpurReach;
-  uniform float uIntensity;
   uniform vec3 uArmGlow;      // cool blue arm emission
   uniform vec3 uHiiGlow;      // warm pink HII knots
-  uniform float uSteps;
 
-  #ifndef CLOUD_STEPS
-  #define CLOUD_STEPS 30
-  #endif
-  #define PI 3.14159265
-
-  // ── value-noise FBM (float hash; matches the star warp's geometry, not its exact bits) ──
   float hash21(vec2 p) {
     p = fract(p * vec2(127.31, 311.7));
     p += dot(p, p + 34.21);
@@ -101,8 +97,6 @@ const cloudFragmentShader = /* glsl */ `
   float fbm2(vec2 p) {
     return 0.6 * vnoise(p) + 0.3 * vnoise(p * 2.13) + 0.1 * vnoise(p * 4.31);
   }
-
-  // Shared spur/feather field — exact twin of galaxy-physical.ts spurField (star-side: trailing flank).
   float spurField(float R, float phi, float psi, float warp, float cot, float L) {
     if (uSpurAmp <= 0.0) return 0.0;
     float inner = smoothstep(uBarLo, uBarHi, R);
@@ -111,7 +105,7 @@ const cloudFragmentShader = /* glsl */ `
     float m2 = uArmCount * uSpurDensity;
     float ns2 = uNoiseScale * 1.7;
     vec2 q2 = vec2(R * cos(phi), R * sin(phi)) * ns2;
-    float w2 = uSpurWarp * PI * fbm2(q2 + 137.0); // +137 ≈ JS seed offset (geometry-match, not bit-exact)
+    float w2 = uSpurWarp * PI * fbm2(q2 + 137.0);
     float psi2 = m2 * (phi - cot2 * L) + uSpurDensity * warp + w2;
     float tooth = pow(max(0.0, cos(psi2)), uSpurSharp);
     float c = cos(psi);
@@ -122,8 +116,6 @@ const cloudFragmentShader = /* glsl */ `
     float reach = 1.0 - smoothstep(uSpurReach, min(0.97, uSpurReach + 0.45), u);
     return uSpurAmp * (onArm * tooth * trail * reach + uSpurInterArm * gap * tooth) * inner;
   }
-
-  // The galaxy's warped m-arm density wave + spur offshoots: +1 on a ridge, −1 between (twin of physical).
   float armWave(float R, float phi) {
     float cot = 1.0 / uPitchTan;
     float L = log(max(R, 0.05) / uR0);
@@ -133,19 +125,11 @@ const cloudFragmentShader = /* glsl */ `
     float base = cos(psi) + spurField(R, phi, psi, warp, cot, L);
     return clamp(base, -1.0, 1.0);
   }
-
-  float ign(vec2 px) {
-    return fract(52.9829189 * fract(0.06711056 * px.x + 0.00583715 * px.y));
-  }
-
-  // Gas density at a LOCAL-frame point (WU). Exponential disc × thin gas layer × arm ridge × bar cutoff ×
-  // 3D clumps — the same structure the stars are sampled from.
+  // Gas density at a LOCAL-frame point (WU) → density + clumpHi (HII tint weight).
   float densityAt(vec3 p, out float clumpHi) {
     clumpHi = 0.0;
     float R = length(p.xz) / uKpcWu;
     float phi = atan(p.z, p.x);
-    // Feathered, ragged rim (matches the star rim): the truncation radius wiggles with φ and falls off
-    // softly, so the diffuse gas CONTINUES the feathering past the discrete-star streamers.
     float rmod = uRimFeather * 0.32 * fbm2(vec2(cos(phi), sin(phi)) * 4.3 + 50.0);
     float rmid = uRmax * (1.0 + rmod);
     float rw = 0.06 + 0.30 * uRimFeather;
@@ -156,17 +140,58 @@ const cloudFragmentShader = /* glsl */ `
     float vert = exp(-y / uHgas);
     float barCut = smoothstep(uBarLo, uBarHi, R);
     float ridge = pow(max(0.0, armWave(R, phi + uLeadGas)), uArmSharp);
-    // Clumps texture the arms but must not erase them: a mild 0.55..1.0 modulation, plus a small floor so
-    // the smooth arm spine survives. The bright knots (clumpHi) drive the warm HII tint.
     float cl = 0.55 + 0.45 * fbm2(p.xz / uKpcWu * uClumpFreq + vec2(p.y / uKpcWu * 0.4, 0.0));
     clumpHi = smoothstep(0.85, 1.05, cl) * ridge;
     return radial * vert * barCut * ridge * cl * rimFall;
   }
+`;
+
+const cloudVertexShader = /* glsl */ `
+  varying vec3 vWorldPos;
+  void main() {
+    vec4 wp = modelMatrix * vec4(position, 1.0);
+    vWorldPos = wp.xyz;
+    gl_Position = projectionMatrix * viewMatrix * wp;
+  }
+`;
+
+const cloudFragmentShader = DENSITY_GLSL + /* glsl */ `
+  varying vec3 vWorldPos;
+  uniform mat4 uInvModel;     // world → galaxy local (rotating) frame
+  uniform float uIntensity;
+  uniform float uSteps;
+  uniform sampler2D uVolume;  // baked slice atlas (RGB emission, A density)
+  uniform float uUseVolume;   // 1 = sample the bake, 0 = live FBM march fallback
+
+  #ifndef CLOUD_STEPS
+  #define CLOUD_STEPS 30
+  #endif
+
+  float ign(vec2 px) {
+    return fract(52.9829189 * fract(0.06711056 * px.x + 0.00583715 * px.y));
+  }
+
+  // Manual trilinear over the slice atlas. tc = (xFrac, zFrac, yFrac); the Y axis selects the slice, XZ the
+  // in-tile texel. Clamp the in-tile UV to the texel centre so bilinear never bleeds across tile borders.
+  vec4 sampleSlice(float s, vec2 xz) {
+    float col = mod(s, ${A_COLS}.0);
+    float row = floor(s / ${A_COLS}.0);
+    vec2 inTile = clamp(xz, 0.5 / ${TILE}.0, 1.0 - 0.5 / ${TILE}.0);
+    vec2 uv = (vec2(col, row) + inTile) / vec2(${A_COLS}.0, ${A_ROWS}.0);
+    return texture2D(uVolume, uv);
+  }
+  vec4 sampleVolume(vec3 tc) {
+    float sy = tc.z * ${SLICES}.0 - 0.5;
+    float f = floor(sy);
+    float s0 = clamp(f, 0.0, ${SLICES}.0 - 1.0);
+    float s1 = clamp(f + 1.0, 0.0, ${SLICES}.0 - 1.0);
+    return mix(sampleSlice(s0, tc.xy), sampleSlice(s1, tc.xy), clamp(sy - f, 0.0, 1.0));
+  }
 
   void main() {
     vec3 roW = cameraPosition;
-    vec3 ro = (uInvModel * vec4(roW, 1.0)).xyz;             // camera in local frame
-    vec3 sp = (uInvModel * vec4(vWorldPos, 1.0)).xyz;       // box surface in local frame
+    vec3 ro = (uInvModel * vec4(roW, 1.0)).xyz;
+    vec3 sp = (uInvModel * vec4(vWorldPos, 1.0)).xyz;
     vec3 rd = normalize(sp - ro);
 
     vec3 invD = 1.0 / rd;
@@ -179,6 +204,7 @@ const cloudFragmentShader = /* glsl */ `
 
     float t0 = max(tNear, 1.0);
     float jitter = ign(gl_FragCoord.xy);
+    vec3 boxSize = uBoxMax - uBoxMin;
     vec3 accum = vec3(0.0);
 
     for (int i = 0; i < CLOUD_STEPS; i++) {
@@ -187,10 +213,16 @@ const cloudFragmentShader = /* glsl */ `
       float a1 = (float(i) + 1.0) / uSteps;
       float t = t0 * pow(tFar / t0, a0);
       float tn = t0 * pow(tFar / t0, a1);
-      float dt = max(tn - t, 0.0) / uKpcWu; // step length in kpc → emission ∝ path length
-      float chi;
-      float d = densityAt(ro + rd * t, chi);
-      vec3 col = mix(uArmGlow, uHiiGlow, chi); // blue arms, pink HII in the dense knots
+      float dt = max(tn - t, 0.0) / uKpcWu;
+      vec3 p = ro + rd * t;
+      float d; vec3 col;
+      if (uUseVolume > 0.5) {
+        vec3 tc = (p - uBoxMin) / boxSize;        // (xFrac, yFrac, zFrac)
+        vec4 v = sampleVolume(vec3(tc.x, tc.z, tc.y)); // atlas: XZ in-tile, Y → slice
+        d = v.a; col = v.rgb;
+      } else {
+        float chi; d = densityAt(p, chi); col = mix(uArmGlow, uHiiGlow, chi);
+      }
       accum += d * col * dt;
     }
 
@@ -200,18 +232,105 @@ const cloudFragmentShader = /* glsl */ `
   }
 `;
 
+const bakeVertexShader = /* glsl */ `
+  varying vec2 vUv;
+  void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }
+`;
+const bakeFragmentShader = DENSITY_GLSL + /* glsl */ `
+  varying vec2 vUv;
+  uniform float uSliceY; // local-frame Y (WU) of this slice
+  void main() {
+    vec3 p = vec3(mix(uBoxMin.x, uBoxMax.x, vUv.x), uSliceY, mix(uBoxMin.z, uBoxMax.z, vUv.y));
+    float chi;
+    float d = densityAt(p, chi);
+    gl_FragColor = vec4(mix(uArmGlow, uHiiGlow, chi), clamp(d, 0.0, 1.0));
+  }
+`;
+
+// Shape uniforms the bake reads (everything densityAt + the colour mix need). Copied from the cloud material.
+const SHAPE_KEYS = [
+  'uBoxMin', 'uBoxMax', 'uKpcWu', 'uRd', 'uRmax', 'uHgas', 'uArmCount', 'uPitchTan', 'uNoiseScale',
+  'uArmNoise', 'uR0', 'uArmSharp', 'uLeadGas', 'uBarLo', 'uBarHi', 'uClumpFreq', 'uRimFeather',
+  'uSpurAmp', 'uSpurOpen', 'uSpurDensity', 'uSpurSharp', 'uSpurWarp', 'uSpurInterArm', 'uSpurFlank',
+  'uSpurReach', 'uArmGlow', 'uHiiGlow',
+] as const;
+
+let _bakeScene: Scene | null = null;
+let _bakeCam: OrthographicCamera | null = null;
+let _bakeMat: ShaderMaterial | null = null;
+function ensureBakeRig(): ShaderMaterial {
+  if (_bakeMat) return _bakeMat;
+  const uniforms: Record<string, { value: unknown }> = { uSliceY: { value: 0 } };
+  for (const k of SHAPE_KEYS) uniforms[k] = { value: null };
+  _bakeMat = new ShaderMaterial({
+    vertexShader: bakeVertexShader, fragmentShader: bakeFragmentShader, uniforms,
+    blending: NoBlending, depthTest: false, depthWrite: false,
+  });
+  _bakeScene = new Scene();
+  _bakeScene.add(new Mesh(new PlaneGeometry(2, 2), _bakeMat));
+  _bakeCam = new OrthographicCamera(-1, 1, 1, -1, 0, 1);
+  return _bakeMat;
+}
+
+const _prevVP = new Vector4();
+
+/** Bake densityAt() into a 2D slice atlas (32 Y-layers, RGBA8). Renders each layer into a tile of one RT via
+ *  viewport+scissor, then a single readback fills a DataTexture. Returns null if the bake can't run. */
+function bakeCloudAtlas(renderer: WebGLRenderer, cloudMat: ShaderMaterial): DataTexture | null {
+  const mat = ensureBakeRig();
+  const cu = cloudMat.uniforms;
+  for (const k of SHAPE_KEYS) mat.uniforms[k]!.value = cu[k]!.value; // share current shape values
+  const boxMin = cu.uBoxMin!.value as Vector3;
+  const boxMax = cu.uBoxMax!.value as Vector3;
+
+  const rt = new WebGLRenderTarget(ATLAS_W, ATLAS_H, {
+    format: RGBAFormat, type: UnsignedByteType, minFilter: LinearFilter, magFilter: LinearFilter,
+    depthBuffer: false,
+  });
+  const prevTarget = renderer.getRenderTarget();
+  const prevScissorTest = renderer.getScissorTest();
+  renderer.getViewport(_prevVP);
+  renderer.setRenderTarget(rt);
+  renderer.setScissorTest(true);
+  for (let s = 0; s < SLICES; s++) {
+    const col = s % A_COLS;
+    const row = Math.floor(s / A_COLS);
+    mat.uniforms.uSliceY!.value = boxMin.y + ((s + 0.5) / SLICES) * (boxMax.y - boxMin.y);
+    renderer.setViewport(col * TILE, row * TILE, TILE, TILE);
+    renderer.setScissor(col * TILE, row * TILE, TILE, TILE);
+    renderer.render(_bakeScene!, _bakeCam!);
+  }
+  const buf = new Uint8Array(ATLAS_W * ATLAS_H * 4);
+  renderer.readRenderTargetPixels(rt, 0, 0, ATLAS_W, ATLAS_H, buf);
+  renderer.setScissorTest(prevScissorTest);
+  renderer.setViewport(_prevVP);
+  renderer.setRenderTarget(prevTarget);
+  rt.dispose();
+
+  const tex = new DataTexture(buf, ATLAS_W, ATLAS_H, RGBAFormat, UnsignedByteType);
+  tex.minFilter = LinearFilter; tex.magFilter = LinearFilter;
+  tex.wrapS = ClampToEdgeWrapping; tex.wrapT = ClampToEdgeWrapping;
+  tex.needsUpdate = true;
+  return tex;
+}
+
 export interface GalaxyCloud {
   readonly mesh: Mesh;
   readonly material: ShaderMaterial;
-  /** Re-point the arm uniforms at the current config so the gas re-traces the arms live. */
+  /** Re-point the arm uniforms at the current config + RE-BAKE the volume so the gas re-traces the arms. */
   sync(cfg: PhysicalGalaxyConfig, cloud: CloudConfig): void;
   /** Per-frame: refresh the world→local matrix (the galaxy rotates) + active step count. */
   update(camera: Camera, steps: number): void;
+  /** Free the baked atlas texture. */
+  dispose(): void;
 }
 
-/** Build the cloud volume box. Add it to the galaxy root (it rotates with the stars) at renderOrder 5. */
+/** Build the cloud volume box. Add it to the galaxy root (it rotates with the stars) at renderOrder 5.
+ *  `renderer` (default: the registered bake renderer) bakes the static field to a slice atlas; without one
+ *  the shader falls back to the live FBM march. */
 export function buildGalaxyCloud(
   cfg: PhysicalGalaxyConfig, cloud: CloudConfig = DEFAULT_CLOUD_CONFIG,
+  renderer: WebGLRenderer | null = getBakeRenderer(),
 ): GalaxyCloud {
   const halfXZ = cfg.rMax_kpc * KPC_TO_WU * 1.4; // room for the feathered rim to reach past rMax
   const halfY = (cloud.scaleHeight_pc / 1000) * KPC_TO_WU * 4.0; // ±4 scale heights covers the gas layer
@@ -250,6 +369,8 @@ export function buildGalaxyCloud(
       uArmGlow: { value: new Color(0.26, 0.42, 0.85) },
       uHiiGlow: { value: new Color(0.95, 0.5, 0.72) },
       uSteps: { value: 30 },
+      uVolume: { value: null },
+      uUseVolume: { value: 0 },
     },
     transparent: true,
     depthWrite: false,
@@ -261,6 +382,17 @@ export function buildGalaxyCloud(
   mesh.name = 'galaxy-cloud';
   mesh.frustumCulled = false;
   mesh.renderOrder = 5; // after stars (0), before dust (10) so dust occludes the gas glow
+
+  const reBake = (): void => {
+    if (!renderer) return; // no renderer ⇒ keep the live-march fallback (uUseVolume stays 0)
+    const tex = bakeCloudAtlas(renderer, material);
+    if (!tex) return;
+    const old = material.uniforms.uVolume!.value as DataTexture | null;
+    material.uniforms.uVolume!.value = tex;
+    material.uniforms.uUseVolume!.value = 1;
+    if (old) old.dispose();
+  };
+  reBake(); // bake the initial field
 
   const invModel = new Matrix4();
   const sync = (c: PhysicalGalaxyConfig, cl: CloudConfig): void => {
@@ -286,7 +418,8 @@ export function buildGalaxyCloud(
     u.uSpurInterArm!.value = c.armSpurInterArm;
     u.uSpurFlank!.value = c.armSpurFlank;
     u.uSpurReach!.value = c.armSpurReach;
-    u.uIntensity!.value = cl.intensity;
+    u.uIntensity!.value = cl.intensity; // (intensity is a live gain — not baked)
+    reBake(); // re-trace the gas onto the retuned arms
   };
   const update = (camera: Camera, steps: number): void => {
     mesh.updateMatrixWorld();
@@ -295,6 +428,10 @@ export function buildGalaxyCloud(
     material.uniforms.uSteps!.value = steps;
     camera.getWorldPosition(new Vector3()); // ensure cameraPosition uniform is fresh (three auto-binds)
   };
+  const dispose = (): void => {
+    const tex = material.uniforms.uVolume!.value as DataTexture | null;
+    if (tex) tex.dispose();
+  };
 
-  return { mesh, material, sync, update };
+  return { mesh, material, sync, update, dispose };
 }
