@@ -376,6 +376,11 @@ export function bootGalaxySim(renderCtx: RendererContext, shouldRun: () => boole
 
   const cam = new OrbitFlyCamera(camera, renderCtx.canvas, 3.4e7); // frames the ~32 kpc disc
 
+  // Stop the browser hijacking a two-finger trackpad swipe over the sim as back/forward/new-tab navigation
+  // (the canvas itself is hardened with touch-action in OrbitFlyCamera). Restored on teardown.
+  const prevOverscroll = document.body.style.overscrollBehavior;
+  document.body.style.overscrollBehavior = 'none';
+
   const onResize = (): void => {
     renderCtx.renderer.setSize(window.innerWidth, window.innerHeight);
     camera.aspect = window.innerWidth / window.innerHeight;
@@ -399,6 +404,7 @@ export function bootGalaxySim(renderCtx: RendererContext, shouldRun: () => boole
       cam.dispose();
       galaxy.dispose();
       window.removeEventListener('resize', onResize);
+      document.body.style.overscrollBehavior = prevOverscroll;
       return;
     }
     requestAnimationFrame(loop);
