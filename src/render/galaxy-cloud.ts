@@ -275,9 +275,13 @@ const cloudFragmentShader = DENSITY_GLSL + /* glsl */ `
   #define CLOUD_STEPS 30
   #endif
 
-  // Interleaved-gradient noise — a cheap tiled blue-noise-like ray-start dither that hides march stepping.
+  // Per-pixel hash ray-start dither. Spatially UNCORRELATED (white-noise → fine grain): interleaved-gradient
+  // noise is structured, so when the march under-samples a thick volume it shifts the step-shell banding into
+  // a visible weave/horizontal lines instead of hiding it. A hash breaks adjacent pixels apart → grain.
   float ign(vec2 px) {
-    return fract(52.9829189 * fract(0.06711056 * px.x + 0.00583715 * px.y));
+    vec3 p3 = fract(vec3(px.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
   }
 
   void main() {
