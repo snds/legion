@@ -38,6 +38,7 @@ export interface CloudConfig {
   armSharp: number;       // arm ridge tightness (cos^k)
   clumpScale: number;     // 3D clump frequency (per kpc) — the structure scale
   definition: number;     // 0 = soft round clumps … 1 = high-contrast filamentary structure (outcome knob)
+  selfShadow: number;     // 0 = flat emission … 1 = strong bake-time self-shadow (volumetric form); 0 = off
   intensity: number;      // emission gain
 }
 
@@ -45,13 +46,15 @@ export const DEFAULT_CLOUD_CONFIG: CloudConfig = {
   // intensity bumped 0.9 → 2.5: at 0.9 the additive gas was invisible against the bright star field (you
   // couldn't tell it was rendering). It reads distinctly only once self-shadow/white (P2/P3) give it
   // character; until then this at least makes it visible, especially with stars toggled off.
-  scaleHeight_pc: 180, leadDeg: 6, armSharp: 6.0, clumpScale: 1.4, definition: 0.5, intensity: 2.5,
+  scaleHeight_pc: 180, leadDeg: 6, armSharp: 6.0, clumpScale: 1.4, definition: 0.5, selfShadow: 0.6, intensity: 2.5,
 };
 
 // The 'definition' outcome knob drives two field uniforms along a tuned curve: contrast (gamma) opens the
 // inter-clump gas, erosion carves filaments. Kept here so buildGalaxyCloud + sync() derive them identically.
 const defToGamma = (d: number): number => 1.0 + 2.0 * d;   // 0 → 1 (smooth) … 1 → 3 (clumps pop)
 const defToErosion = (d: number): number => 0.75 * d;      // 0 → none … 1 → strong filament carving
+// 'self shadow' knob → bake-time absorption coefficient for the +Y light-march (0 = off).
+const defToShadow = (d: number): number => d * 8.0;
 
 // Gas disc is flatter/more extended than the stars, so the arm ridges — not a bright central ring —
 // carry the structure. Radial scale length = stellar × this.
@@ -284,15 +287,30 @@ const bakeVertexShader = /* glsl */ `
 `;
 const bakeFragmentShader = DENSITY_GLSL + /* glsl */ `
   varying vec2 vUv;
-  uniform float uSliceY; // local-frame Y (WU) of this slice
+  uniform float uSliceY;        // local-frame Y (WU) of this slice
+  uniform float uShadowStrength; // bake-time self-shadow absorption (0 = off)
   void main() {
     vec3 p = vec3(mix(uBoxMin.x, uBoxMax.x, vUv.x), uSliceY, mix(uBoxMin.z, uBoxMax.z, vUv.y));
     float chi;
     float d = densityAt(p, chi);
+    // BAKE-TIME SELF-SHADOW (single light pass, zero per-frame cost): march toward +Y (above the disc) and
+    // accumulate the optical depth of the gas column overhead → T = exp(-strength·τ). Pre-multiplying the
+    // emission by T darkens gas buried under dense material — dark skirts under bright cores = volumetric
+    // form. densityAt is already in scope here, so no second render target / readback is needed.
+    float T = 1.0;
+    if (uShadowStrength > 0.0) {
+      // March a SHORT distance (~0.6 kpc of gas directly overhead), not the whole column — local occlusion
+      // gives the clumps/arm crests dimensional form (lit top, shadowed underside) instead of dimming the
+      // whole midplane uniformly (which a march-to-box-top does, since the disc is thin).
+      float dyWU = 0.6 * uKpcWu / 6.0;
+      float tau = 0.0; vec3 lp = p; float chi2;
+      for (int i = 0; i < 6; i++) { lp.y += dyWU; tau += densityAt(lp, chi2); }
+      T = exp(-uShadowStrength * tau * dyWU / uKpcWu);
+    }
     // sqrt-encode density into the 8-bit alpha (decoded as a*a at march time). The gas peaks near ~0.1 and is
     // mostly ≪0.01, which a LINEAR 8-bit store crushes to 0–2/255 (~25× too faint); sqrt redistributes the
     // range toward the faint end (d=0.01 → 25/255 instead of 2/255).
-    gl_FragColor = vec4(mix(uArmGlow, uHiiGlow, chi), sqrt(clamp(d, 0.0, 1.0)));
+    gl_FragColor = vec4(mix(uArmGlow, uHiiGlow, chi) * T, sqrt(clamp(d, 0.0, 1.0)));
   }
 `;
 
@@ -302,7 +320,7 @@ const SHAPE_KEYS = [
   'uArmNoise', 'uR0', 'uArmSharp', 'uLeadGas', 'uBarLo', 'uBarHi', 'uClumpFreq', 'uClumpGamma',
   'uErosionAmt', 'uRimFeather',
   'uSpurAmp', 'uSpurOpen', 'uSpurDensity', 'uSpurSharp', 'uSpurWarp', 'uSpurInterArm', 'uSpurFlank',
-  'uSpurReach', 'uArmGlow', 'uHiiGlow',
+  'uSpurReach', 'uArmGlow', 'uHiiGlow', 'uShadowStrength',
 ] as const;
 
 let _bakeScene: Scene | null = null;
@@ -412,6 +430,7 @@ export function buildGalaxyCloud(
       uClumpFreq: { value: cloud.clumpScale },
       uClumpGamma: { value: defToGamma(cloud.definition) },
       uErosionAmt: { value: defToErosion(cloud.definition) },
+      uShadowStrength: { value: defToShadow(cloud.selfShadow) },
       uRimFeather: { value: cfg.rimFeather },
       uSpurAmp: { value: cfg.armSpurAmp },
       uSpurOpen: { value: cfg.armSpurOpen },
@@ -467,6 +486,7 @@ export function buildGalaxyCloud(
     u.uClumpFreq!.value = cl.clumpScale;
     u.uClumpGamma!.value = defToGamma(cl.definition);
     u.uErosionAmt!.value = defToErosion(cl.definition);
+    u.uShadowStrength!.value = defToShadow(cl.selfShadow);
     u.uRimFeather!.value = c.rimFeather;
     u.uSpurAmp!.value = c.armSpurAmp;
     u.uSpurOpen!.value = c.armSpurOpen;
