@@ -157,6 +157,9 @@ export class OrbitFlyCamera {
 
   constructor(readonly cam: PerspectiveCamera, el: HTMLElement, initialDistance: number) {
     this.distance = initialDistance;
+    // The canvas owns the gesture — don't let the browser pan/pinch-zoom/navigate on touch or trackpad.
+    const prevTouchAction = el.style.touchAction;
+    el.style.touchAction = 'none';
     const onDown = (e: PointerEvent): void => {
       if (e.button === 0) return; // LEFT is the brush — the camera navigates on RIGHT / MIDDLE
       this.mode = e.shiftKey || e.button === 1 ? 'pan' : 'orbit';
@@ -180,7 +183,17 @@ export class OrbitFlyCamera {
     const onUp = (): void => { this.mode = null; };
     const onWheel = (e: WheelEvent): void => {
       e.preventDefault();
-      this.dolly(Math.exp(e.deltaY * 0.001));
+      // Trackpad-friendly. A macOS pinch arrives as ctrl+wheel → ZOOM; a two-finger DRAG (pixel-mode, with a
+      // deltaX or a gentle deltaY) → ORBIT, so the natural trackpad gesture rotates the view instead of doing
+      // nothing useful; a discrete mouse wheel (vertical-only coarse notch) → ZOOM. The preventDefault above
+      // (+ touch-action below) is what stops the browser hijacking the two-finger swipe as back/fwd/new-tab.
+      if (e.ctrlKey) {
+        this.dolly(Math.exp(e.deltaY * 0.01)); // pinch
+      } else if (e.deltaX === 0 && (e.deltaMode !== 0 || Math.abs(e.deltaY) >= 50)) {
+        this.dolly(Math.exp(e.deltaY * 0.001)); // mouse wheel notch
+      } else {
+        this.orbitBy(-e.deltaX, -e.deltaY); // two-finger trackpad drag
+      }
     };
     el.addEventListener('pointerdown', onDown);
     el.addEventListener('pointermove', onMove);
@@ -193,6 +206,7 @@ export class OrbitFlyCamera {
       () => window.removeEventListener('pointerup', onUp),
       () => el.removeEventListener('wheel', onWheel),
       () => el.removeEventListener('contextmenu', onCtx),
+      () => { el.style.touchAction = prevTouchAction; },
     );
   }
 
