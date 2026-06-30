@@ -70,12 +70,15 @@ const _ctr = new Vector3();
 /** Distance-ramped raymarch step count (quick-win perf): the diffuse gas needs FEW steps — ~14 when the
  *  disc fills the view, ramping to ~6 when it's small/far, and 0 when off (intensity 0 or zoomed away). The
  *  bake (phase 2) makes each step a single texture fetch; this just cuts the count the live FBM march pays. */
-function cloudSteps(camera: Camera, root: Group, rMax_kpc: number, active: boolean): number {
+function cloudSteps(camera: Camera, root: Group, rMax_kpc: number, thickness: number, active: boolean): number {
   if (!active) return 0;
   camera.getWorldPosition(_camPos);
   root.getWorldPosition(_ctr);
   const rel = _camPos.distanceTo(_ctr) / Math.max(1, rMax_kpc * KPC_WU); // ~1 at the rim, grows when far
-  return Math.max(6, Math.min(14, Math.round(16 - rel * 4)));
+  const base = Math.max(10, Math.min(18, Math.round(20 - rel * 4)));
+  // A thick gas volume ('gas volume' > 1) traverses far more gas per ray; with the old flat 6–14 budget the
+  // coarse march under-sampled it and the dither showed as a screen-door weave. Scale the count with thickness.
+  return Math.min(28, Math.round(base * (0.6 + 0.4 * Math.max(1, thickness))));
 }
 const STORE_KEY = 'legion.galaxy.interim';   // saved interim defaults (cfg/dust/cloud)
 const COLLAPSE_KEY = 'legion.galaxy.collapsed'; // which panel sections are collapsed
@@ -395,7 +398,7 @@ export function createPhysicalGalaxy(opts: { withPanel?: boolean; renderer?: Web
 
   const update = (camera: Camera, dt: number, cloudActive = true): void => {
     if (warp !== 0) root.rotation.y += patternOmega * warp * dt; // rigid pattern rotation (no winding)
-    const steps = cloudSteps(camera, root, cfg.rMax_kpc, cloudActive && cloudCfg.intensity > 0);
+    const steps = cloudSteps(camera, root, cfg.rMax_kpc, cloudCfg.thickness, cloudActive && cloudCfg.intensity > 0);
     if (cloud) cloud.update(camera, steps);
   };
   const dispose = (): void => {
