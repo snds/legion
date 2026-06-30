@@ -15,9 +15,9 @@
 // ═══════════════════════════════════════════════════════════════════
 
 import {
-  AdditiveBlending, BackSide, BoxGeometry, ClampToEdgeWrapping, Color, DataTexture, LinearFilter,
+  AdditiveBlending, BackSide, BoxGeometry, ClampToEdgeWrapping, Color, GLSL3, LinearFilter,
   Matrix4, Mesh, NoBlending, OrthographicCamera, PlaneGeometry, RGBAFormat, Scene, ShaderMaterial,
-  UnsignedByteType, Vector3, Vector4, WebGLRenderTarget,
+  UnsignedByteType, Vector3, WebGL3DRenderTarget,
   type Camera, type WebGLRenderer,
 } from 'three';
 import { WU_PER_PC } from '../core/metrics';
@@ -28,9 +28,12 @@ import type { PhysicalGalaxyConfig } from './galaxy-physical';
 const KPC_TO_WU = 1000 * WU_PER_PC;
 const DEG2RAD = Math.PI / 180;
 
-// Slice-atlas dimensions: 32 Y-layers packed 8 cols × 4 rows of 256² tiles → one 2048×1024 RGBA8 texture.
-const TILE = 256, A_COLS = 8, A_ROWS = 4, SLICES = A_COLS * A_ROWS; // 32
-const ATLAS_W = TILE * A_COLS, ATLAS_H = TILE * A_ROWS;             // 2048 × 1024
+// Baked GAS VOLUME — a TRUE 3D texture (sampler3D, RGBA8): VOL_XZ² in the disc plane × VOL_Y vertical samples.
+// Hardware trilinear over a contiguous voxel grid replaces the old 32-slice 2D atlas + its manual Z cross-fade
+// (which striated edge-on once 'gas volume' spread the 32 slices apart). Y was the worst-undersampled axis
+// (32 → 64). 256×256×64 RGBA8 = 16 MB; flip VOL_XZ to 128 for a 4 MB texture to A/B on iPad.
+const VOL_XZ = 256; // X & Z resolution
+const VOL_Y = 64;   // vertical (Y) layers — the render-target DEPTH axis, baked one layer at a time
 
 export interface CloudConfig {
   scaleHeight_pc: number; // gas layer thickness (thicker than dust, thinner than stars)
@@ -83,7 +86,8 @@ function gasHalfExtents(cfg: PhysicalGalaxyConfig, cloud: CloudConfig): { halfXZ
 // ── Shared density GLSL: the SHAPE uniforms + noise + armWave + spurField + densityAt. Included VERBATIM by
 //    both the bake quad AND the runtime fallback, so they evaluate an identical field (zero aesthetic drift).
 const DENSITY_GLSL = /* glsl */ `
-  precision highp float;
+  // GLSL3 / WebGL2 — three injects the version + default precision. Shared verbatim by BOTH fragment shaders,
+  // so this block must NOT declare the fragment output; each fragment main declares its own out vec4.
   #define PI 3.14159265
 
   uniform vec3 uBoxMin;       // local-space AABB (WU)
@@ -234,7 +238,7 @@ const DENSITY_GLSL = /* glsl */ `
 `;
 
 const cloudVertexShader = /* glsl */ `
-  varying vec3 vWorldPos;
+  out vec3 vWorldPos;
   void main() {
     vec4 wp = modelMatrix * vec4(position, 1.0);
     vWorldPos = wp.xyz;
@@ -243,36 +247,21 @@ const cloudVertexShader = /* glsl */ `
 `;
 
 const cloudFragmentShader = DENSITY_GLSL + /* glsl */ `
-  varying vec3 vWorldPos;
+  in vec3 vWorldPos;
+  out vec4 fragColor;
   uniform mat4 uInvModel;     // world → galaxy local (rotating) frame
   uniform float uIntensity;
   uniform float uSteps;
-  uniform sampler2D uVolume;  // baked slice atlas (RGB emission, A density)
+  uniform sampler3D uVolume;  // baked 3D gas volume (RGB pre-tinted+shadowed emission, A = sqrt density)
   uniform float uUseVolume;   // 1 = sample the bake, 0 = live FBM march fallback
 
   #ifndef CLOUD_STEPS
   #define CLOUD_STEPS 30
   #endif
 
+  // Interleaved-gradient noise — a cheap tiled blue-noise-like ray-start dither that hides march stepping.
   float ign(vec2 px) {
     return fract(52.9829189 * fract(0.06711056 * px.x + 0.00583715 * px.y));
-  }
-
-  // Manual trilinear over the slice atlas. tc = (xFrac, zFrac, yFrac); the Y axis selects the slice, XZ the
-  // in-tile texel. Clamp the in-tile UV to the texel centre so bilinear never bleeds across tile borders.
-  vec4 sampleSlice(float s, vec2 xz) {
-    float col = mod(s, ${A_COLS}.0);
-    float row = floor(s / ${A_COLS}.0);
-    vec2 inTile = clamp(xz, 0.5 / ${TILE}.0, 1.0 - 0.5 / ${TILE}.0);
-    vec2 uv = (vec2(col, row) + inTile) / vec2(${A_COLS}.0, ${A_ROWS}.0);
-    return texture2D(uVolume, uv);
-  }
-  vec4 sampleVolume(vec3 tc) {
-    float sy = tc.z * ${SLICES}.0 - 0.5;
-    float f = floor(sy);
-    float s0 = clamp(f, 0.0, ${SLICES}.0 - 1.0);
-    float s1 = clamp(f + 1.0, 0.0, ${SLICES}.0 - 1.0);
-    return mix(sampleSlice(s0, tc.xy), sampleSlice(s1, tc.xy), clamp(sy - f, 0.0, 1.0));
   }
 
   void main() {
@@ -305,7 +294,7 @@ const cloudFragmentShader = DENSITY_GLSL + /* glsl */ `
       float d; vec3 col;
       if (uUseVolume > 0.5) {
         vec3 tc = (p - uBoxMin) / boxSize;        // (xFrac, yFrac, zFrac)
-        vec4 v = sampleVolume(vec3(tc.x, tc.z, tc.y)); // atlas: XZ in-tile, Y → slice
+        vec4 v = texture(uVolume, vec3(tc.x, tc.z, tc.y)); // 3D texture, HW trilinear (s=X, t=Z, r=Y depth)
         d = v.a * v.a; col = v.rgb;                // decode sqrt-encoded density (see bake shader)
       } else {
         float chi; d = densityAt(p, chi); col = gasColor(p, d, chi);
@@ -315,16 +304,17 @@ const cloudFragmentShader = DENSITY_GLSL + /* glsl */ `
 
     vec3 rgb = accum * uIntensity;
     if (max(rgb.r, max(rgb.g, rgb.b)) < 0.0006) discard;
-    gl_FragColor = vec4(rgb, 1.0); // AdditiveBlending: glow adds over the stars
+    fragColor = vec4(rgb, 1.0); // AdditiveBlending: glow adds over the stars
   }
 `;
 
 const bakeVertexShader = /* glsl */ `
-  varying vec2 vUv;
+  out vec2 vUv;
   void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }
 `;
 const bakeFragmentShader = DENSITY_GLSL + /* glsl */ `
-  varying vec2 vUv;
+  in vec2 vUv;
+  out vec4 fragColor;
   uniform float uSliceY;        // local-frame Y (WU) of this slice
   uniform float uShadowStrength; // bake-time self-shadow absorption (0 = off)
   void main() {
@@ -348,7 +338,7 @@ const bakeFragmentShader = DENSITY_GLSL + /* glsl */ `
     // sqrt-encode density into the 8-bit alpha (decoded as a*a at march time). The gas peaks near ~0.1 and is
     // mostly ≪0.01, which a LINEAR 8-bit store crushes to 0–2/255 (~25× too faint); sqrt redistributes the
     // range toward the faint end (d=0.01 → 25/255 instead of 2/255).
-    gl_FragColor = vec4(gasColor(p, d, chi) * T, sqrt(clamp(d, 0.0, 1.0)));
+    fragColor = vec4(gasColor(p, d, chi) * T, sqrt(clamp(d, 0.0, 1.0)));
   }
 `;
 
@@ -370,6 +360,7 @@ function ensureBakeRig(): ShaderMaterial {
   const uniforms: Record<string, { value: unknown }> = { uSliceY: { value: 0 } };
   for (const k of SHAPE_KEYS) uniforms[k] = { value: null };
   _bakeMat = new ShaderMaterial({
+    glslVersion: GLSL3,
     vertexShader: bakeVertexShader, fragmentShader: bakeFragmentShader, uniforms,
     blending: NoBlending, depthTest: false, depthWrite: false,
   });
@@ -379,50 +370,40 @@ function ensureBakeRig(): ShaderMaterial {
   return _bakeMat;
 }
 
-const _prevVP = new Vector4();
+/** Allocate the persistent 3D render target the gas is baked into. CRITICAL: three r0.171 defaults the 3D
+ *  texture to NearestFilter (and WebGL3DRenderTarget re-creates .texture with default filters AFTER super(),
+ *  so the ctor `options` filters never reach it) — left NEAREST, the sampler3D fetch HARD-bands in all 3 axes,
+ *  strictly worse than the old manual-trilinear atlas. So force LinearFilter + ClampToEdge by hand here. */
+function makeVolumeRT(): WebGL3DRenderTarget {
+  const rt = new WebGL3DRenderTarget(VOL_XZ, VOL_XZ, VOL_Y, {
+    format: RGBAFormat, type: UnsignedByteType, depthBuffer: false,
+  });
+  rt.texture.minFilter = LinearFilter;
+  rt.texture.magFilter = LinearFilter;
+  rt.texture.wrapS = ClampToEdgeWrapping;
+  rt.texture.wrapT = ClampToEdgeWrapping;
+  rt.texture.wrapR = ClampToEdgeWrapping;
+  return rt;
+}
 
-/** Bake densityAt() into a 2D slice atlas (32 Y-layers, RGBA8). Renders each layer into a tile of one RT via
- *  viewport+scissor, then a single readback fills a DataTexture. Returns null if the bake can't run. */
-function bakeCloudAtlas(renderer: WebGLRenderer, cloudMat: ShaderMaterial): DataTexture | null {
+/** Bake densityAt()+gasColor()+self-shadow into the 3D texture: render each Y-layer into one DEPTH slab of the
+ *  RT (three binds framebufferTextureLayer; a bound RT's viewport is raw RT pixels — NO pixel-ratio multiply,
+ *  so the old DPR/viewport hack is gone). GPU-resident, no readback. Returns the bake wall-time (ms). */
+function bakeCloudVolume(renderer: WebGLRenderer, cloudMat: ShaderMaterial, rt: WebGL3DRenderTarget): number {
   const mat = ensureBakeRig();
   const cu = cloudMat.uniforms;
   for (const k of SHAPE_KEYS) mat.uniforms[k]!.value = cu[k]!.value; // share current shape values
   const boxMin = cu.uBoxMin!.value as Vector3;
   const boxMax = cu.uBoxMax!.value as Vector3;
-
-  const rt = new WebGLRenderTarget(ATLAS_W, ATLAS_H, {
-    format: RGBAFormat, type: UnsignedByteType, minFilter: LinearFilter, magFilter: LinearFilter,
-    depthBuffer: false,
-  });
+  const t0 = performance.now();
   const prevTarget = renderer.getRenderTarget();
-  const prevScissorTest = renderer.getScissorTest();
-  renderer.getViewport(_prevVP);
-  // three.js multiplies setViewport/setScissor args by the renderer pixel ratio. The render target is sized in
-  // raw pixels (ATLAS_W×ATLAS_H), so divide by the ratio → each tile maps to exactly TILE×TILE *RT* pixels.
-  // (Without this, at DPR 2 every slice rendered at 2× and 24 of 32 fell off the RT — the "mislocated" bug.)
-  const ipr = 1 / renderer.getPixelRatio();
-  renderer.setRenderTarget(rt);
-  renderer.setScissorTest(true);
-  for (let s = 0; s < SLICES; s++) {
-    const col = s % A_COLS;
-    const row = Math.floor(s / A_COLS);
-    mat.uniforms.uSliceY!.value = boxMin.y + ((s + 0.5) / SLICES) * (boxMax.y - boxMin.y);
-    renderer.setViewport(col * TILE * ipr, row * TILE * ipr, TILE * ipr, TILE * ipr);
-    renderer.setScissor(col * TILE * ipr, row * TILE * ipr, TILE * ipr, TILE * ipr);
+  for (let z = 0; z < VOL_Y; z++) {
+    mat.uniforms.uSliceY!.value = boxMin.y + ((z + 0.5) / VOL_Y) * (boxMax.y - boxMin.y);
+    renderer.setRenderTarget(rt, z); // depth-layer z = the Y-slice; the fullscreen quad fills the XZ plane
     renderer.render(_bakeScene!, _bakeCam!);
   }
-  const buf = new Uint8Array(ATLAS_W * ATLAS_H * 4);
-  renderer.readRenderTargetPixels(rt, 0, 0, ATLAS_W, ATLAS_H, buf);
-  renderer.setScissorTest(prevScissorTest);
-  renderer.setViewport(_prevVP);
   renderer.setRenderTarget(prevTarget);
-  rt.dispose();
-
-  const tex = new DataTexture(buf, ATLAS_W, ATLAS_H, RGBAFormat, UnsignedByteType);
-  tex.minFilter = LinearFilter; tex.magFilter = LinearFilter;
-  tex.wrapS = ClampToEdgeWrapping; tex.wrapT = ClampToEdgeWrapping;
-  tex.needsUpdate = true;
-  return tex;
+  return performance.now() - t0;
 }
 
 export interface GalaxyCloud {
@@ -446,6 +427,7 @@ export function buildGalaxyCloud(
   const { halfXZ, halfY } = gasHalfExtents(cfg, cloud); // 'gas size' (radial) × 'gas volume' (thickness)
   const geo = new BoxGeometry(halfXZ * 2, halfY * 2, halfXZ * 2);
   const material = new ShaderMaterial({
+    glslVersion: GLSL3,
     vertexShader: cloudVertexShader,
     fragmentShader: cloudFragmentShader,
     uniforms: {
@@ -502,14 +484,14 @@ export function buildGalaxyCloud(
   mesh.frustumCulled = false;
   mesh.renderOrder = 5; // after stars (0), before dust (10) so dust occludes the gas glow
 
+  let volumeRT: WebGL3DRenderTarget | null = null;
   const reBake = (): void => {
     if (!renderer) return; // no renderer ⇒ keep the live-march fallback (uUseVolume stays 0)
-    const tex = bakeCloudAtlas(renderer, material);
-    if (!tex) return;
-    const old = material.uniforms.uVolume!.value as DataTexture | null;
-    material.uniforms.uVolume!.value = tex;
+    if (!volumeRT) volumeRT = makeVolumeRT();       // persistent: re-baked in place, never re-allocated
+    const ms = bakeCloudVolume(renderer, material, volumeRT);
+    material.uniforms.uVolume!.value = volumeRT.texture; // GPU-resident sampler3D — no readback
     material.uniforms.uUseVolume!.value = 1;
-    if (old) old.dispose();
+    console.info(`[galaxy-cloud] 3D gas bake ${VOL_XZ}×${VOL_XZ}×${VOL_Y} in ${ms.toFixed(1)}ms`);
   };
   reBake(); // bake the initial field
 
@@ -559,8 +541,7 @@ export function buildGalaxyCloud(
     camera.getWorldPosition(new Vector3()); // ensure cameraPosition uniform is fresh (three auto-binds)
   };
   const dispose = (): void => {
-    const tex = material.uniforms.uVolume!.value as DataTexture | null;
-    if (tex) tex.dispose();
+    if (volumeRT) volumeRT.dispose(); // disposes the 3D texture + framebuffer
   };
 
   return { mesh, material, sync, update, dispose };
