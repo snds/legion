@@ -250,9 +250,17 @@ export function createPhysicalGalaxy(opts: { withPanel?: boolean; renderer?: Web
     const existing = document.getElementById('galsim-hud');
     if (existing) existing.replaceWith(hud); else document.body.appendChild(hud); // self-clean on HMR/re-boot
 
+    // Sticky header: stays pinned while the controls scroll. Negative margins bleed it over the panel padding
+    // so scrolling content is hidden behind it; the collapse-all icon sits on the right.
     const title = document.createElement('div');
-    title.style.cssText = 'font-weight:600;letter-spacing:0.08em;margin-bottom:6px;color:#eaf0f7';
-    title.textContent = 'GALAXY';
+    title.style.cssText = 'position:sticky;top:0;z-index:2;display:flex;align-items:center;justify-content:space-between;'
+      + 'margin:-10px -12px 6px;padding:9px 12px 7px;background:rgba(12,15,20,0.98);border-bottom:1px solid #2a3340;'
+      + 'font-weight:600;letter-spacing:0.08em;color:#eaf0f7';
+    const titleLabel = document.createElement('span'); titleLabel.textContent = 'GALAXY';
+    const collapseAll = document.createElement('span');
+    collapseAll.style.cssText = 'cursor:pointer;font-weight:400;color:#9fb0c3;font-size:13px;line-height:1;'
+      + 'padding:2px 4px;border-radius:4px;user-select:none';
+    title.append(titleLabel, collapseAll);
     hud.appendChild(title);
 
     const refreshers: Array<() => void> = []; // re-sync every slider's value+label (used by Revert)
@@ -297,6 +305,12 @@ export function createPhysicalGalaxy(opts: { withPanel?: boolean; renderer?: Web
       refreshers.push(sync);
     };
 
+    const sectionEntries: Array<{ key: string; setOpen: (open: boolean) => void; isOpen: () => boolean }> = [];
+    const refreshCollapseIcon = (): void => {
+      const allClosed = sectionEntries.length > 0 && sectionEntries.every((e) => !e.isOpen());
+      collapseAll.textContent = allClosed ? '⊞' : '⊟';
+      collapseAll.title = allClosed ? 'Expand all' : 'Collapse all';
+    };
     for (const sec of sections) {
       const header = document.createElement('div');
       header.style.cssText = 'margin-top:9px;padding-top:6px;border-top:1px solid #222b36;cursor:pointer;'
@@ -307,17 +321,30 @@ export function createPhysicalGalaxy(opts: { withPanel?: boolean; renderer?: Web
       header.append(label, caret);
       const setOpen = (open: boolean): void => { body.style.display = open ? '' : 'none'; caret.textContent = open ? '▾' : '▸'; };
       setOpen(!collapsed.has(sec.key));
+      sectionEntries.push({ key: sec.key, setOpen, isOpen: () => body.style.display !== 'none' });
       header.addEventListener('click', () => {
         const open = body.style.display === 'none';
         setOpen(open);
         if (open) collapsed.delete(sec.key); else collapsed.add(sec.key);
         try { localStorage.setItem(COLLAPSE_KEY, JSON.stringify([...collapsed])); } catch { /* ignore */ }
+        refreshCollapseIcon();
       });
       hud.append(header, body);
       for (const c of sec.ctrls) {
         if ('kind' in c) addToggle(body, c); else addCtrl(body, c);
       }
     }
+    // Collapse-all toggle: any section open → collapse them all; all closed → expand them all.
+    collapseAll.addEventListener('click', () => {
+      const collapse = sectionEntries.some((e) => e.isOpen());
+      for (const e of sectionEntries) {
+        e.setOpen(!collapse);
+        if (collapse) collapsed.add(e.key); else collapsed.delete(e.key);
+      }
+      try { localStorage.setItem(COLLAPSE_KEY, JSON.stringify([...collapsed])); } catch { /* ignore */ }
+      refreshCollapseIcon();
+    });
+    refreshCollapseIcon(); // initial glyph reflects the restored collapsed state
 
     // ── footer: Re-seed · Save (interim defaults) · Revert (originals) ──
     const footer = document.createElement('div');
