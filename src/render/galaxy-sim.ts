@@ -230,7 +230,9 @@ export function createPhysicalGalaxy(opts: { withPanel?: boolean; renderer?: Web
         { label: 'gas clouds', min: 0, max: 2, step: 0.05, get: () => cloudCfg.intensity, set: (v: number) => { cloudCfg.intensity = v; },
           live: () => { if (cloud) cloud.material.uniforms.uIntensity!.value = cloudCfg.intensity; } },
         cnum('radialScale', 'gas size', 0.5, 2, 0.05),    // bake-time: radial extent of the gas disc
-        cnum('thickness', 'gas volume', 0.3, 3, 0.1),     // bake-time: vertical scale-height (thickness)
+        cnum('thickness', 'gas volume', 0.3, 3, 0.1),     // bake-time: tube vertical aspect (squash/stretch)
+        cnum('scaleHeight_pc', 'tube radius', 150, 600, 10, 'pc'), // bake-time: tube cross-section size
+        cnum('tubeTaper', 'tube taper', 0, 0.8, 0.05),    // bake-time: tube narrowing toward the rim
         cnum('definition', 'definition', 0, 1, 0.05),     // bake-time: contrast + filament carving
         cnum('clumpScale', 'structure scale', 0.4, 3, 0.1), // bake-time: clump spatial frequency
         cnum('coreWhite', 'core white', 0, 1, 0.05),      // bake-time: dense gas → cool/warm white (legibility)

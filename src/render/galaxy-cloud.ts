@@ -36,7 +36,8 @@ const VOL_XZ = 256; // X & Z resolution
 const VOL_Y = 64;   // vertical (Y) layers — the render-target DEPTH axis, baked one layer at a time
 
 export interface CloudConfig {
-  scaleHeight_pc: number; // gas layer thickness (thicker than dust, thinner than stars)
+  scaleHeight_pc: number; // gas TUBE cross-section radius (pc) — perp half-width + (×thickness) vertical radius
+  tubeTaper: number;      // tube radius narrowing toward the rim (0 = uniform width)
   leadDeg: number;        // gas sits just inside the arm crest (HII on the leading edge)
   armSharp: number;       // arm ridge tightness (cos^k)
   clumpScale: number;     // 3D clump frequency (per kpc) — the structure scale
@@ -52,8 +53,10 @@ export const DEFAULT_CLOUD_CONFIG: CloudConfig = {
   // intensity bumped 0.9 → 2.5: at 0.9 the additive gas was invisible against the bright star field (you
   // couldn't tell it was rendering). It reads distinctly only once self-shadow/white (P2/P3) give it
   // character; until then this at least makes it visible, especially with stars toggled off.
-  scaleHeight_pc: 180, leadDeg: 6, armSharp: 6.0, clumpScale: 1.4, definition: 0.5, selfShadow: 0.4,
-  coreWhite: 0.55, radialScale: 1.0, thickness: 1.0, intensity: 2.5,
+  // scaleHeight_pc is now the TUBE cross-section radius (380 pc ≈ 760 pc diameter, from the native-TIFF arm
+  // analysis — much chunkier than the old 180 pc sheet); tubeTaper narrows it toward the rim.
+  scaleHeight_pc: 380, tubeTaper: 0.26, leadDeg: 6, armSharp: 6.0, clumpScale: 1.4, definition: 0.5,
+  selfShadow: 0.4, coreWhite: 0.55, radialScale: 1.0, thickness: 1.0, intensity: 2.5,
 };
 
 // The 'definition' outcome knob drives two field uniforms along a tuned curve: contrast (gamma) opens the
@@ -79,7 +82,7 @@ const GAS_RADIAL_FACTOR = 1.7;
 function gasHalfExtents(cfg: PhysicalGalaxyConfig, cloud: CloudConfig): { halfXZ: number; halfY: number } {
   return {
     halfXZ: cfg.rMax_kpc * KPC_TO_WU * 1.4 * cloud.radialScale,
-    halfY: (cloud.scaleHeight_pc / 1000) * KPC_TO_WU * 4.0 * cloud.thickness,
+    halfY: (cloud.scaleHeight_pc / 1000) * KPC_TO_WU * 2.2 * cloud.thickness, // ±2.2 tube vertical radii
   };
 }
 
@@ -95,7 +98,9 @@ const DENSITY_GLSL = /* glsl */ `
   uniform float uKpcWu;       // WU per kpc
   uniform float uRd;          // disc radial scale length (kpc)
   uniform float uRmax;        // truncation (kpc)
-  uniform float uHgas;        // gas vertical scale height (kpc)
+  uniform float uHgas;        // gas TUBE vertical radius (kpc) — the repurposed 'gas volume' (= tubeR × thickness)
+  uniform float uTubeR;       // gas TUBE in-plane (perpendicular) radius at the reference R (kpc)
+  uniform float uTubeTaper;   // 0 = uniform width … 1 = the tube narrows strongly toward the rim
   uniform float uArmCount;    // m
   uniform float uPitchTan;    // tan(pitch)
   uniform float uNoiseScale;  // arm warp spatial frequency (per kpc)
@@ -205,23 +210,34 @@ const DENSITY_GLSL = /* glsl */ `
     float rw = 0.06 + 0.30 * uRimFeather;
     float rimFall = 1.0 - smoothstep(rmid * (1.0 - rw), rmid * (1.0 + rw * 0.7), R);
     if (rimFall <= 0.002) return 0.0;
-    float y = abs(p.y) / uKpcWu;
     float radial = exp(-R / uRd);
-    float vert = exp(-y / uHgas);
     float barCut = smoothstep(uBarLo, uBarHi, R);
-    float ridge = pow(max(0.0, armWave(R, phi + uLeadGas)), uArmSharp);
-    // 3D clump field — genuinely volumetric (was an XZ-keyed value with a token p.y phase = vertical
-    // columns). Contrast (uClumpGamma) lets the inter-clump gas EMPTY instead of sitting at a 0.55 floor
-    // (the old fog), and a ridged erosion octave carves filamentary threads for definition.
+    // ── 3D TUBE (replaces the separable vert×ridge SHEET): distance from p to the nearest arm SPINE — the
+    //    warped log-spiral crest at y=0. armWave peaks (→1) on the crest; sqrt(2(1−w)) is the small-angle
+    //    phase offset from it, /|∇ψ| (≈ m/(R·sinPitch)) the in-plane PERPENDICULAR distance (kpc); combined
+    //    with |y| into an ELLIPTICAL cross-section → a real round-ish column instead of a flat sheet. Spurs
+    //    ride armWave, so they become tube offshoots. uTubeR = perp radius (tapers with R); uHgas = vertical. ──
+    float w = clamp(armWave(R, phi + uLeadGas), -1.0, 1.0);
+    float perpPhase = sqrt(2.0 * max(0.0, 1.0 - w));     // ≈ angular offset from the nearest crest
+    float sinPitch = uPitchTan / sqrt(1.0 + uPitchTan * uPitchTan);
+    float gradPsi = uArmCount / (max(R, 0.3) * max(sinPitch, 0.05)); // |∇ψ| ≈ m / (R·sinPitch)
+    float dPerp = perpPhase / gradPsi;                   // in-plane perpendicular distance to the spine (kpc)
+    float yKpc = abs(p.y) / uKpcWu;
+    float taper = mix(1.0, 1.0 - uTubeTaper, smoothstep(4.0, 14.0, R)); // tube narrows toward the rim
+    float rPerp = max(uTubeR * taper, 0.02);
+    float rVert = max(uHgas, 0.02);
+    float dist = length(vec2(dPerp / rPerp, yKpc / rVert)); // 0 on the spine … 1 at the tube edge
+    float tube = pow(max(0.0, 1.0 - dist), uArmSharp * 0.18 + 0.8); // soft column falloff
+    if (tube <= 0.0) return 0.0;
+    // 3D clump field modulates the tube surface/interior (unchanged): contrast (uClumpGamma) opens the gaps,
+    // a ridged erosion octave carves filaments.
     vec3 cp = p / uKpcWu * uClumpFreq;
     float n = clamp(0.5 + 0.5 * fbm3(cp), 0.0, 1.0);
-    // Contrast (gamma) opens the inter-clump gas, but normalize by a 0.7 reference so the BRIGHT clumps stay
-    // ~unchanged: definition reshapes structure, it must NOT just dim the whole field (the first-pass failure).
     float cl = pow(n, uClumpGamma) / pow(0.7, uClumpGamma);
     float ero = ridged3(cp * 2.3 + 19.0, 3.0);
-    cl = clamp(mix(cl, cl * ero, uErosionAmt), 0.0, 1.5); // erosion carves filaments; clamp the renorm overshoot
-    clumpHi = smoothstep(0.6, 1.1, cl) * ridge;
-    return radial * vert * barCut * ridge * cl * rimFall;
+    cl = clamp(mix(cl, cl * ero, uErosionAmt), 0.0, 1.5);
+    clumpHi = smoothstep(0.6, 1.1, cl) * tube;
+    return radial * barCut * tube * cl * rimFall;
   }
 
   // Gas emission COLOUR — shared by the bake + the live march so they never drift. Blue arm glow ↔ pink HII,
@@ -344,7 +360,7 @@ const bakeFragmentShader = DENSITY_GLSL + /* glsl */ `
 
 // Shape uniforms the bake reads (everything densityAt + the colour mix need). Copied from the cloud material.
 const SHAPE_KEYS = [
-  'uBoxMin', 'uBoxMax', 'uKpcWu', 'uRd', 'uRmax', 'uHgas', 'uArmCount', 'uPitchTan', 'uNoiseScale',
+  'uBoxMin', 'uBoxMax', 'uKpcWu', 'uRd', 'uRmax', 'uHgas', 'uTubeR', 'uTubeTaper', 'uArmCount', 'uPitchTan', 'uNoiseScale',
   'uArmNoise', 'uR0', 'uArmSharp', 'uLeadGas', 'uBarLo', 'uBarHi', 'uClumpFreq', 'uClumpGamma',
   'uErosionAmt', 'uRimFeather',
   'uSpurAmp', 'uSpurOpen', 'uSpurDensity', 'uSpurSharp', 'uSpurWarp', 'uSpurInterArm', 'uSpurFlank',
@@ -437,7 +453,9 @@ export function buildGalaxyCloud(
       uKpcWu: { value: KPC_TO_WU },
       uRd: { value: cfg.discScaleLength_kpc * GAS_RADIAL_FACTOR * cloud.radialScale },
       uRmax: { value: cfg.rMax_kpc * cloud.radialScale },
-      uHgas: { value: (cloud.scaleHeight_pc / 1000) * cloud.thickness },
+      uHgas: { value: (cloud.scaleHeight_pc / 1000) * cloud.thickness }, // vertical tube radius (× 'gas volume')
+      uTubeR: { value: cloud.scaleHeight_pc / 1000 },                    // perp tube radius (× 'tube radius')
+      uTubeTaper: { value: cloud.tubeTaper },
       uArmCount: { value: cfg.armCount },
       uPitchTan: { value: Math.tan(cfg.armPitch_deg * DEG2RAD) },
       uNoiseScale: { value: cfg.armNoiseScale },
@@ -501,6 +519,8 @@ export function buildGalaxyCloud(
     u.uRd!.value = c.discScaleLength_kpc * GAS_RADIAL_FACTOR * cl.radialScale;
     u.uRmax!.value = c.rMax_kpc * cl.radialScale;
     u.uHgas!.value = (cl.scaleHeight_pc / 1000) * cl.thickness;
+    u.uTubeR!.value = cl.scaleHeight_pc / 1000;
+    u.uTubeTaper!.value = cl.tubeTaper;
     // Resize the marched box + geometry to the new size/volume so the gas isn't clipped (or wasting steps).
     const { halfXZ, halfY } = gasHalfExtents(c, cl);
     (u.uBoxMin!.value as Vector3).set(-halfXZ, -halfY, -halfXZ);
