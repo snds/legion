@@ -36,13 +36,19 @@ export interface CloudConfig {
   scaleHeight_pc: number; // gas layer thickness (thicker than dust, thinner than stars)
   leadDeg: number;        // gas sits just inside the arm crest (HII on the leading edge)
   armSharp: number;       // arm ridge tightness (cos^k)
-  clumpScale: number;     // 3D clump frequency (per kpc) — the cloudy texture
+  clumpScale: number;     // 3D clump frequency (per kpc) — the structure scale
+  definition: number;     // 0 = soft round clumps … 1 = high-contrast filamentary structure (outcome knob)
   intensity: number;      // emission gain
 }
 
 export const DEFAULT_CLOUD_CONFIG: CloudConfig = {
-  scaleHeight_pc: 180, leadDeg: 6, armSharp: 6.0, clumpScale: 1.4, intensity: 0.9,
+  scaleHeight_pc: 180, leadDeg: 6, armSharp: 6.0, clumpScale: 1.4, definition: 0.5, intensity: 0.9,
 };
+
+// The 'definition' outcome knob drives two field uniforms along a tuned curve: contrast (gamma) opens the
+// inter-clump gas, erosion carves filaments. Kept here so buildGalaxyCloud + sync() derive them identically.
+const defToGamma = (d: number): number => 1.0 + 2.0 * d;   // 0 → 1 (smooth) … 1 → 3 (clumps pop)
+const defToErosion = (d: number): number => 0.75 * d;      // 0 → none … 1 → strong filament carving
 
 // Gas disc is flatter/more extended than the stars, so the arm ridges — not a bright central ring —
 // carry the structure. Radial scale length = stellar × this.
@@ -69,7 +75,9 @@ const DENSITY_GLSL = /* glsl */ `
   uniform float uLeadGas;     // phase lead (rad)
   uniform float uBarLo;       // inner spiral fade-in (kpc)
   uniform float uBarHi;
-  uniform float uClumpFreq;   // per kpc
+  uniform float uClumpFreq;   // per kpc — clump spatial frequency (structure scale)
+  uniform float uClumpGamma;  // clump contrast (1 = smooth … higher = clumps pop, inter-clump empties)
+  uniform float uErosionAmt;  // 0 = round clumps … 1 = filamentary (ridged erosion carves threads)
   uniform float uRimFeather;  // 0 = sharp rim … 1 = ragged, wispy feathered edge
   uniform float uSpurAmp;     // spur/feather field (shared with galaxy-physical.ts)
   uniform float uSpurOpen;
@@ -96,6 +104,32 @@ const DENSITY_GLSL = /* glsl */ `
   }
   float fbm2(vec2 p) {
     return 0.6 * vnoise(p) + 0.3 * vnoise(p * 2.13) + 0.1 * vnoise(p * 4.31);
+  }
+  // ── 3D value noise (signed, same style as the 2D pair) so the gas clumps are genuinely volumetric
+  //    blobs, not the XZ-keyed vertical columns the old p.y phase-shift produced. ──
+  float hash31(vec3 p) {
+    p = fract(p * vec3(127.31, 311.7, 74.7));
+    p += dot(p, p.yzx + 34.21);
+    return fract((p.x + p.y) * p.z) * 2.0 - 1.0;
+  }
+  float vnoise3(vec3 p) {
+    vec3 i = floor(p), f = fract(p);
+    vec3 u = f * f * (3.0 - 2.0 * f);
+    float n000 = hash31(i), n100 = hash31(i + vec3(1.0, 0.0, 0.0));
+    float n010 = hash31(i + vec3(0.0, 1.0, 0.0)), n110 = hash31(i + vec3(1.0, 1.0, 0.0));
+    float n001 = hash31(i + vec3(0.0, 0.0, 1.0)), n101 = hash31(i + vec3(1.0, 0.0, 1.0));
+    float n011 = hash31(i + vec3(0.0, 1.0, 1.0)), n111 = hash31(i + vec3(1.0, 1.0, 1.0));
+    float x00 = mix(n000, n100, u.x), x10 = mix(n010, n110, u.x);
+    float x01 = mix(n001, n101, u.x), x11 = mix(n011, n111, u.x);
+    return mix(mix(x00, x10, u.y), mix(x01, x11, u.y), u.z);
+  }
+  float fbm3(vec3 p) {
+    return 0.6 * vnoise3(p) + 0.3 * vnoise3(p * 2.13) + 0.1 * vnoise3(p * 4.31);
+  }
+  // Ridged erosion octave — the GLSL twin of galaxy-physical.ts ridge(): pow(max(0,1-|fbm|),sharp).
+  // Carves filamentary edges so dense gas reads as threads, not a smooth blob.
+  float ridged3(vec3 p, float sharp) {
+    return pow(max(0.0, 1.0 - abs(fbm3(p))), sharp);
   }
   float spurField(float R, float phi, float psi, float warp, float cot, float L) {
     if (uSpurAmp <= 0.0) return 0.0;
@@ -140,8 +174,17 @@ const DENSITY_GLSL = /* glsl */ `
     float vert = exp(-y / uHgas);
     float barCut = smoothstep(uBarLo, uBarHi, R);
     float ridge = pow(max(0.0, armWave(R, phi + uLeadGas)), uArmSharp);
-    float cl = 0.55 + 0.45 * fbm2(p.xz / uKpcWu * uClumpFreq + vec2(p.y / uKpcWu * 0.4, 0.0));
-    clumpHi = smoothstep(0.85, 1.05, cl) * ridge;
+    // 3D clump field — genuinely volumetric (was an XZ-keyed value with a token p.y phase = vertical
+    // columns). Contrast (uClumpGamma) lets the inter-clump gas EMPTY instead of sitting at a 0.55 floor
+    // (the old fog), and a ridged erosion octave carves filamentary threads for definition.
+    vec3 cp = p / uKpcWu * uClumpFreq;
+    float n = clamp(0.5 + 0.5 * fbm3(cp), 0.0, 1.0);
+    // Contrast (gamma) opens the inter-clump gas, but normalize by a 0.7 reference so the BRIGHT clumps stay
+    // ~unchanged: definition reshapes structure, it must NOT just dim the whole field (the first-pass failure).
+    float cl = pow(n, uClumpGamma) / pow(0.7, uClumpGamma);
+    float ero = ridged3(cp * 2.3 + 19.0, 3.0);
+    cl = clamp(mix(cl, cl * ero, uErosionAmt), 0.0, 1.5); // erosion carves filaments; clamp the renorm overshoot
+    clumpHi = smoothstep(0.6, 1.1, cl) * ridge;
     return radial * vert * barCut * ridge * cl * rimFall;
   }
 `;
@@ -253,7 +296,8 @@ const bakeFragmentShader = DENSITY_GLSL + /* glsl */ `
 // Shape uniforms the bake reads (everything densityAt + the colour mix need). Copied from the cloud material.
 const SHAPE_KEYS = [
   'uBoxMin', 'uBoxMax', 'uKpcWu', 'uRd', 'uRmax', 'uHgas', 'uArmCount', 'uPitchTan', 'uNoiseScale',
-  'uArmNoise', 'uR0', 'uArmSharp', 'uLeadGas', 'uBarLo', 'uBarHi', 'uClumpFreq', 'uRimFeather',
+  'uArmNoise', 'uR0', 'uArmSharp', 'uLeadGas', 'uBarLo', 'uBarHi', 'uClumpFreq', 'uClumpGamma',
+  'uErosionAmt', 'uRimFeather',
   'uSpurAmp', 'uSpurOpen', 'uSpurDensity', 'uSpurSharp', 'uSpurWarp', 'uSpurInterArm', 'uSpurFlank',
   'uSpurReach', 'uArmGlow', 'uHiiGlow',
 ] as const;
@@ -363,6 +407,8 @@ export function buildGalaxyCloud(
       uBarLo: { value: cfg.barLength_kpc * 0.55 },
       uBarHi: { value: cfg.barLength_kpc * 1.1 },
       uClumpFreq: { value: cloud.clumpScale },
+      uClumpGamma: { value: defToGamma(cloud.definition) },
+      uErosionAmt: { value: defToErosion(cloud.definition) },
       uRimFeather: { value: cfg.rimFeather },
       uSpurAmp: { value: cfg.armSpurAmp },
       uSpurOpen: { value: cfg.armSpurOpen },
@@ -416,6 +462,8 @@ export function buildGalaxyCloud(
     u.uBarLo!.value = c.barLength_kpc * 0.55;
     u.uBarHi!.value = c.barLength_kpc * 1.1;
     u.uClumpFreq!.value = cl.clumpScale;
+    u.uClumpGamma!.value = defToGamma(cl.definition);
+    u.uErosionAmt!.value = defToErosion(cl.definition);
     u.uRimFeather!.value = c.rimFeather;
     u.uSpurAmp!.value = c.armSpurAmp;
     u.uSpurOpen!.value = c.armSpurOpen;
