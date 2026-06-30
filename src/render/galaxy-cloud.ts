@@ -39,6 +39,7 @@ export interface CloudConfig {
   clumpScale: number;     // 3D clump frequency (per kpc) — the structure scale
   definition: number;     // 0 = soft round clumps … 1 = high-contrast filamentary structure (outcome knob)
   selfShadow: number;     // 0 = flat emission … 1 = strong bake-time self-shadow (volumetric form); 0 = off
+  coreWhite: number;      // 0 = no white (blue/pink only) … 1 = dense gas reads cool/warm white (legibility)
   intensity: number;      // emission gain
 }
 
@@ -46,7 +47,8 @@ export const DEFAULT_CLOUD_CONFIG: CloudConfig = {
   // intensity bumped 0.9 → 2.5: at 0.9 the additive gas was invisible against the bright star field (you
   // couldn't tell it was rendering). It reads distinctly only once self-shadow/white (P2/P3) give it
   // character; until then this at least makes it visible, especially with stars toggled off.
-  scaleHeight_pc: 180, leadDeg: 6, armSharp: 6.0, clumpScale: 1.4, definition: 0.5, selfShadow: 0.6, intensity: 2.5,
+  scaleHeight_pc: 180, leadDeg: 6, armSharp: 6.0, clumpScale: 1.4, definition: 0.5, selfShadow: 0.4,
+  coreWhite: 0.55, intensity: 2.5,
 };
 
 // The 'definition' outcome knob drives two field uniforms along a tuned curve: contrast (gamma) opens the
@@ -55,6 +57,12 @@ const defToGamma = (d: number): number => 1.0 + 2.0 * d;   // 0 → 1 (smooth) �
 const defToErosion = (d: number): number => 0.75 * d;      // 0 → none … 1 → strong filament carving
 // 'self shadow' knob → bake-time absorption coefficient for the +Y light-march (0 = off).
 const defToShadow = (d: number): number => d * 8.0;
+// 'core white' knob → density thresholds where the white ramp starts (lo) and saturates (hi). Higher knob =
+// lower thresholds = more of the dense gas reads white. Calibrated to the MEASURED field: density is heavily
+// skewed (p90≈0.025, p99≈0.087, max≈0.34), so the white must key off the top few % to land on the dense
+// ridges/clumps. c=0 → barely any white; c=0.5 → top ~few % white; c=1 → most structure white.
+const whiteHi = (c: number): number => 0.16 - 0.115 * c; // c=0 → 0.16 … c=0.5 → 0.10 … c=1 → 0.045
+const whiteLo = (c: number): number => whiteHi(c) * 0.33;
 
 // Gas disc is flatter/more extended than the stars, so the arm ridges — not a bright central ring —
 // carry the structure. Radial scale length = stellar × this.
@@ -95,6 +103,12 @@ const DENSITY_GLSL = /* glsl */ `
   uniform float uSpurReach;
   uniform vec3 uArmGlow;      // cool blue arm emission
   uniform vec3 uHiiGlow;      // warm pink HII knots
+  uniform vec3 uCoolWhite;    // dense OUTER/young gas → cool white
+  uniform vec3 uWarmWhite;    // dense INNER/old gas → warm white
+  uniform float uWhiteLo;     // density where the white ramp starts
+  uniform float uWhiteHi;     // density where the gas is fully white
+  uniform float uRwarm;       // R (kpc) below which dense gas is warm-white
+  uniform float uRcool;       // R (kpc) above which dense gas is cool-white
 
   float hash21(vec2 p) {
     p = fract(p * vec2(127.31, 311.7));
@@ -193,6 +207,18 @@ const DENSITY_GLSL = /* glsl */ `
     clumpHi = smoothstep(0.6, 1.1, cl) * ridge;
     return radial * vert * barCut * ridge * cl * rimFall;
   }
+
+  // Gas emission COLOUR — shared by the bake + the live march so they never drift. Blue arm glow ↔ pink HII,
+  // blended toward a density-driven WHITE in the dense volumes (cool-white in the young outer arms → warm-
+  // white toward the old inner disc). The white makes the dense STRUCTURE legible; the bake's self-shadow
+  // then darkens the shadowed side so the white reads as FORM, not an additive bloom.
+  vec3 gasColor(vec3 p, float d, float chi) {
+    float R = length(p.xz) / uKpcWu;
+    vec3 baseGas = mix(uArmGlow, uHiiGlow, chi);
+    vec3 whiteRamp = mix(uWarmWhite, uCoolWhite, smoothstep(uRwarm, uRcool, R));
+    float rhoN = smoothstep(uWhiteLo, uWhiteHi, d); // 0 faint … 1 dense → white
+    return mix(baseGas, whiteRamp, rhoN);
+  }
 `;
 
 const cloudVertexShader = /* glsl */ `
@@ -270,7 +296,7 @@ const cloudFragmentShader = DENSITY_GLSL + /* glsl */ `
         vec4 v = sampleVolume(vec3(tc.x, tc.z, tc.y)); // atlas: XZ in-tile, Y → slice
         d = v.a * v.a; col = v.rgb;                // decode sqrt-encoded density (see bake shader)
       } else {
-        float chi; d = densityAt(p, chi); col = mix(uArmGlow, uHiiGlow, chi);
+        float chi; d = densityAt(p, chi); col = gasColor(p, d, chi);
       }
       accum += d * col * dt;
     }
@@ -310,7 +336,7 @@ const bakeFragmentShader = DENSITY_GLSL + /* glsl */ `
     // sqrt-encode density into the 8-bit alpha (decoded as a*a at march time). The gas peaks near ~0.1 and is
     // mostly ≪0.01, which a LINEAR 8-bit store crushes to 0–2/255 (~25× too faint); sqrt redistributes the
     // range toward the faint end (d=0.01 → 25/255 instead of 2/255).
-    gl_FragColor = vec4(mix(uArmGlow, uHiiGlow, chi) * T, sqrt(clamp(d, 0.0, 1.0)));
+    gl_FragColor = vec4(gasColor(p, d, chi) * T, sqrt(clamp(d, 0.0, 1.0)));
   }
 `;
 
@@ -321,6 +347,7 @@ const SHAPE_KEYS = [
   'uErosionAmt', 'uRimFeather',
   'uSpurAmp', 'uSpurOpen', 'uSpurDensity', 'uSpurSharp', 'uSpurWarp', 'uSpurInterArm', 'uSpurFlank',
   'uSpurReach', 'uArmGlow', 'uHiiGlow', 'uShadowStrength',
+  'uCoolWhite', 'uWarmWhite', 'uWhiteLo', 'uWhiteHi', 'uRwarm', 'uRcool',
 ] as const;
 
 let _bakeScene: Scene | null = null;
@@ -443,6 +470,12 @@ export function buildGalaxyCloud(
       uIntensity: { value: cloud.intensity },
       uArmGlow: { value: new Color(0.26, 0.42, 0.85) },
       uHiiGlow: { value: new Color(0.95, 0.5, 0.72) },
+      uCoolWhite: { value: new Color(0.82, 0.88, 1.0) },
+      uWarmWhite: { value: new Color(1.0, 0.95, 0.86) },
+      uWhiteLo: { value: whiteLo(cloud.coreWhite) },
+      uWhiteHi: { value: whiteHi(cloud.coreWhite) },
+      uRwarm: { value: 3.0 },
+      uRcool: { value: 9.0 },
       uSteps: { value: 30 },
       uVolume: { value: null },
       uUseVolume: { value: 0 },
@@ -487,6 +520,8 @@ export function buildGalaxyCloud(
     u.uClumpGamma!.value = defToGamma(cl.definition);
     u.uErosionAmt!.value = defToErosion(cl.definition);
     u.uShadowStrength!.value = defToShadow(cl.selfShadow);
+    u.uWhiteLo!.value = whiteLo(cl.coreWhite);
+    u.uWhiteHi!.value = whiteHi(cl.coreWhite);
     u.uRimFeather!.value = c.rimFeather;
     u.uSpurAmp!.value = c.armSpurAmp;
     u.uSpurOpen!.value = c.armSpurOpen;
