@@ -231,6 +231,7 @@ export function createPhysicalGalaxy(opts: { withPanel?: boolean; renderer?: Web
           live: () => { if (cloud) cloud.material.uniforms.uIntensity!.value = cloudCfg.intensity; } },
         cnum('definition', 'definition', 0, 1, 0.05),     // bake-time: contrast + filament carving
         cnum('clumpScale', 'structure scale', 0.4, 3, 0.1), // bake-time: clump spatial frequency
+        cnum('selfShadow', 'self shadow', 0, 1, 0.05),    // bake-time: +Y light-march form (0 = off)
       ] },
       { title: 'Motion', key: 'motion', ctrls: [
         { label: 'time warp', min: 0, max: 15, step: 0.5, unit: ' Myr/s', get: () => warp, set: (v: number) => { warp = v; }, live: () => {} },
