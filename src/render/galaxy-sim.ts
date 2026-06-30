@@ -50,7 +50,17 @@ interface Ctrl {
   set: (v: number) => void;
   live?: () => void; // present ⇒ a LIVE control (apply on input, never resample)
 }
-interface Section { title: string; key: string; ctrls: Ctrl[] }
+/** A panel on/off switch (an easy per-feature bypass). `live` applies it without a resample; otherwise a
+ *  toggle re-bakes like a bake-time slider. */
+interface Toggle {
+  kind: 'toggle';
+  label: string;
+  get: () => boolean;
+  set: (v: boolean) => void;
+  live?: () => void;
+}
+type PanelCtrl = Ctrl | Toggle;
+interface Section { title: string; key: string; ctrls: PanelCtrl[] }
 
 const PREVIEW_COUNT = 550_000; // fast resample while dragging; full count on release
 const KPC_WU = 1000 * WU_PER_PC; // unified frame: 1 kpc = 1e6 WU (matches galaxy-physical positions)
@@ -84,15 +94,18 @@ export function createPhysicalGalaxy(opts: { withPanel?: boolean; renderer?: Web
   const cloudCfg: CloudConfig = { ...DEFAULT_CLOUD_CONFIG };
   let dustOpacity = 1.0;  // live opacity scale (uOpacityScale)
   let warp = 0;           // warp rate (Myr per real second); 0 = frozen "moment in time"
+  let cloudEnabled = true; // gas on/off (panel toggle)
   // Interim defaults (a previously-Saved look) load on top of the code originals so they persist per browser.
   try {
     const j = JSON.parse(localStorage.getItem(STORE_KEY) ?? 'null') as
-      { cfg?: Partial<PhysicalGalaxyConfig>; dust?: Partial<DustConfig>; cloud?: Partial<CloudConfig>; dustOpacity?: number } | null;
+      { cfg?: Partial<PhysicalGalaxyConfig>; dust?: Partial<DustConfig>; cloud?: Partial<CloudConfig>;
+        dustOpacity?: number; cloudEnabled?: boolean } | null;
     if (j) {
       Object.assign(cfg, j.cfg ?? {});
       Object.assign(dustCfg, j.dust ?? {});
       Object.assign(cloudCfg, j.cloud ?? {});
       if (typeof j.dustOpacity === 'number') dustOpacity = j.dustOpacity;
+      if (typeof j.cloudEnabled === 'boolean') cloudEnabled = j.cloudEnabled;
     }
   } catch { /* corrupt storage → originals */ }
 
@@ -124,6 +137,7 @@ export function createPhysicalGalaxy(opts: { withPanel?: boolean; renderer?: Web
   // gas/nebulosity volume — created once, rides the rotating root. The renderer (passed, or the registered
   // bake renderer) bakes the static field to a slice atlas; without one it falls back to the live march.
   cloud = buildGalaxyCloud(cfg, cloudCfg, opts.renderer);
+  cloud.mesh.visible = cloudEnabled;
   root.add(cloud.mesh);
 
   let hud: HTMLDivElement | null = null;
@@ -150,6 +164,13 @@ export function createPhysicalGalaxy(opts: { withPanel?: boolean; renderer?: Web
       label, min, max, step, ...(unit !== undefined ? { unit } : {}),
       get: () => dustCfg[key] as number,
       set: (v) => { (dustCfg[key] as number) = v; },
+    });
+    const cnum = (
+      key: keyof CloudConfig, label: string, min: number, max: number, step: number, unit?: string,
+    ): Ctrl => ({
+      label, min, max, step, ...(unit !== undefined ? { unit } : {}),
+      get: () => cloudCfg[key] as number,
+      set: (v) => { (cloudCfg[key] as number) = v; },
     });
     const sections: Section[] = [
       { title: 'Disc & Arms', key: 'disc', ctrls: [
@@ -184,7 +205,7 @@ export function createPhysicalGalaxy(opts: { withPanel?: boolean; renderer?: Web
         num('clusterArm', 'cluster arm', 0, 1, 0.05),
       ] },
       { title: 'Dust', key: 'dust', ctrls: [
-        { label: 'dust', min: 0, max: 2.5, step: 0.1, get: () => dustOpacity, set: (v) => { dustOpacity = v; },
+        { label: 'dust', min: 0, max: 2.5, step: 0.1, get: () => dustOpacity, set: (v: number) => { dustOpacity = v; },
           live: () => { if (current) current.dustMat.uniforms.uOpacityScale.value = dustOpacity; } },
         dnum('dustLeadDeg', 'dust lead', -40, 40, 2, '°'),
         dnum('dustThickness', 'dust thickness', 0.02, 1, 0.02),
@@ -194,11 +215,15 @@ export function createPhysicalGalaxy(opts: { withPanel?: boolean; renderer?: Web
         dnum('dustFeather', 'dust feather', 0, 1.5, 0.05),
       ] },
       { title: 'Gas', key: 'gas', ctrls: [
-        { label: 'gas clouds', min: 0, max: 2, step: 0.05, get: () => cloudCfg.intensity, set: (v) => { cloudCfg.intensity = v; },
+        { kind: 'toggle', label: 'gas on', get: () => cloudEnabled, set: (v: boolean) => { cloudEnabled = v; },
+          live: () => { if (cloud) cloud.mesh.visible = cloudEnabled; } },
+        { label: 'gas clouds', min: 0, max: 2, step: 0.05, get: () => cloudCfg.intensity, set: (v: number) => { cloudCfg.intensity = v; },
           live: () => { if (cloud) cloud.material.uniforms.uIntensity!.value = cloudCfg.intensity; } },
+        cnum('definition', 'definition', 0, 1, 0.05),     // bake-time: contrast + filament carving
+        cnum('clumpScale', 'structure scale', 0.4, 3, 0.1), // bake-time: clump spatial frequency
       ] },
       { title: 'Motion', key: 'motion', ctrls: [
-        { label: 'time warp', min: 0, max: 15, step: 0.5, unit: ' Myr/s', get: () => warp, set: (v) => { warp = v; }, live: () => {} },
+        { label: 'time warp', min: 0, max: 15, step: 0.5, unit: ' Myr/s', get: () => warp, set: (v: number) => { warp = v; }, live: () => {} },
       ] },
     ];
 
@@ -244,6 +269,24 @@ export function createPhysicalGalaxy(opts: { withPanel?: boolean; renderer?: Web
       refreshers.push(sync);
     };
 
+    const addToggle = (host: HTMLElement, t: Toggle): void => {
+      const row = document.createElement('label');
+      row.style.cssText = 'margin-top:6px;display:flex;justify-content:space-between;align-items:center;cursor:pointer';
+      const name = document.createElement('span'); name.textContent = t.label;
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      box.style.cssText = 'accent-color:#6aa3ff;width:14px;height:14px;margin:0';
+      const sync = (): void => { box.checked = t.get(); };
+      sync();
+      box.addEventListener('change', () => {
+        t.set(box.checked);
+        if (t.live) t.live(); else rebuild();
+      });
+      row.append(name, box);
+      host.appendChild(row);
+      refreshers.push(sync);
+    };
+
     for (const sec of sections) {
       const header = document.createElement('div');
       header.style.cssText = 'margin-top:9px;padding-top:6px;border-top:1px solid #222b36;cursor:pointer;'
@@ -261,7 +304,9 @@ export function createPhysicalGalaxy(opts: { withPanel?: boolean; renderer?: Web
         try { localStorage.setItem(COLLAPSE_KEY, JSON.stringify([...collapsed])); } catch { /* ignore */ }
       });
       hud.append(header, body);
-      for (const c of sec.ctrls) addCtrl(body, c);
+      for (const c of sec.ctrls) {
+        if ('kind' in c) addToggle(body, c); else addCtrl(body, c);
+      }
     }
 
     // ── footer: Re-seed · Save (interim defaults) · Revert (originals) ──
@@ -281,7 +326,7 @@ export function createPhysicalGalaxy(opts: { withPanel?: boolean; renderer?: Web
     };
     const saveBtn = btn('Save', () => {
       try {
-        localStorage.setItem(STORE_KEY, JSON.stringify({ cfg, dust: dustCfg, cloud: cloudCfg, dustOpacity }));
+        localStorage.setItem(STORE_KEY, JSON.stringify({ cfg, dust: dustCfg, cloud: cloudCfg, dustOpacity, cloudEnabled }));
         flash(saveBtn, 'Saved ✓');
       } catch { flash(saveBtn, 'Failed'); }
     });
@@ -290,9 +335,9 @@ export function createPhysicalGalaxy(opts: { withPanel?: boolean; renderer?: Web
       Object.assign(cfg, DEFAULT_PHYSICAL_CONFIG);
       Object.assign(dustCfg, DEFAULT_DUST_CONFIG);
       Object.assign(cloudCfg, DEFAULT_CLOUD_CONFIG);
-      dustOpacity = 1.0; warp = 0;
+      dustOpacity = 1.0; warp = 0; cloudEnabled = true;
       for (const r of refreshers) r();
-      if (cloud) cloud.material.uniforms.uIntensity!.value = cloudCfg.intensity;
+      if (cloud) { cloud.material.uniforms.uIntensity!.value = cloudCfg.intensity; cloud.mesh.visible = true; }
       rebuild();
       flash(revertBtn, 'Originals');
     });
