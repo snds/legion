@@ -42,7 +42,10 @@ export interface CloudConfig {
 }
 
 export const DEFAULT_CLOUD_CONFIG: CloudConfig = {
-  scaleHeight_pc: 180, leadDeg: 6, armSharp: 6.0, clumpScale: 1.4, definition: 0.5, intensity: 0.9,
+  // intensity bumped 0.9 → 2.5: at 0.9 the additive gas was invisible against the bright star field (you
+  // couldn't tell it was rendering). It reads distinctly only once self-shadow/white (P2/P3) give it
+  // character; until then this at least makes it visible, especially with stars toggled off.
+  scaleHeight_pc: 180, leadDeg: 6, armSharp: 6.0, clumpScale: 1.4, definition: 0.5, intensity: 2.5,
 };
 
 // The 'definition' outcome knob drives two field uniforms along a tuned curve: contrast (gamma) opens the

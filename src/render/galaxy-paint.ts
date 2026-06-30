@@ -162,8 +162,12 @@ export class OrbitFlyCamera {
     el.style.touchAction = 'none';
     const onDown = (e: PointerEvent): void => {
       if (e.button === 0) return; // LEFT is the brush — the camera navigates on RIGHT / MIDDLE
+      // A two-finger trackpad PRESS registers as a secondary (right) click; preventDefault + pointer-capture so
+      // the whole press-drag stays on the canvas and the OS/browser can't read it as a back/fwd/new-tab gesture.
+      e.preventDefault();
       this.mode = e.shiftKey || e.button === 1 ? 'pan' : 'orbit';
       this.lastX = e.clientX; this.lastY = e.clientY;
+      try { el.setPointerCapture(e.pointerId); } catch { /* capture is best-effort */ }
     };
     const onCtx = (e: Event): void => e.preventDefault(); // right-drag orbit shouldn't open the menu
     const onMove = (e: PointerEvent): void => {
@@ -180,7 +184,10 @@ export class OrbitFlyCamera {
         this.target.addScaledVector(this._right, -dx * s).addScaledVector(this._up, dy * s);
       }
     };
-    const onUp = (): void => { this.mode = null; };
+    const onUp = (e: PointerEvent): void => {
+      this.mode = null;
+      try { el.releasePointerCapture(e.pointerId); } catch { /* may not hold capture */ }
+    };
     const onWheel = (e: WheelEvent): void => {
       e.preventDefault();
       // Trackpad-friendly. A macOS pinch arrives as ctrl+wheel → ZOOM; a two-finger DRAG (pixel-mode, with a

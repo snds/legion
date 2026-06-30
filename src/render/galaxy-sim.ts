@@ -95,17 +95,21 @@ export function createPhysicalGalaxy(opts: { withPanel?: boolean; renderer?: Web
   let dustOpacity = 1.0;  // live opacity scale (uOpacityScale)
   let warp = 0;           // warp rate (Myr per real second); 0 = frozen "moment in time"
   let cloudEnabled = true; // gas on/off (panel toggle)
+  let starsEnabled = true; // stars on/off (panel toggle — isolate the gas/dust)
+  let dustEnabled = true;  // dust on/off (panel toggle)
   // Interim defaults (a previously-Saved look) load on top of the code originals so they persist per browser.
   try {
     const j = JSON.parse(localStorage.getItem(STORE_KEY) ?? 'null') as
       { cfg?: Partial<PhysicalGalaxyConfig>; dust?: Partial<DustConfig>; cloud?: Partial<CloudConfig>;
-        dustOpacity?: number; cloudEnabled?: boolean } | null;
+        dustOpacity?: number; cloudEnabled?: boolean; starsEnabled?: boolean; dustEnabled?: boolean } | null;
     if (j) {
       Object.assign(cfg, j.cfg ?? {});
       Object.assign(dustCfg, j.dust ?? {});
       Object.assign(cloudCfg, j.cloud ?? {});
       if (typeof j.dustOpacity === 'number') dustOpacity = j.dustOpacity;
       if (typeof j.cloudEnabled === 'boolean') cloudEnabled = j.cloudEnabled;
+      if (typeof j.starsEnabled === 'boolean') starsEnabled = j.starsEnabled;
+      if (typeof j.dustEnabled === 'boolean') dustEnabled = j.dustEnabled;
     }
   } catch { /* corrupt storage → originals */ }
 
@@ -130,6 +134,8 @@ export function createPhysicalGalaxy(opts: { withPanel?: boolean; renderer?: Web
     d.material.uniforms.uOpacityScale.value = dustOpacity;
     root.add(g.points);
     root.add(d.points);
+    g.points.visible = starsEnabled; // honor the panel toggles across resamples
+    d.points.visible = dustEnabled;
     current = { points: g.points, material: g.material, dust: d.points, dustMat: d.material };
     if (cloud) cloud.sync(cfg, cloudCfg); // re-trace the gas onto the (possibly retuned) arms
   };
@@ -198,6 +204,8 @@ export function createPhysicalGalaxy(opts: { withPanel?: boolean; renderer?: Web
         num('armSpurReach', 'spur reach', 0.2, 0.9, 0.05),
       ] },
       { title: 'Stars', key: 'stars', ctrls: [
+        { kind: 'toggle', label: 'stars on', get: () => starsEnabled, set: (v: boolean) => { starsEnabled = v; },
+          live: () => { if (current) current.points.visible = starsEnabled; } },
         num('starProminence', 'prominence', 0, 1, 0.05),
         num('starFaintDim', 'faint dim', 0, 1, 0.05),
         num('clumpFraction', 'clusters', 0, 0.4, 0.01),
@@ -205,6 +213,8 @@ export function createPhysicalGalaxy(opts: { withPanel?: boolean; renderer?: Web
         num('clusterArm', 'cluster arm', 0, 1, 0.05),
       ] },
       { title: 'Dust', key: 'dust', ctrls: [
+        { kind: 'toggle', label: 'dust on', get: () => dustEnabled, set: (v: boolean) => { dustEnabled = v; },
+          live: () => { if (current) current.dust.visible = dustEnabled; } },
         { label: 'dust', min: 0, max: 2.5, step: 0.1, get: () => dustOpacity, set: (v: number) => { dustOpacity = v; },
           live: () => { if (current) current.dustMat.uniforms.uOpacityScale.value = dustOpacity; } },
         dnum('dustLeadDeg', 'dust lead', -40, 40, 2, '°'),
@@ -326,7 +336,7 @@ export function createPhysicalGalaxy(opts: { withPanel?: boolean; renderer?: Web
     };
     const saveBtn = btn('Save', () => {
       try {
-        localStorage.setItem(STORE_KEY, JSON.stringify({ cfg, dust: dustCfg, cloud: cloudCfg, dustOpacity, cloudEnabled }));
+        localStorage.setItem(STORE_KEY, JSON.stringify({ cfg, dust: dustCfg, cloud: cloudCfg, dustOpacity, cloudEnabled, starsEnabled, dustEnabled }));
         flash(saveBtn, 'Saved ✓');
       } catch { flash(saveBtn, 'Failed'); }
     });
@@ -335,10 +345,10 @@ export function createPhysicalGalaxy(opts: { withPanel?: boolean; renderer?: Web
       Object.assign(cfg, DEFAULT_PHYSICAL_CONFIG);
       Object.assign(dustCfg, DEFAULT_DUST_CONFIG);
       Object.assign(cloudCfg, DEFAULT_CLOUD_CONFIG);
-      dustOpacity = 1.0; warp = 0; cloudEnabled = true;
+      dustOpacity = 1.0; warp = 0; cloudEnabled = true; starsEnabled = true; dustEnabled = true;
       for (const r of refreshers) r();
       if (cloud) { cloud.material.uniforms.uIntensity!.value = cloudCfg.intensity; cloud.mesh.visible = true; }
-      rebuild();
+      rebuild(); // re-applies starsEnabled/dustEnabled visibility
       flash(revertBtn, 'Originals');
     });
     footer.append(btn('Re-seed', () => { seed++; rebuild(); }), saveBtn, revertBtn);
