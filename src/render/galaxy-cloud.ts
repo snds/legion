@@ -40,6 +40,8 @@ export interface CloudConfig {
   definition: number;     // 0 = soft round clumps … 1 = high-contrast filamentary structure (outcome knob)
   selfShadow: number;     // 0 = flat emission … 1 = strong bake-time self-shadow (volumetric form); 0 = off
   coreWhite: number;      // 0 = no white (blue/pink only) … 1 = dense gas reads cool/warm white (legibility)
+  radialScale: number;    // gas disc SIZE (radial extent) ×; 1 = matches the galaxy rMax
+  thickness: number;      // gas VOLUME (vertical scale height) ×; 1 = the default thin layer
   intensity: number;      // emission gain
 }
 
@@ -48,7 +50,7 @@ export const DEFAULT_CLOUD_CONFIG: CloudConfig = {
   // couldn't tell it was rendering). It reads distinctly only once self-shadow/white (P2/P3) give it
   // character; until then this at least makes it visible, especially with stars toggled off.
   scaleHeight_pc: 180, leadDeg: 6, armSharp: 6.0, clumpScale: 1.4, definition: 0.5, selfShadow: 0.4,
-  coreWhite: 0.55, intensity: 2.5,
+  coreWhite: 0.55, radialScale: 1.0, thickness: 1.0, intensity: 2.5,
 };
 
 // The 'definition' outcome knob drives two field uniforms along a tuned curve: contrast (gamma) opens the
@@ -67,6 +69,16 @@ const whiteLo = (c: number): number => whiteHi(c) * 0.33;
 // Gas disc is flatter/more extended than the stars, so the arm ridges — not a bright central ring —
 // carry the structure. Radial scale length = stellar × this.
 const GAS_RADIAL_FACTOR = 1.7;
+
+// Gas box half-extents (WU): radial follows the galaxy rMax (× the 'gas size' radialScale), vertical = ±4
+// scale heights (× the 'gas volume' thickness). Recomputed on sync so the size/volume knobs grow the marched
+// box + truncation together (no clipping). Kept here so build + sync size the box identically.
+function gasHalfExtents(cfg: PhysicalGalaxyConfig, cloud: CloudConfig): { halfXZ: number; halfY: number } {
+  return {
+    halfXZ: cfg.rMax_kpc * KPC_TO_WU * 1.4 * cloud.radialScale,
+    halfY: (cloud.scaleHeight_pc / 1000) * KPC_TO_WU * 4.0 * cloud.thickness,
+  };
+}
 
 // ── Shared density GLSL: the SHAPE uniforms + noise + armWave + spurField + densityAt. Included VERBATIM by
 //    both the bake quad AND the runtime fallback, so they evaluate an identical field (zero aesthetic drift).
@@ -431,8 +443,7 @@ export function buildGalaxyCloud(
   cfg: PhysicalGalaxyConfig, cloud: CloudConfig = DEFAULT_CLOUD_CONFIG,
   renderer: WebGLRenderer | null = getBakeRenderer(),
 ): GalaxyCloud {
-  const halfXZ = cfg.rMax_kpc * KPC_TO_WU * 1.4; // room for the feathered rim to reach past rMax
-  const halfY = (cloud.scaleHeight_pc / 1000) * KPC_TO_WU * 4.0; // ±4 scale heights covers the gas layer
+  const { halfXZ, halfY } = gasHalfExtents(cfg, cloud); // 'gas size' (radial) × 'gas volume' (thickness)
   const geo = new BoxGeometry(halfXZ * 2, halfY * 2, halfXZ * 2);
   const material = new ShaderMaterial({
     vertexShader: cloudVertexShader,
@@ -442,9 +453,9 @@ export function buildGalaxyCloud(
       uBoxMin: { value: new Vector3(-halfXZ, -halfY, -halfXZ) },
       uBoxMax: { value: new Vector3(halfXZ, halfY, halfXZ) },
       uKpcWu: { value: KPC_TO_WU },
-      uRd: { value: cfg.discScaleLength_kpc * GAS_RADIAL_FACTOR },
-      uRmax: { value: cfg.rMax_kpc },
-      uHgas: { value: cloud.scaleHeight_pc / 1000 },
+      uRd: { value: cfg.discScaleLength_kpc * GAS_RADIAL_FACTOR * cloud.radialScale },
+      uRmax: { value: cfg.rMax_kpc * cloud.radialScale },
+      uHgas: { value: (cloud.scaleHeight_pc / 1000) * cloud.thickness },
       uArmCount: { value: cfg.armCount },
       uPitchTan: { value: Math.tan(cfg.armPitch_deg * DEG2RAD) },
       uNoiseScale: { value: cfg.armNoiseScale },
@@ -505,9 +516,15 @@ export function buildGalaxyCloud(
   const invModel = new Matrix4();
   const sync = (c: PhysicalGalaxyConfig, cl: CloudConfig): void => {
     const u = material.uniforms;
-    u.uRd!.value = c.discScaleLength_kpc * GAS_RADIAL_FACTOR;
-    u.uRmax!.value = c.rMax_kpc;
-    u.uHgas!.value = cl.scaleHeight_pc / 1000;
+    u.uRd!.value = c.discScaleLength_kpc * GAS_RADIAL_FACTOR * cl.radialScale;
+    u.uRmax!.value = c.rMax_kpc * cl.radialScale;
+    u.uHgas!.value = (cl.scaleHeight_pc / 1000) * cl.thickness;
+    // Resize the marched box + geometry to the new size/volume so the gas isn't clipped (or wasting steps).
+    const { halfXZ, halfY } = gasHalfExtents(c, cl);
+    (u.uBoxMin!.value as Vector3).set(-halfXZ, -halfY, -halfXZ);
+    (u.uBoxMax!.value as Vector3).set(halfXZ, halfY, halfXZ);
+    mesh.geometry.dispose();
+    mesh.geometry = new BoxGeometry(halfXZ * 2, halfY * 2, halfXZ * 2);
     u.uArmCount!.value = c.armCount;
     u.uPitchTan!.value = Math.tan(c.armPitch_deg * DEG2RAD);
     u.uNoiseScale!.value = c.armNoiseScale;
