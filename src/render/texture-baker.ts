@@ -38,6 +38,10 @@ let _renderer: WebGLRenderer | null = null;
 export function setBakeRenderer(renderer: WebGLRenderer): void {
   _renderer = renderer;
 }
+/** The registered renderer (or null) — other offscreen bakers (galaxy cloud volume) reuse it. */
+export function getBakeRenderer(): WebGLRenderer | null {
+  return _renderer;
+}
 
 // ── GLSL: 3D simplex noise (Ashima / Stefan Gustavson, MIT) ──────────
 // Domain-offset by uSeed inside the recipe samplers so each planet's
