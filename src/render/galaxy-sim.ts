@@ -229,6 +229,8 @@ export function createPhysicalGalaxy(opts: { withPanel?: boolean; renderer?: Web
           live: () => { if (cloud) cloud.mesh.visible = cloudEnabled; } },
         { label: 'gas clouds', min: 0, max: 2, step: 0.05, get: () => cloudCfg.intensity, set: (v: number) => { cloudCfg.intensity = v; },
           live: () => { if (cloud) cloud.material.uniforms.uIntensity!.value = cloudCfg.intensity; } },
+        cnum('radialScale', 'gas size', 0.5, 2, 0.05),    // bake-time: radial extent of the gas disc
+        cnum('thickness', 'gas volume', 0.3, 3, 0.1),     // bake-time: vertical scale-height (thickness)
         cnum('definition', 'definition', 0, 1, 0.05),     // bake-time: contrast + filament carving
         cnum('clumpScale', 'structure scale', 0.4, 3, 0.1), // bake-time: clump spatial frequency
         cnum('coreWhite', 'core white', 0, 1, 0.05),      // bake-time: dense gas → cool/warm white (legibility)
