@@ -45,18 +45,26 @@ const SHELLS: ShellSpec[] = [
 ];
 
 const vertexShader = /* glsl */ `
-  attribute float aMag;  // synthetic absolute-ish magnitude
+  attribute float aMag;   // synthetic absolute-ish magnitude
   attribute float aBV;
+  attribute float aEdge;  // radial annulus feather (0 at the rims → 1 inside)
   uniform float uPixelRatio;
+  uniform float uFullDist; // view distance (WU) at which stars render full-size
   varying vec3 vColor;
   varying float vBright;
   ${BV_COLOR_GLSL}
   void main(){
     vColor = bvColor(aBV);
+    vec4 mv = modelViewMatrix * vec4(position, 1.0);
+    // DISTANCE ATTENUATION: fixed-px points additively stack into a bright
+    // mush once the whole shell fits in a few hundred pixels (the "ball" at
+    // galaxy framing). Shrink size AND brightness as the star recedes past
+    // the shell's own scale, so far shells read as points of light.
+    float atten = clamp(uFullDist / max(length(mv.xyz), 1.0), 0.3, 1.0);
     float dM = 4.83 - aMag;
-    vBright = clamp(0.35 + dM * 0.09, 0.22, 1.1);
-    gl_PointSize = clamp(2.0 + dM * 0.35, 1.1, 5.0) * uPixelRatio;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    vBright = clamp(0.35 + dM * 0.09, 0.22, 1.1) * sqrt(atten) * aEdge;
+    gl_PointSize = clamp(2.0 + dM * 0.35, 1.1, 5.0) * atten * uPixelRatio;
+    gl_Position = projectionMatrix * mv;
   }
 `;
 
@@ -83,7 +91,10 @@ function shellPresence(camDist: number, spec: ShellSpec): number {
   const rMin = spec.rMinPc * WU_PER_PC;
   const rMax = spec.rMaxPc * WU_PER_PC;
   const fadeIn = smooth01(camDist, rMin * 0.12, rMin * 0.35);
-  const fadeOut = 1 - smooth01(camDist, rMax * 1.2, rMax * 3.5);
+  // Fade-out completes by ~2.2× the outer edge — for the last shell that is
+  // inside the physical galaxy's own rise, so the hand-off to the galaxy
+  // starfield finishes before full-disc framing (no lingering shell ball).
+  const fadeOut = 1 - smooth01(camDist, rMax * 0.9, rMax * 2.2);
   return fadeIn * fadeOut;
 }
 
@@ -122,6 +133,7 @@ async function buildShell(spec: ShellSpec, shellIndex: number): Promise<BufferGe
   const pos = new Float32Array(spec.count * 3);
   const mag = new Float32Array(spec.count);
   const bv = new Float32Array(spec.count);
+  const edge = new Float32Array(spec.count);
   let placed = 0;
   let tries = 0;
   const maxTries = spec.count * 30;
@@ -154,6 +166,11 @@ async function buildShell(spec: ShellSpec, shellIndex: number): Promise<BufferGe
       bv[placed] = ridge.armRidge > 0.6 && rng() < ridge.crestiness
         ? -0.3 + rng() * 0.5
         : -0.1 + 1.7 * rng() ** 2;
+      // Radial feather: brightness eases to 0 at both annulus rims so the
+      // shell never reads as a hard-edged ball at far framing.
+      const inner = Math.min(1, (r - spec.rMinPc) / (spec.rMinPc * 0.35));
+      const outer = Math.min(1, (spec.rMaxPc - r) / (spec.rMaxPc * 0.18));
+      edge[placed] = Math.max(0.05, Math.min(inner, outer));
       placed++;
     }
     // Yield the main thread between chunks.
@@ -164,6 +181,7 @@ async function buildShell(spec: ShellSpec, shellIndex: number): Promise<BufferGe
   geo.setAttribute('position', new BufferAttribute(pos.subarray(0, placed * 3), 3));
   geo.setAttribute('aMag', new BufferAttribute(mag.subarray(0, placed), 1));
   geo.setAttribute('aBV', new BufferAttribute(bv.subarray(0, placed), 1));
+  geo.setAttribute('aEdge', new BufferAttribute(edge.subarray(0, placed), 1));
   geo.computeBoundingSphere();
   return geo;
 }
@@ -181,6 +199,8 @@ export function createStarShells(): StarShellsHandle {
         uniforms: {
           uOpacity: { value: 0 }, // presence-driven; fades in at its band
           uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
+          // Full-size inside the shell's own scale; points shrink beyond it.
+          uFullDist: { value: SHELLS[s].rMaxPc * WU_PER_PC * 0.6 },
         },
         transparent: true, depthWrite: false, blending: AdditiveBlending,
       });
