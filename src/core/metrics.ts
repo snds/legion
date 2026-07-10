@@ -24,7 +24,15 @@ export const AU_TO_WU_TRUE = WU_PER_PC / AU_PER_PC; // 0.004848 WU/AU (true)
 // System tier (AU_TO_WU) and galaxy-local native frame (KPC_TO_WU) are still
 // legacy; the regional ×220 frame was RETIRED in Phase 2c-1 Inc 6 (the
 // neighbourhood now rides the unified 1000 WU/pc metric, see regionalScenePos).
-export const AU_TO_WU = 10;             // system tier: 1 AU = 10 WU (legacy)
+export const AU_TO_WU = 10;             // system tier: 1 AU = 10 WU (legacy AUTHORING scale)
+// Scale-unification U2: the system tier is authored at AU_TO_WU=10 (planets at
+// sma·10, heliopause at 1200 WU, etc.) but the whole local group is RENDERED
+// scaled by this factor so it occupies its TRUE size in the unified frame
+// (1 AU = AU_TO_WU_TRUE ≈ 0.004848 WU). Scaling positions, meshes AND camera
+// distance by the same factor keeps the zoomed-in view byte-identical while
+// placing the system at true scale among the catalogue stars — the seam dies.
+// NOTE AU_TO_WU_TRUE·AU_PER_PC = WU_PER_PC exactly, so AU readouts survive.
+export const SYSTEM_TIER_SCALE = AU_TO_WU_TRUE / AU_TO_WU; // ≈ 4.848e-4
 export const KPC_TO_WU = 333;           // galaxy-local native frame: 1 kpc = 333 WU
 export const GAL_LY_TO_WU = KPC_TO_WU / 1000; // galaxy-local ly offset = 0.333 WU/ly
 // Unified-frame kpc for UI distance readouts (the galaxy group renders ×
