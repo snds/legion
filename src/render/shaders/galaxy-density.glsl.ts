@@ -80,12 +80,11 @@ const vec3 GD_COL_OLD = ${v3(COL_OLD)};
 const vec3 GD_COL_BULGE = ${v3(COL_BULGE)};
 const vec3 GD_COL_HII = ${v3(COL_HII)};
 
-// ── GALAXY LAB live-tuning uniforms (TEMPORARY) ──
-// Promoted from the constants above so the dev panel can nudge the look at
-// the galaxy tier. The host material MUST provide them (galaxy.ts spreads
-// galaxyLabVolumeUniforms() into the disc-volume material); their DEFAULT
-// values equal the corresponding constants, so an untouched panel renders
-// the exact committed model. Only the volume + its bake clone use this chunk.
+// ── Disc-volume model-parameter uniforms ──
+// The host material MUST provide them (galaxy.ts + sector-cloud.ts spread
+// discModelUniforms() — galaxy-density.ts — into the material); their values
+// equal the corresponding constants above, so the volume renders the exact
+// committed model. Only the volume + its bake clone use this chunk.
 uniform float uArmContrast;   // default GD_A_STARS
 uniform float uArmSharp;      // default GD_ARM_SHARP
 uniform float uArmFloor;      // default GD_ARM_FBM_FLOOR

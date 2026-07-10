@@ -59,6 +59,23 @@ export const ARM_SHARP = 2.3;      // ridge definition (higher = tighter arms)
 export const ARM_FBM_SCALE = 620;  // arm clump scale (~1.9 kpc wisps)
 export const ARM_FBM_FLOOR = 0.32; // min arm brightness under the FBM (0..1)
 
+/** Shared disc-volume model-parameter uniforms (arm/disc shape) at their calibrated defaults. Both the galaxy
+ *  disc-volume material and the sector-cloud volume feed these into the shared sampleGalaxy GLSL — omitted, the
+ *  GLSL defaults them to 0 and uDiscWidth=0 collapses the disc emission. (Formerly the Galaxy-Lab factory, now
+ *  the committed constants since the live lab is retired.) */
+export function discModelUniforms(): Record<string, { value: number }> {
+  return {
+    uArmContrast: { value: A_STARS },
+    uArmSharp: { value: ARM_SHARP },
+    uArmFloor: { value: ARM_FBM_FLOOR },
+    uArmScale: { value: ARM_FBM_SCALE },
+    uDiscWidth: { value: 1.0 },
+    uBulgeAmp: { value: 1.0 },
+    uDustStrength: { value: 1.0 },
+    uHiiAmp: { value: 1.0 },
+  };
+}
+
 // ── Dust extinction ──────────────────────────────────────────────
 export const HR_DUST = 866;        // 2.6 kpc compromise (D&S 2.26 / LAMOST 3.19)
 export const HZ_DUST = 30;         // thin rift layer (~90 pc) — 3× thinner than stars

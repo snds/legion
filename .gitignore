@@ -12,3 +12,6 @@ scripts/.cache/
 
 # Raw high-res source art (derive small density maps into public/ instead)
 /Assets/
+
+# dev-only optical-comparison reference overlay (NASA/JPL R.Hurt render)
+public/reference/

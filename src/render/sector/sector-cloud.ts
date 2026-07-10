@@ -14,7 +14,7 @@ import {
 } from 'three';
 import { KPC_TO_WU, WU_PER_PC } from '../../core/metrics';
 import { galPos } from '../../data/curated-systems';
-import { galaxyLabVolumeUniforms } from '../galaxy-lab';
+import { discModelUniforms } from '../galaxy-density';
 import { classifyStarSpect, STELLAR_CLASS_COLOR } from '../planet-colors';
 import { sectorCloudVertexShader, sectorCloudFragmentShader } from '../shaders/sector-cloud-volume';
 import type { Sector } from './sector';
@@ -167,7 +167,7 @@ export function buildSectorCloud(sector: Sector): SectorCloud {
       // uArmContrast, uBulgeAmp, uHiiAmp, uDustStrength, …). They MUST be supplied at
       // their calibrated defaults — omitted, GLSL defaults them to 0 and uDiscWidth=0
       // collapses the disc emission to nothing (exp(-|y|/0)).
-      ...galaxyLabVolumeUniforms(),
+      ...discModelUniforms(),
     },
   });
   const mesh = new Mesh(new BoxGeometry(edgeWU, edgeWU, edgeWU), material);

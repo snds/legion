@@ -32,15 +32,12 @@ import { galacticDiscVolumeVertexShader, galacticDiscVolumeFragmentShader } from
 import {
   armPattern as mArmPattern, taper as mTaper, flare as mFlare, warpY as mWarpY,
   A_STARS as M_A_STARS, HR_THIN as M_HR_THIN, HZ_THIN as M_HZ_THIN,
+  discModelUniforms,
   BAR_ANGLE as M_BAR_ANGLE,
   DISC_RADIUS_WU as M_DISC_RADIUS,
 } from './galaxy-density';
 import { KPC_TO_WU, GALAXY_MODEL_SCALE } from '../core/metrics';
 import { Broker } from './scale-manager';
-import {
-  GALAXY_TUNE, galaxyLabVolumeUniforms, registerVolumeMat,
-  clearGalaxyLabTargets, applyGalaxyTune,
-} from './galaxy-lab';
 
 // ── Stellar Population Sampling ──────────────────────────────────
 //
@@ -408,9 +405,9 @@ export function updateGalaxyLOD(camDist: number): void {
   if (GALAXY_LOD.starFieldMat) {
     const u = GALAXY_LOD.starFieldMat.uniforms;
     // Stars get bigger when camera is close: 1.5× immersed in the spur,
-    // back down to 0.8× at the full-galaxy frame. ×GALAXY_TUNE.particleSize (lab).
+    // back down to 0.8× at the full-galaxy frame.
     const sizeT = smoothRamp(camDist, 2e6, 2e7);
-    u.uSizeScale.value = (1.5 - sizeT * 0.7) * discPresence * GALAXY_TUNE.particleSize;
+    u.uSizeScale.value = (1.5 - sizeT * 0.7) * discPresence;
   }
 
   // (Orion-spur detail particles removed — read as a bug-like dense star patch
@@ -420,7 +417,7 @@ export function updateGalaxyLOD(camDist: number): void {
   // follow-up — the volumetric sprites were intrusive). Modest opacity, fading
   // with the galaxy presence so they vanish at the neighbourhood tier.
   for (const m of GALAXY_LOD.nebulaMats) {
-    m.opacity = Math.min(0.7, 0.25 * discPresence * GALAXY_TUNE.nebulaOpacity);
+    m.opacity = Math.min(0.7, 0.25 * discPresence);
   }
 }
 
@@ -494,7 +491,6 @@ export function createGalaxy(): Group {
   GALAXY_LOD.nebulaMats.length = 0;
   GALAXY_LOD.volumeMat = null;
   GALAXY_LOD.volumeMesh = null;
-  clearGalaxyLabTargets(); // re-registered below (TEMPORARY)
 
   const galaxy = new Group();
   galaxy.name = 'galaxy';
@@ -717,14 +713,14 @@ export function createGalaxy(): Group {
       uBoxMin: { value: boxMin },
       uBoxMax: { value: boxMax },
       uGalaxyOrigin: { value: galaxyWorldCenter.clone() },
-      uEmissionScale: { value: GALAXY_TUNE.emission },
+      uEmissionScale: { value: 0.002 },
       uOpacity: { value: 1.0 }, // pinned — Phase-4 crossfade is the only ramp
       uJitter: { value: 1.0 },  // live: break step banding. Bake sets 0 (smooth).
       uSteps: { value: 24 }, // active raymarch steps (≤ STEPS=24 loop bound); motion-adaptive
       uModelScale: { value: GALAXY_MODEL_SCALE }, // Phase 2c-1: group renders ×S larger;
                                    // the shader divides world rays back into the native-333 model.
-      // Galaxy Lab live-tuning uniforms (TEMPORARY) — defaults = model constants.
-      ...galaxyLabVolumeUniforms(),
+      // Disc-volume model-parameter uniforms at their calibrated defaults (the retired lab's shared factory).
+      ...discModelUniforms(),
     },
   });
 
@@ -737,7 +733,6 @@ export function createGalaxy(): Group {
   galaxy.add(discVolume);
   GALAXY_LOD.volumeMat = discVolumeMat;
   GALAXY_LOD.volumeMesh = discVolume;
-  registerVolumeMat(discVolumeMat); // Galaxy Lab live tuning (TEMPORARY)
   // NOT pushed to GALAXY_LOD.discMats: the volume no longer participates in
   // the discPresence opacity ramp — the medium has ONE set of constants
   // (docs/galaxy-visual-redesign.md §4.5); the Phase-4 crossfade will be the
@@ -1219,11 +1214,6 @@ export function createGalaxy(): Group {
     ));
   }
   galaxy.add(reticule);
-
-  // Sync persisted Galaxy Lab values onto the freshly built targets
-  // (volume uniforms get them via galaxyLabVolumeUniforms(); this also
-  // applies persisted nebula sizes + emission). TEMPORARY.
-  applyGalaxyTune();
 
   return galaxy;
 }
