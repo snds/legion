@@ -1,0 +1,46 @@
+Solar-system texture provenance — verified forensically 2026-07-10.
+Method: embedded metadata (PDS captions, XMP), MD5, and grayscale pixel
+correlation at 512x256 against candidate source downloads. Registry entry:
+src/data/data-sources.ts (rendered in Settings → CREDITS · DATA SOURCES).
+
+── Solar System Scope (INOVE), https://www.solarsystemscope.com/textures/
+   License: CC BY 4.0 — free use with attribution, commercial OK.
+   Credit: "Textures by Solar System Scope (solarsystemscope.com), CC BY 4.0."
+     mercury.jpg           corr 0.9995+ vs 2k_mercury.jpg (re-encode only)
+     venus.jpg             corr 0.9993 vs 2k_venus_atmosphere.jpg (re-grade)
+     earth.jpg             corr 0.9990 vs 2k_earth_daymap.jpg (re-grade/4k upscale)
+     mars.jpg              corr 0.9982 vs 2k_mars.jpg (re-grade/4k upscale)
+     jupiter.jpg           corr 0.9995+ vs 2k_jupiter.jpg (re-encode only)
+     saturn.jpg            corr 0.9978 vs 2k_saturn.jpg
+     uranus.jpg            corr 0.9994 vs 2k_uranus.jpg
+     neptune.jpg           corr 0.9971 vs 2k_neptune.jpg
+     moon.jpg              RMS 0.00 vs 2k_moon.jpg (identical content)
+     saturn_ring_alpha.png BYTE-IDENTICAL (MD5 deeecd9f9f03ecbff7e0ba4f0b91201a)
+
+── USGS Astrogeology Science Center (NASA/JPL mission data),
+   https://astrogeology.usgs.gov — US Government work, PUBLIC DOMAIN.
+   Credit: "USGS Astrogeology Science Center / NASA / JPL."
+     io.jpg        Io Voyager–Galileo SSI global mosaic (embedded PDS caption
+                   "Spacecraft: GALILEO_1  Target: IO"), 1024-px browse family
+     europa.jpg    Europa Voyager–Galileo SSI Global Mosaic 500m — corr 1.000
+                   vs the USGS 1024-px browse product (exact)
+     ganymede.jpg  Ganymede Voyager–Galileo SSI global mosaic, older edition
+                   (corr 0.965 vs current browse product)
+     callisto.jpg  Callisto Voyager–Galileo SSI global mosaic — corr 1.000
+                   vs the USGS 1024-px browse product (exact)
+
+── UNVERIFIED — replace before any public release:
+     titan.jpg     Real Cassini-derived surface map (Xanadu, northern seas,
+                   equatorial dune fields visible), sepia artistic grade,
+                   Photoshop 24.4 (2023) XMP. NOT the USGS Cassini ISS mosaic
+                   (corr 0.03). Likely candidates (Albers; DeviantArt map
+                   makers) publish NON-COMMERCIAL terms.
+     phobos.jpg    Airbrush/relief-style cylindrical maps, 1440x720, "converted
+     deimos.jpg    PNM file" comments, Photoshop CS3 (Mac) era. NOT Stooke's
+                   PDS photomosaics (corr ≤ 0.41 all orientations). Author
+                   unidentified.
+   Public-domain drop-in replacements: USGS Cassini ISS Global Mosaic 4005m
+   (Titan); USGS Viking / Mars Express SRC global mosaics (Phobos/Deimos);
+   or procedural generation (as used for the ε Eridani planets).
+
+Ruled out for all files: JHT Planet Pixel Emporium (corr 24–84 = unrelated).
