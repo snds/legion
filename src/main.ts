@@ -115,6 +115,13 @@ const _hmr: HmrState = ((globalThis as Record<string, unknown>).__legion_hmr as 
 };
 (globalThis as Record<string, unknown>).__legion_hmr = _hmr;
 
+// Phase 5a: camDist (WU) at/above which the sector-particle streaming runs. The
+// sector stars sit ≥25pc (≥25 000 WU) out, so they only enter the frustum once
+// far = camDist·100 reaches them (camDist ≳ 250); streaming a bit earlier
+// pre-generates the residency so it is ready when they appear. Below this the
+// streaming is skipped and the sector group hidden — the system tier pays nothing.
+const SECTOR_STREAM_MIN_CAMDIST = 30;
+
 // ── Bootstrap ────────────────────────────────────────────────────
 
 async function boot(): Promise<void> {
@@ -563,15 +570,22 @@ async function boot(): Promise<void> {
     worldExtras.starShells.group.position.copy(_regionalRoot);
     updateSectorPrototype(Game.data.camDist); // sector-cloud prototype: re-root + gate cloud (no-op if off)
     if (worldExtras.sectorMgr) {
-      // Stream sectors around the camera's FOCUS cell (camFocusTarget is absolute scene-WU).
-      const f = Game.data.camFocusTarget;
-      _focusWU.set(f?.x ?? 0, f?.y ?? 0, f?.z ?? 0);
-      const focusGalPc = absWUToGalPc(_focusWU, _focusGalPc);
-      if (worldExtras.regionMgr) {
-        // Region/LOD layer drives the sector manager (gated to resident regions). Inc 2: no-op trim.
-        updateRegionManager(worldExtras.regionMgr, worldExtras.sectorMgr, focusGalPc, Game.data.camDist);
-      } else {
-        updateSectorManager(worldExtras.sectorMgr, focusGalPc, Game.data.camDist);
+      // Phase 5a: stream only at the neighbourhood tier and out — the sector
+      // stars sit ≥25pc away (far = camDist·100 must reach them), so below this
+      // the work is skipped and the group hidden, keeping the system tier free.
+      const streamOn = Game.data.camDist > SECTOR_STREAM_MIN_CAMDIST;
+      worldExtras.sectorMgr.group.visible = streamOn;
+      if (streamOn) {
+        // Stream sectors around the camera's FOCUS cell (camFocusTarget is absolute scene-WU).
+        const f = Game.data.camFocusTarget;
+        _focusWU.set(f?.x ?? 0, f?.y ?? 0, f?.z ?? 0);
+        const focusGalPc = absWUToGalPc(_focusWU, _focusGalPc);
+        if (worldExtras.regionMgr) {
+          // Region/LOD layer drives the sector manager (gated to resident regions). Inc 2: no-op trim.
+          updateRegionManager(worldExtras.regionMgr, worldExtras.sectorMgr, focusGalPc, Game.data.camDist);
+        } else {
+          updateSectorManager(worldExtras.sectorMgr, focusGalPc, Game.data.camDist);
+        }
       }
     }
     if (worldExtras.sectorFill) updateSectorFill(worldExtras.sectorFill); // capped corridor fill
@@ -882,11 +896,14 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol', renderer: impo
   const params = new URLSearchParams(location.search);
   const fillOn = params.has('proto-fill');
   const regionsOn = params.has('proto-regions') || fillOn; // fill rides the region+sector managers
-  const sectorMgr = regionsOn || params.has('proto-stream') ? createSectorManager(sceneRoot) : null;
-  if (sectorMgr) {
+  // Phase 5a: the streamed sector particles are now the DEFAULT neighbourhood
+  // fill (they carry the dive from the ≤25pc catalogue out toward the galaxy
+  // volume, replacing the legacy star-shells). Always created; the game loop
+  // gates streaming to the neighbourhood tier so the system tier stays cheap.
+  const sectorMgr = createSectorManager(sceneRoot);
+  {
     (globalThis as Record<string, unknown>).__sectorMgr = sectorMgr;
     (globalThis as Record<string, unknown>).__armDebug = (on = true) => setArmDebug(Boolean(on));
-    console.info('[sector-stream] streaming on — __sectorMgr.residents; __armDebug(true) recolours stars by arm phase');
   }
   const regionMgr = regionsOn ? createRegionManager() : null;
   if (regionMgr) {
