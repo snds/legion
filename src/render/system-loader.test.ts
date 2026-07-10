@@ -74,8 +74,8 @@ describe('instantiateLocalSystem — lifecycle', () => {
     expect(ctx.renderObjectMap.size).toBe(11);
     // Everything the handle reports is a live child of layers.local
     expect(ctx.layers.local.children.length).toBe(h.groups.length);
-    // star + 7 planets + 7 orbits + 1 station + 3 bobs + comet body+line + belt + heliopause
-    expect(h.groups).toHaveLength(23);
+    // star + 7 planets + 7 orbits + 1 station + 3 bobs + comet body+line + 2 belts (main + outer debris) + heliopause
+    expect(h.groups).toHaveLength(24);
     h.dispose();
   });
 
