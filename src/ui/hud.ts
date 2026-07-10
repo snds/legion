@@ -10,11 +10,11 @@
 // - Bob count and fleet/system status per domain
 // ═══════════════════════════════════════════════════════════════════
 
-import { Game, type DomainName } from '../core/state';
+import { Game, type DomainName, physicalDistancePc } from '../core/state';
 // Phase 2c-1 Inc 6: the neighbourhood + galaxy now ride the unified metric, so
 // the ly/kpc readouts divide by the unified scales (1 ly = LY_TO_WU ≈ 306.6 WU;
 // 1 kpc = 1e6 WU) — was the legacy 220 / 333 which read "108108 kpc" at galaxy.
-import { AU_TO_WU as WU_PER_AU, LY_TO_WU as WU_PER_LY, KPC_TO_WU_UNIFIED as WU_PER_KPC } from '../core/metrics';
+import { AU_PER_PC, LY_PER_PC } from '../core/metrics';
 import { formatGameClock } from '../core/time';
 
 // ── DOM References ───────────────────────────────────────────────
@@ -64,25 +64,21 @@ function fmtNum(n: number): string {
   return n % 1 < 0.05 ? Math.round(n).toString() : n.toFixed(1);
 }
 
-// View-radius readout — the real distance the camera sits from the system
-// centre, so the player understands the scale they are viewing (Solar-System-
-// Scope "DISTANCE …" cue). The conversion is per-regime, switching unit at the
-// heliopause (the real edge of the solar system: AU inside, light-years beyond).
-// Post Phase 2c-1 the neighbourhood + galaxy ride the unified metric; only the
-// system tier is still the legacy compressed AU scale:
-//   • system tiers   1 AU  = 10 WU      (legacy; planets at sma·10)
-//   • stellar tiers  1 ly  ≈ 306.6 WU   (unified LY_TO_WU; neighbourhood)
-//   • galactic       1 kpc = 1e6 WU     (unified KPC_TO_WU_UNIFIED)
-// WU_PER_AU / WU_PER_LY / WU_PER_KPC are imported from metrics.ts (single source).
+// View-distance readout — ONE continuous physical distance (parsecs), from
+// state.physicalDistancePc(zoomLevel), formatted in whichever unit reads best
+// at that scale (AU → ly → kpc). Scale-unification U1: replaces the old
+// per-domain WU÷scale switch, whose AU branch used the compressed system
+// metric while ly/kpc used the unified one — the source of the 279 AU → 9.5 ly
+// jump at the heliopause. The number now sweeps continuously across the void.
 function fmtScale(v: number): string {
   if (v >= 100) return Math.round(v).toString();
   if (v >= 10) return v.toFixed(0);
   return v.toFixed(1);
 }
-function viewScale(domain: DomainName, camDist: number): string {
-  if (domain === 'galaxy') return `${fmtScale(camDist / WU_PER_KPC)} kpc`;
-  if (domain === 'sector' || domain === 'arm') return `${fmtScale(camDist / WU_PER_LY)} ly`;
-  return `${fmtScale(camDist / WU_PER_AU)} AU`; // surface … heliopause
+function viewScale(pc: number): string {
+  if (pc < 0.03) return `${fmtScale(pc * AU_PER_PC)} AU`; // inside a system … out to ~0.1 ly
+  if (pc < 1000) return `${fmtScale(pc * LY_PER_PC)} ly`; // neighbourhood … ~3,260 ly
+  return `${fmtScale(pc / 1000)} kpc`;                     // galactic
 }
 
 /**
@@ -195,5 +191,5 @@ export function updateHUD(): void {
   if (elFleetCount) elFleetCount.textContent = status.fleetLabel;
 
   // View-radius readout — every frame (camDist changes continuously).
-  if (elViewScale) elViewScale.textContent = `◎ ${viewScale(domain, data.camDist)}`;
+  if (elViewScale) elViewScale.textContent = `◎ ${viewScale(physicalDistancePc(data.zoomLevel))}`;
 }
