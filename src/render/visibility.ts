@@ -84,8 +84,10 @@ interface VisibilityTargets {
   oortCloud: Group | null;
   galaxyArms: Group | null;
   sectorOrb: Group | null;
-  /** Catalog star layer (catalog-systems.ts) — per-frame presence via setOpacity. */
-  catalogSystems: { setOpacity(v: number): void } | null;
+  /** Catalog star layer (catalog-systems.ts) — per-frame presence of both
+   *  frames: the regional chart (setOpacity) and the galactic-frame highlight
+   *  particles embedded in the disc (setGalacticOpacity). */
+  catalogSystems: { setOpacity(v: number): void; setGalacticOpacity(v: number): void } | null;
 }
 
 let targets: VisibilityTargets | null = null;
@@ -244,7 +246,7 @@ export function initVisibility(
   oortCloud: Group | null,
   galaxyArms: Group | null,
   sectorOrb: Group | null = null,
-  catalogSystems: { setOpacity(v: number): void } | null = null,
+  catalogSystems: { setOpacity(v: number): void; setGalacticOpacity(v: number): void } | null = null,
 ): void {
   targets = { layers, eclipticGrid, oortCloud, galaxyArms, sectorOrb, catalogSystems };
   lastDomain = null;
@@ -294,13 +296,17 @@ export function updateVisibility(camera?: Camera): void {
   const swap = heliopauseSwap(camDist);
   setLocalIconTierFade(1 - swap);
 
-  // Catalog star layer (the 3,066 real HYG systems): present at EVERY tier —
-  // a subtle 0.15 floor at system scales (so the chart never hard-vanishes),
-  // ramping to full with the heliopause swap, then dissolving into the
-  // generative galaxy across 2e6→1.2e7 WU (gone at full galaxy framing).
-  // 0.9 is the layer's base uOpacity.
+  // Catalog star layer (the 3,066 real HYG systems): present at EVERY tier,
+  // as TWO representations of the same data crossfading through the zoom.
+  // REGIONAL chart: a subtle 0.15 floor at system scales (never hard-vanishes),
+  // full with the heliopause swap, dissolving across 2e6→1.2e7 WU. GALACTIC
+  // highlight particles (embedded in the generative disc's frame): fade in
+  // across the same band the chart dissolves through, and stay lit at arm +
+  // galaxy framing — the space-agency stars persist at every zoom level.
+  // 0.9 is the layers' base uOpacity.
   const galaxyDissolve = 1 - smooth01(camDist, 2e6, 1.2e7);
   targets?.catalogSystems?.setOpacity(0.9 * Math.max(0.15, swap) * galaxyDissolve);
+  targets?.catalogSystems?.setGalacticOpacity(0.9 * smooth01(camDist, 2e6, 8e6));
 
   // Per-object icon/mesh state — runs every frame for smooth transitions
   updateIconStates(domain);
