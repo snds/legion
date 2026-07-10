@@ -69,6 +69,9 @@ export interface CatalogSystemsHandle {
    *  internally to DRIFT_MIN_STEP_MYR, so calling every frame is free at
    *  normal time compression. */
   updateDrift(tMyr: number): void;
+  /** Per-frame presence (visibility.ts zoom-seam crossfade): drives the points
+   *  material's uOpacity. No-op until the async catalogue load lands. */
+  setOpacity(v: number): void;
 }
 
 /** True if a catalogue star duplicates a curated system (matched the same way
@@ -102,6 +105,14 @@ export function createCatalogSystems(): CatalogSystemsHandle {
       }
       attr.needsUpdate = true;
       handle.points.geometry.computeBoundingSphere();
+    },
+    setOpacity(v: number): void {
+      if (!handle.points) return;
+      const mat = handle.points.material as ShaderMaterial;
+      mat.uniforms.uOpacity.value = v;
+      // Fully dissolved (full-galaxy framing) ⇒ skip the draw AND the
+      // raycast pick — invisible points must not steal clicks.
+      handle.points.visible = v > 0.005;
     },
   };
 
@@ -137,7 +148,9 @@ export function createCatalogSystems(): CatalogSystemsHandle {
     const mat = new ShaderMaterial({
       vertexShader, fragmentShader,
       uniforms: {
-        uOpacity: { value: 0.9 },
+        // Born at 0 — the per-frame visibility crossfade (setOpacity) fades the
+        // layer in when the async load lands, instead of a full-strength pop.
+        uOpacity: { value: 0 },
         uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
       },
       transparent: true, depthWrite: false, blending: AdditiveBlending,

@@ -334,6 +334,7 @@ async function boot(): Promise<void> {
     worldExtras.oortCloud,
     worldExtras.galaxyArms,
     worldExtras.sectorOrb,
+    worldExtras.catalogSystems,
   );
 
   // ── 8c-bis. Bake the Milky Way backdrop (one-shot, 256-step volume) ──
@@ -532,6 +533,9 @@ async function boot(): Promise<void> {
     Broker.getTierRoot('regional', _regionalRoot);
     layers.regional.position.copy(_regionalRoot);
     worldExtras.sectorOrb.position.copy(_regionalRoot);
+    // Catalog star layer sits on sceneRoot (cross-tier crossfade) but its
+    // positions are regional-frame — ride the same tier root.
+    worldExtras.catalogSystems.group.position.copy(_regionalRoot);
     updateSectorPrototype(Game.data.camDist); // sector-cloud prototype: re-root + gate cloud (no-op if off)
     if (worldExtras.sectorMgr) {
       // Stream sectors around the camera's FOCUS cell (camFocusTarget is absolute scene-WU).
@@ -551,10 +555,14 @@ async function boot(): Promise<void> {
       // Show the physical disc only near galaxy scale (crossfade > 0), so it never draws over the system/surface
       // tiers; when shown, ride the galactic-tier floating origin and advance the star/gas/dust motion, then
       // render the gas alone through the blur (offscreen) and hand it to the post chain to composite this frame.
-      const showDisc = getGalaxyCrossfade(Game.data.camDist) > 0;
+      const discXf = getGalaxyCrossfade(Game.data.camDist);
+      const showDisc = discXf > 0;
       worldExtras.physGalaxy.root.visible = showDisc;
       postCtx.setGalaxyOverlays(showDisc); // prominent-stars + dust-last passes (rendered over the gas)
       if (showDisc) {
+        // Fade the disc in along the same crossfade the sky hand-off uses, so
+        // it materialises across the pull-back instead of popping in formed.
+        worldExtras.physGalaxy.setPresence(discXf);
         worldExtras.physGalaxy.root.position.copy(getGalaxyOffset());
         // Pass the sim's galactic-drift clock so the disc's differential rotation
         // and the drifting system markers stay on ONE clock (LAB warp adds a
@@ -793,10 +801,13 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol', renderer: impo
 
   // ── Catalog systems — the full real 25-pc neighbourhood ──
   // Every HYG star (~3k) at its TRUE 3D position in the regional frame,
-  // filling the space between the curated markers. Loads async; the group
-  // rides the regional layer's tier visibility.
+  // filling the space between the curated markers. Loads async. Mounted on
+  // sceneRoot (NOT layers.regional) so it escapes the regional tier's hard
+  // visibility gate: visibility.ts drives its uOpacity continuously across
+  // every zoom level instead. It still rides the regional tier root — the
+  // game loop copies _regionalRoot onto the group each frame (floating origin).
   const catalogSystems = createCatalogSystems();
-  layers.regional.add(catalogSystems.group);
+  sceneRoot.add(catalogSystems.group);
   (globalThis as Record<string, unknown>).__catalogSystems = catalogSystems;
 
   // ── Background ──

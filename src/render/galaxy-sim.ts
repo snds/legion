@@ -43,6 +43,11 @@ export interface PhysicalGalaxySystem {
    *  the blurred texture + composite gain for the host's post-processing to add over the scene. Null when the
    *  gas is hidden or blur is off (then the gas renders inline/sharp on layer 0). No-op on the main framebuffer. */
   renderGasBlur(renderer: WebGLRenderer, scene: Scene, camera: Camera): { texture: Texture; gain: number } | null;
+  /** Zoom-seam crossfade presence (0..1) — a SEPARATE multiplier on top of the LAB panel's galaxyOpacity
+   *  knob (never clobbers it). main.ts drives it from getGalaxyCrossfade(camDist) each frame so the disc
+   *  fades in across the sector→galaxy pull-back instead of popping in fully formed. Cheap: uniforms are
+   *  only touched when the value actually moves (>0.001). */
+  setPresence(v: number): void;
   /** The declarative tuning schema + persistence actions — rendered/driven by the in-game LAB panel. */
   readonly controls: GalaxyControls;
   dispose(): void;
@@ -212,6 +217,9 @@ export function createPhysicalGalaxy(opts: { renderer?: WebGLRenderer } = {}): P
   //    be dimmed to compare THROUGH it against the reference. Dev tool; the JPG is a gitignored public/ asset.
   const KPC_TO_WU = 1000 * WU_PER_PC;
   let refEnabled = false, refOpacity = 0.6, refScale = 1, refRotDeg = 0, refYOffset = 0, galaxyOpacity = 1;
+  // Zoom-seam crossfade presence (setPresence) — multiplies through everything
+  // applyGalaxyOpacity writes, independent of the LAB galaxyOpacity knob.
+  let presence = 1;
   const refTex = new TextureLoader().load('reference/mw-faceon.jpg');
   refTex.colorSpace = SRGBColorSpace;
   const refMat = new MeshBasicMaterial({ map: refTex, transparent: true, opacity: refOpacity, depthWrite: false, depthTest: false, side: DoubleSide, toneMapped: false });
@@ -233,10 +241,18 @@ export function createPhysicalGalaxy(opts: { renderer?: WebGLRenderer } = {}): P
   };
   const applyGalaxyOpacity = (): void => {
     if (!current) return;
-    current.material.uniforms.uDensityDim!.value = galaxyOpacity;                 // stars (additive intensity)
-    current.prominentMat.uniforms.uDensityDim!.value = galaxyOpacity;            // prominent stars
-    current.gasMat.uniforms.uBright!.value = 0.019 * galaxyOpacity;               // gas puffs
-    current.dustMat.uniforms.uOpacityScale!.value = dustOpacity * galaxyOpacity;  // dust lanes
+    const dim = galaxyOpacity * presence; // LAB knob × zoom-seam crossfade
+    current.material.uniforms.uDensityDim!.value = dim;                 // stars (additive intensity)
+    current.prominentMat.uniforms.uDensityDim!.value = dim;            // prominent stars
+    current.gasMat.uniforms.uBright!.value = 0.019 * dim;               // gas puffs
+    current.dustMat.uniforms.uOpacityScale!.value = dustOpacity * dim;  // dust lanes
+  };
+  /** Zoom-seam crossfade (interface doc above). Uniform writes only on real movement; safe while
+   *  `current` is null (applyGalaxyOpacity guards, and rebuild() re-applies onto fresh materials). */
+  const setPresence = (v: number): void => {
+    if (Math.abs(v - presence) <= 0.001) return;
+    presence = v;
+    applyGalaxyOpacity();
   };
   applyRef();
 
@@ -314,7 +330,9 @@ export function createPhysicalGalaxy(opts: { renderer?: WebGLRenderer } = {}): P
     renderer.setRenderTarget(prevTarget);
     renderer.setClearColor(savedClear, prevAlpha);
     renderer.autoClear = prevAutoClear;
-    return { texture: gasRT!.texture, gain: gasGain };
+    // The blur composite bypasses the gas material's uniforms, so the zoom-seam
+    // presence multiplies the composite gain here instead.
+    return { texture: gasRT!.texture, gain: gasGain * presence };
   };
 
 
@@ -420,7 +438,9 @@ export function createPhysicalGalaxy(opts: { renderer?: WebGLRenderer } = {}): P
         { kind: 'toggle', label: 'dust on', get: () => dustEnabled, set: (v: boolean) => { dustEnabled = v; },
           live: () => { if (current) current.dust.visible = dustEnabled; } },
         { label: 'dust', min: 0, max: 2.5, step: 0.1, get: () => dustOpacity, set: (v: number) => { dustOpacity = v; },
-          live: () => { if (current) current.dustMat.uniforms.uOpacityScale.value = dustOpacity; } },
+          // Route through applyGalaxyOpacity so the live slider keeps the
+          // galaxyOpacity × presence multipliers instead of clobbering them.
+          live: applyGalaxyOpacity },
         dnum('dustLeadDeg', 'dust lead', -40, 40, 2, '°'),
         dnum('dustThickness', 'dust thickness', 0.02, 1, 0.02),
         dnum('dustSegment', 'dust segments', 0, 1, 0.05),
@@ -530,6 +550,6 @@ export function createPhysicalGalaxy(opts: { renderer?: WebGLRenderer } = {}): P
     root.remove(refMesh); refMesh.geometry.dispose(); refMat.dispose(); refTex.dispose(); // reference-overlay dev tool
   };
 
-  return { root, cfg, get data() { return data; }, update, renderGasBlur, controls, dispose };
+  return { root, cfg, get data() { return data; }, update, renderGasBlur, setPresence, controls, dispose };
 }
 

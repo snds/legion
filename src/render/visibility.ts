@@ -14,7 +14,10 @@ import { Events } from '../core/events';
 import { Notifications } from '../ui/notifications';
 import type { LayerGroups } from './scene';
 import { Vector3 } from 'three';
-import type { Group, Points, PointsMaterial, Sprite, SpriteMaterial, Camera, Object3D } from 'three';
+import type {
+  Group, Points, PointsMaterial, Sprite, SpriteMaterial, Camera, Object3D,
+  Material, Mesh, MeshBasicMaterial,
+} from 'three';
 import { HELIOPAUSE_RADIUS_WU } from './particles';
 import {
   updateBodyLOD, iconBiasFor, scaleFixed, setLocalIconTierFade,
@@ -28,10 +31,47 @@ const SWAP_IN = 1800;
 const SWAP_OUT = 3200;
 const REGIONAL_ICON_PX = 24; // screen-constant marker size (docs §4.6)
 function heliopauseSwap(camDist: number): number {
-  if (camDist <= SWAP_IN) return 0;
-  if (camDist >= SWAP_OUT) return 1;
-  const t = (camDist - SWAP_IN) / (SWAP_OUT - SWAP_IN);
+  return smooth01(camDist, SWAP_IN, SWAP_OUT);
+}
+
+// 0→1 smoothstep of camDist across [lo, hi] — the shared ramp primitive for
+// every zoom-seam crossfade below. Pure function of camDist: deterministic,
+// per-frame cheap, no per-domain state.
+function smooth01(x: number, lo: number, hi: number): number {
+  if (x <= lo) return 0;
+  if (x >= hi) return 1;
+  const t = (x - lo) / (hi - lo);
   return t * t * (3 - 2 * t);
+}
+
+// ── Continuous background-star fade ──────────────────────────────
+// The sky-shell starfield used to step to a new opacity at every domain flip
+// (0.85 / 0.7 / 0.5 / 0.2 / 0.08) — a visible pop at each boundary. Replaced
+// by one continuous curve: smoothstep between the SAME anchor levels, placed
+// in log10(camDist) so each hand-off spans its zoom seam evenly.
+const BG_ANCHOR_DIST = [2e3, 1e4, 1e5, 2e6, 2e7]; // WU
+const BG_ANCHOR_OP = [0.85, 0.70, 0.50, 0.20, 0.08];
+export function backgroundStarOpacity(camDist: number): number {
+  const lx = Math.log10(Math.max(camDist, 1));
+  if (lx <= Math.log10(BG_ANCHOR_DIST[0])) return BG_ANCHOR_OP[0];
+  for (let i = 0; i < BG_ANCHOR_DIST.length - 1; i++) {
+    const l0 = Math.log10(BG_ANCHOR_DIST[i]);
+    const l1 = Math.log10(BG_ANCHOR_DIST[i + 1]);
+    if (lx <= l1) {
+      const t = (lx - l0) / (l1 - l0);
+      const s = t * t * (3 - 2 * t);
+      return BG_ANCHOR_OP[i] + (BG_ANCHOR_OP[i + 1] - BG_ANCHOR_OP[i]) * s;
+    }
+  }
+  return BG_ANCHOR_OP[BG_ANCHOR_OP.length - 1];
+}
+
+// ── Sector-orb presence ──────────────────────────────────────────
+// The sensor bubble used to hard-flip with the 'sector' domain. Now a pure
+// camDist curve: fade IN 6e3→1.2e4 WU (the camera exiting the ~5,860 WU orb)
+// × fade OUT 1.5e5→5e5 WU (the neighbourhood dissolving into the arm tier).
+function orbPresence(camDist: number): number {
+  return smooth01(camDist, 6e3, 1.2e4) * (1 - smooth01(camDist, 1.5e5, 5e5));
 }
 
 // ── Extra Scene References ───────────────────────────────────────
@@ -44,6 +84,8 @@ interface VisibilityTargets {
   oortCloud: Group | null;
   galaxyArms: Group | null;
   sectorOrb: Group | null;
+  /** Catalog star layer (catalog-systems.ts) — per-frame presence via setOpacity. */
+  catalogSystems: { setOpacity(v: number): void } | null;
 }
 
 let targets: VisibilityTargets | null = null;
@@ -53,7 +95,7 @@ let lastDomain: DomainName | null = null;
 
 function applyDomain(domain: DomainName): void {
   if (!targets) return;
-  const { layers, eclipticGrid, oortCloud, galaxyArms, sectorOrb } = targets;
+  const { layers, eclipticGrid, oortCloud, galaxyArms } = targets;
 
   // Asteroid belt is a band inside the local layer. It only reads as
   // meaningful content when the system disc is the subject — surface/
@@ -65,16 +107,18 @@ function applyDomain(domain: DomainName): void {
       domain === 'orbit' || domain === 'inner-system' || domain === 'outer-system';
   }
 
-  // Defaults: everything off, then selectively enable
+  // Defaults: everything off, then selectively enable. (The sector orb is NOT
+  // domain-gated any more — updateVisibility drives it per frame from the pure
+  // orbPresence(camDist) curve, so it fades across the seams instead of popping.)
   layers.local.visible = false;
   layers.regional.visible = false;
   layers.galactic.visible = false;
   if (eclipticGrid) eclipticGrid.visible = false;
   if (oortCloud) oortCloud.visible = false;
   if (galaxyArms) galaxyArms.visible = false;
-  if (sectorOrb) sectorOrb.visible = false;
 
-  // Background always visible but opacity changes per tier
+  // Background always visible; its opacity is a continuous per-frame curve
+  // (backgroundStarOpacity), no longer stepped per domain.
   layers.background.visible = true;
 
   switch (domain) {
@@ -83,14 +127,12 @@ function applyDomain(domain: DomainName): void {
       // Planet-scale views: local layer only, no overlays/grids.
       // Background starfield stays full so the sky reads correctly.
       layers.local.visible = true;
-      setBackgroundOpacity(0.85, 0.25);
       break;
 
     case 'orbit':
       // Out past the first moon — show local objects (stations, ships,
       // moons) but no ecliptic grid yet (it's distracting at this scale).
       layers.local.visible = true;
-      setBackgroundOpacity(0.85, 0.25);
       break;
 
     case 'inner-system':
@@ -98,7 +140,6 @@ function applyDomain(domain: DomainName): void {
       // is meaningful here for orientation across multiple orbits.
       layers.local.visible = true;
       if (eclipticGrid) eclipticGrid.visible = true;
-      setBackgroundOpacity(0.85, 0.25);
       break;
 
     case 'outer-system':
@@ -106,7 +147,6 @@ function applyDomain(domain: DomainName): void {
       layers.local.visible = true;
       if (eclipticGrid) eclipticGrid.visible = true;
       if (oortCloud) oortCloud.visible = true;
-      setBackgroundOpacity(0.85, 0.20);
       break;
 
     case 'heliopause':
@@ -115,7 +155,6 @@ function applyDomain(domain: DomainName): void {
       layers.local.visible = true;
       layers.regional.visible = true;
       if (oortCloud) oortCloud.visible = true;
-      setBackgroundOpacity(0.7, 0.18);
       break;
 
     case 'sector':
@@ -127,9 +166,7 @@ function applyDomain(domain: DomainName): void {
       // popping on at the arm tier boundary.
       layers.local.visible = true;
       layers.regional.visible = true;
-      if (sectorOrb) sectorOrb.visible = true;
       if (galaxyArms) galaxyArms.visible = true;
-      setBackgroundOpacity(0.5, 0.12);
       break;
 
     case 'arm':
@@ -140,7 +177,6 @@ function applyDomain(domain: DomainName): void {
       layers.regional.visible = true;
       layers.galactic.visible = true;
       if (galaxyArms) galaxyArms.visible = true;
-      setBackgroundOpacity(0.20, 0.06);
       Game.data.targetPhi = 1.3;
       break;
 
@@ -153,17 +189,17 @@ function applyDomain(domain: DomainName): void {
       // (phi ≈ 0.35) so the paper-thin disc doesn't collapse to an edge-on line.
       layers.galactic.visible = true;
       if (galaxyArms) galaxyArms.visible = true;
-      setBackgroundOpacity(0.08, 0.02);
       Game.data.targetPhi = 0.35;
       break;
     }
   }
 }
 
-/** Fade background stars at outer zoom tiers. (The legacy 'milky-way' band
- *  was deleted in the same commit as the baked-cubemap backdrop; the second
- *  parameter is kept so per-domain call sites remain untouched until the
- *  Phase-4 crossfade reworks them.) */
+/** Fade background stars at outer zoom tiers — driven per frame from the
+ *  continuous backgroundStarOpacity curve (the traverse is 2-3 children, so
+ *  per-frame cost is negligible). (The legacy 'milky-way' band was deleted in
+ *  the same commit as the baked-cubemap backdrop; the second parameter is
+ *  kept so the signature survives until a wider cleanup.) */
 function setBackgroundOpacity(starsOp: number, _milkyOp: number): void {
   if (!targets) return;
   targets.layers.background.traverse(child => {
@@ -208,8 +244,9 @@ export function initVisibility(
   oortCloud: Group | null,
   galaxyArms: Group | null,
   sectorOrb: Group | null = null,
+  catalogSystems: { setOpacity(v: number): void } | null = null,
 ): void {
-  targets = { layers, eclipticGrid, oortCloud, galaxyArms, sectorOrb };
+  targets = { layers, eclipticGrid, oortCloud, galaxyArms, sectorOrb, catalogSystems };
   lastDomain = null;
 
   // Wire overlay toggle notification
@@ -236,6 +273,16 @@ export function updateVisibility(camera?: Camera): void {
 
   applyOverlay(overlayOn, domain);
 
+  const camDist = Game.data.camDist;
+
+  // Background starfield: one continuous curve over camDist, replacing the
+  // per-domain opacity steps — no pop at any tier boundary.
+  setBackgroundOpacity(backgroundStarOpacity(camDist), 0);
+
+  // Sector orb: pure camDist presence curve (fade in leaving the bubble, fade
+  // out dissolving into the arm), replacing the per-domain hard flip.
+  updateSectorOrbPresence(camDist);
+
   // Heliopause orb is external-facing ONLY: show it once the camera is outside
   // the shell (camDist ≥ radius). Inside the shell a translucent sphere wall
   // fills the viewport and tints the whole interior, so it must stay hidden
@@ -244,8 +291,16 @@ export function updateVisibility(camera?: Camera): void {
 
   // Heliopause icon-set hand-off: fade local body icons OUT and the regional
   // star-system markers IN across the same camDist window, as one cross-fade.
-  const swap = heliopauseSwap(Game.data.camDist);
+  const swap = heliopauseSwap(camDist);
   setLocalIconTierFade(1 - swap);
+
+  // Catalog star layer (the 3,066 real HYG systems): present at EVERY tier —
+  // a subtle 0.15 floor at system scales (so the chart never hard-vanishes),
+  // ramping to full with the heliopause swap, then dissolving into the
+  // generative galaxy across 2e6→1.2e7 WU (gone at full galaxy framing).
+  // 0.9 is the layer's base uOpacity.
+  const galaxyDissolve = 1 - smooth01(camDist, 2e6, 1.2e7);
+  targets?.catalogSystems?.setOpacity(0.9 * Math.max(0.15, swap) * galaxyDissolve);
 
   // Per-object icon/mesh state — runs every frame for smooth transitions
   updateIconStates(domain);
@@ -253,7 +308,7 @@ export function updateVisibility(camera?: Camera): void {
   // Regional star-system markers (incl. Sol): screen-constant size + fade-in.
   // Runs whenever the regional layer is visible (heliopause → arm), independent
   // of the local layer (which is off at arm tier).
-  updateRegionalMarkers(Game.data.camDist, swap, camera);
+  updateRegionalMarkers(camDist, swap, camera);
 
   // Label DECLUTTER: after the show-logic has set each label's wants-state,
   // prune overlapping labels in screen space so the local map stays readable
@@ -292,6 +347,34 @@ function updateRegionalMarkers(camDist: number, swap: number, camera?: Camera): 
       }
     });
   }
+}
+
+// ── Sector-orb presence (per frame) ──────────────────────────────
+// Scales every orb material's opacity by orbPresence(camDist): the two fresnel
+// shells carry a uOpacity uniform; the wireframe cardinals ride a plain
+// LineBasicMaterial opacity. Base values are cached on the material's userData
+// on first touch so the curve always scales from the authored look.
+
+function updateSectorOrbPresence(camDist: number): void {
+  const orb = targets?.sectorOrb;
+  if (!orb) return;
+  const presence = orbPresence(camDist);
+  orb.visible = presence > 0.002;
+  if (!orb.visible) return;
+  orb.traverse(child => {
+    const mat = (child as Mesh).material as
+      | (Material & { uniforms?: { uOpacity?: { value: number } } })
+      | undefined;
+    if (!mat) return;
+    const ud = mat.userData as { _baseOpacity?: number };
+    if (mat.uniforms?.uOpacity) {
+      ud._baseOpacity ??= mat.uniforms.uOpacity.value;
+      mat.uniforms.uOpacity.value = ud._baseOpacity * presence;
+    } else {
+      ud._baseOpacity ??= mat.opacity;
+      mat.opacity = ud._baseOpacity * presence;
+    }
+  });
 }
 
 // ── Label declutter (screen-space collision) ─────────────────────
@@ -370,6 +453,7 @@ function declutterLabels(camera: Camera): void {
 }
 
 let heliopauseMesh: Group | null = null;
+let heliopauseBase = 0; // authored material opacity, re-cached with the mesh
 function updateHeliopauseGate(): void {
   if (!targets) return;
   const local = targets.layers.local;
@@ -378,8 +462,19 @@ function updateHeliopauseGate(): void {
   if (!heliopauseMesh || heliopauseMesh.parent !== local) {
     heliopauseMesh = local.getObjectByName('heliopause') as Group | null;
     if (!heliopauseMesh) return;
+    // Fresh shell ⇒ fresh material at its authored opacity — re-cache the base.
+    const mat = (heliopauseMesh as unknown as Mesh).material as MeshBasicMaterial | undefined;
+    heliopauseBase = mat?.opacity ?? 0;
   }
-  heliopauseMesh.visible = local.visible && Game.data.camDist >= HELIOPAUSE_RADIUS_WU;
+  // Banded fade: opacity 0 → base across radius → 1.8×radius, so the shell
+  // materialises as the camera pulls away instead of popping in at the radius.
+  // The inside-the-shell rule stands: camDist < radius keeps it hidden (the
+  // translucent wall would otherwise tint the whole interior view).
+  const camDist = Game.data.camDist;
+  const t = smooth01(camDist, HELIOPAUSE_RADIUS_WU, HELIOPAUSE_RADIUS_WU * 1.8);
+  heliopauseMesh.visible = local.visible && camDist >= HELIOPAUSE_RADIUS_WU && t > 0.001;
+  const mat = (heliopauseMesh as unknown as Mesh).material as MeshBasicMaterial | undefined;
+  if (mat) mat.opacity = heliopauseBase * t;
 }
 
 // ── Per-Object Icon State ────────────────────────────────────────
