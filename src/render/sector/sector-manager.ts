@@ -17,7 +17,10 @@ import {
   updateSectorFrame, type Cell, type Sector,
 } from './sector';
 import { regionForGalPc, regionKey } from './region';
-import { buildSectorStarField, disposeSectorStarField, SECTOR_STAR_SIZE_SCALE, type SectorStarField } from './sector-stars';
+import {
+  buildSectorStarField, disposeSectorStarField, sectorDensityDim,
+  SECTOR_STAR_SIZE_SCALE, type SectorStarField,
+} from './sector-stars';
 
 const EDGE = DEFAULT_SECTOR_EDGE_PC; // 250 pc
 // Deadzone (pc) for the camera-cell pick — the focus must move this far past a boundary before
@@ -28,11 +31,16 @@ const HYSTERESIS_PC = 20;
 // new cells on a crossing in one frame would hitch. Cap loads per frame to amortise it (the
 // camera cell always loads first so the cloud stays responsive). Worker pooling is later (B2).
 const MAX_LOADS_PER_FRAME = 2;
-// Point-size LOD reference (camDist WU): at/below this the sector stars render at
-// full size (you are among the near neighbourhood); above it uSizeScale shrinks
-// ∝ 1/camDist (down to a 0.1 floor) so the field thins to a faint dusting as the
-// camera pulls back toward the galaxy volume, instead of a same-px hyper-dense blob.
+// Sector-star LOD tied to zoom (camDist WU). Two knobs, because SIZE alone can't
+// thin the field — GPUs floor gl_PointSize at ~1px, so once the ~1-2.5px sprites
+// hit that, shrinking does nothing. So we ALSO fade BRIGHTNESS:
+//   SIZE   — uSizeScale ∝ SECTOR_STAR_LOD_REF/camDist  (full ≤ REF, 0.4 floor)
+//   BRIGHT — uDensityDim ∝ SECTOR_STAR_FADE_REF/camDist (full ≤ REF, 0.04 floor)
+// so as the camera pulls back the additive pile-up dims to a faint dusting and
+// recedes toward the galaxy volume, rather than reading as a hyper-dense blob.
+// These are the tuning knobs — raise to keep stars fuller/brighter longer.
 const SECTOR_STAR_LOD_REF = 600;
+const SECTOR_STAR_FADE_REF = 1500;
 
 export interface ResidentSector {
   readonly cell: Cell;
@@ -131,17 +139,17 @@ export function updateSectorManager(
     mgr.cameraCellKey = camKey;
   }
 
-  // 3. Re-root every resident to the floating-origin residual, and drive the point-size
-  //    LOD from camDist. The star sprites are fixed screen-px, so as the camera pulls
-  //    back the neighbourhood subtends less area and same-px points pile into a dense
-  //    blob; shrink uSizeScale ∝ 1/camDist beyond the near neighbourhood so the field
-  //    thins to a faint dusting on pull-back (full-size only when you are among them),
-  //    handing the far field off to the galaxy volume.
-  const sizeScale = SECTOR_STAR_SIZE_SCALE * Math.min(1, Math.max(0.1, SECTOR_STAR_LOD_REF / camDist));
+  // 3. Re-root every resident to the floating-origin residual, and drive the zoom LOD
+  //    (size + brightness, see the ref consts) so the field thins to a faint dusting on
+  //    pull-back and hands the far side off to the galaxy volume.
+  const sizeLOD = Math.min(1, Math.max(0.4, SECTOR_STAR_LOD_REF / camDist));
+  const fadeLOD = Math.min(1, Math.max(0.04, SECTOR_STAR_FADE_REF / camDist));
   let stars = 0;
   for (const rs of mgr.residents.values()) {
     updateSectorFrame(rs.sector);
-    rs.stars.material.uniforms.uSizeScale.value = sizeScale;
+    const u = rs.stars.material.uniforms;
+    u.uSizeScale.value = SECTOR_STAR_SIZE_SCALE * sizeLOD;
+    u.uDensityDim.value = sectorDensityDim(rs.stars.data.emissionMean) * fadeLOD;
     stars += rs.stars.data.count;
   }
   mgr.starCount = stars;
