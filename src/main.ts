@@ -28,6 +28,7 @@ import { setBakeRenderer } from './render/texture-baker';
 import { VP } from './render/visual-params';
 import { createCatalogStars } from './render/star-field';
 import { createCatalogSystems, type CatalogSystemsHandle } from './render/catalog-systems';
+import { createStarShells, type StarShellsHandle } from './render/star-shells';
 import { bakeGalaxyBackdrop } from './render/galaxy-backdrop';
 import {
   createSystemMarker, createCosmicMarker, createMarkerStem, updateSunSystem,
@@ -335,6 +336,7 @@ async function boot(): Promise<void> {
     worldExtras.galaxyArms,
     worldExtras.sectorOrb,
     worldExtras.catalogSystems,
+    worldExtras.starShells,
   );
 
   // ── 8c-bis. Bake the Milky Way backdrop (one-shot, 256-step volume) ──
@@ -536,6 +538,7 @@ async function boot(): Promise<void> {
     // Catalog star layer sits on sceneRoot (cross-tier crossfade) but its
     // positions are regional-frame — ride the same tier root.
     worldExtras.catalogSystems.group.position.copy(_regionalRoot);
+    worldExtras.starShells.group.position.copy(_regionalRoot);
     updateSectorPrototype(Game.data.camDist); // sector-cloud prototype: re-root + gate cloud (no-op if off)
     if (worldExtras.sectorMgr) {
       // Stream sectors around the camera's FOCUS cell (camFocusTarget is absolute scene-WU).
@@ -724,6 +727,7 @@ interface WorldExtras {
   galaxyBuildout: GalaxyBuildout | null;
   physGalaxy: PhysicalGalaxySystem | null;
   catalogSystems: CatalogSystemsHandle;
+  starShells: StarShellsHandle;
   /** Curated-system entity ids, index-aligned with CURATED_SYSTEMS (drift). */
   systemEids: number[];
 }
@@ -808,6 +812,11 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol', renderer: impo
   // game loop copies _regionalRoot onto the group each frame (floating origin).
   const catalogSystems = createCatalogSystems();
   sceneRoot.add(catalogSystems.group);
+
+  // ── Star shells — progressive LOD annuli bridging the survey sphere to the
+  // galaxy disc (density-field-sampled; crossfaded per camDist by visibility).
+  const starShells = createStarShells();
+  sceneRoot.add(starShells.group);
   (globalThis as Record<string, unknown>).__catalogSystems = catalogSystems;
 
   // ── Background ──
@@ -919,7 +928,7 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol', renderer: impo
   const sectorOrb = createSectorOrb(19.1 * LY_TO_WU);
   sceneRoot.add(sectorOrb);
 
-  return { eclipticGrid, oortCloud, galaxyArms: galaxyGroup, sectorOrb, activeSystem, protoSector, sectorMgr, regionMgr, sectorFill, galaxyBuildout, physGalaxy, catalogSystems, systemEids };
+  return { eclipticGrid, oortCloud, galaxyArms: galaxyGroup, sectorOrb, activeSystem, protoSector, sectorMgr, regionMgr, sectorFill, galaxyBuildout, physGalaxy, catalogSystems, starShells, systemEids };
 }
 
 // ── Start ────────────────────────────────────────────────────────

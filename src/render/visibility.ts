@@ -88,6 +88,9 @@ interface VisibilityTargets {
    *  frames: the regional chart (setOpacity) and the galactic-frame highlight
    *  particles embedded in the disc (setGalacticOpacity). */
   catalogSystems: { setOpacity(v: number): void; setGalacticOpacity(v: number): void } | null;
+  /** Progressive LOD star shells (star-shells.ts) — own their per-shell
+   *  crossfade bands; visibility just feeds them camDist. */
+  starShells: { updatePresence(camDist: number): void } | null;
 }
 
 let targets: VisibilityTargets | null = null;
@@ -247,8 +250,9 @@ export function initVisibility(
   galaxyArms: Group | null,
   sectorOrb: Group | null = null,
   catalogSystems: { setOpacity(v: number): void; setGalacticOpacity(v: number): void } | null = null,
+  starShells: { updatePresence(camDist: number): void } | null = null,
 ): void {
-  targets = { layers, eclipticGrid, oortCloud, galaxyArms, sectorOrb, catalogSystems };
+  targets = { layers, eclipticGrid, oortCloud, galaxyArms, sectorOrb, catalogSystems, starShells };
   lastDomain = null;
 
   // Wire overlay toggle notification
@@ -307,6 +311,10 @@ export function updateVisibility(camera?: Camera): void {
   const galaxyDissolve = 1 - smooth01(camDist, 2e6, 1.2e7);
   targets?.catalogSystems?.setOpacity(0.9 * Math.max(0.15, swap) * galaxyDissolve);
   targets?.catalogSystems?.setGalacticOpacity(0.9 * smooth01(camDist, 2e6, 8e6));
+
+  // Progressive star shells: each annulus fades in at its scale and out past
+  // it — the "spheres of stars" ladder from the survey sphere to the disc.
+  targets?.starShells?.updatePresence(camDist);
 
   // Per-object icon/mesh state — runs every frame for smooth transitions
   updateIconStates(domain);
