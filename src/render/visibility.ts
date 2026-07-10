@@ -560,9 +560,15 @@ function updateIconStates(_domain: DomainName): void {
     const hasIcon = child.children?.some(c => c.userData?.isIcon);
     if (!hasIcon) continue;
     const ud = child.userData as Record<string, unknown>;
-    const radiusWU = ((ud.bodyRadius as number) ?? 1) * child.scale.x;
+    // Scale-unification U2/U3: the body's WORLD radius = authored radius × visual
+    // inflation × the local tier's SYSTEM_TIER_SCALE. apparentPx needs the world
+    // radius (it divides by the true-scale camDist), and the icon sprite renders
+    // inside the ×S group so its screen-px sizing is compensated by the same
+    // factor (passed as iconGroupScale). Without this the apparent size was ~2062×
+    // too big — every body pinned to mesh-only and its icon/label never appeared.
+    const radiusWU = ((ud.bodyRadius as number) ?? 1) * child.scale.x * SYSTEM_TIER_SCALE;
     const bias = iconBiasFor(ud.type as string | undefined, ud.planetTypeId as number | undefined);
     const prev = (ud._iconState as number) ?? -1;
-    ud._iconState = updateBodyLOD(child, camDist, radiusWU, bias, prev);
+    ud._iconState = updateBodyLOD(child, camDist, radiusWU, bias, prev, SYSTEM_TIER_SCALE);
   }
 }
