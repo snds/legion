@@ -20,7 +20,7 @@
 import { Vector3 } from 'three';
 import { VP } from './visual-params';
 import { Game } from '../core/state';
-import { AU_TO_WU, WU_PER_PC } from '../core/metrics';
+import { AU_TO_WU_TRUE, WU_PER_PC } from '../core/metrics';
 import { galPos, HOME_SYSTEM } from '../data/curated-systems';
 
 /**
@@ -38,8 +38,12 @@ export function getEffectiveScale(): number {
   const maxInflation = VP.get('visualInflation');
   const camDist = Game.data.camDist;
 
-  const rampStart = VP.get('transitionZoneInner') * AU_TO_WU; // ≤ → true scale
-  const rampFull = VP.get('transitionZoneOuter') * AU_TO_WU;  // ≥ → full inflation
+  // Scale-unification U2: the ramp window is authored in AU, and camDist is now
+  // in the TRUE-scale system frame (1 AU = AU_TO_WU_TRUE WU), so convert the AU
+  // window with AU_TO_WU_TRUE (was AU_TO_WU, the legacy 1 AU = 10 WU) — otherwise
+  // the ramp sits ~2000× too far out and bodies never inflate.
+  const rampStart = VP.get('transitionZoneInner') * AU_TO_WU_TRUE; // ≤ → true scale
+  const rampFull = VP.get('transitionZoneOuter') * AU_TO_WU_TRUE;  // ≥ → full inflation
 
   if (camDist <= rampStart) return 1.0;
   if (camDist >= rampFull) return maxInflation;

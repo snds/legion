@@ -19,16 +19,21 @@ import type {
   Material, Mesh, MeshBasicMaterial,
 } from 'three';
 import { HELIOPAUSE_RADIUS_WU } from './particles';
+import { SYSTEM_TIER_SCALE } from '../core/metrics';
 import {
   updateBodyLOD, iconBiasFor, scaleFixed, setLocalIconTierFade,
 } from './icon-system';
 
-// Heliopause icon-set hand-off ramp: 0 below 1800 WU (local body icons full,
-// regional star-system markers hidden) → 1 above 3200 WU (local icons gone,
+// Heliopause icon-set hand-off ramp: 0 below SWAP_IN (local body icons full,
+// regional star-system markers hidden) → 1 above SWAP_OUT (local icons gone,
 // regional markers full). Spans the heliopause band into early sector so the
 // solar-system icons cross-fade into the star-system markers as one motion.
-const SWAP_IN = 1800;
-const SWAP_OUT = 3200;
+// Scale-unification U2: the system tier now renders at true scale, so camDist
+// across the system is SYSTEM_TIER_SCALE× smaller (heliopause ≈ 1.36 WU, not
+// 2800). The bands, authored in the legacy system-tier magnitudes, ride that
+// scale so the swap still fires as the camera leaves the heliopause.
+const SWAP_IN = 1800 * SYSTEM_TIER_SCALE;
+const SWAP_OUT = 3200 * SYSTEM_TIER_SCALE;
 const REGIONAL_ICON_PX = 24; // screen-constant marker size (docs §4.6)
 function heliopauseSwap(camDist: number): number {
   return smooth01(camDist, SWAP_IN, SWAP_OUT);
@@ -515,8 +520,13 @@ function updateHeliopauseGate(): void {
   // The inside-the-shell rule stands: camDist < radius keeps it hidden (the
   // translucent wall would otherwise tint the whole interior view).
   const camDist = Game.data.camDist;
-  const t = smooth01(camDist, HELIOPAUSE_RADIUS_WU, HELIOPAUSE_RADIUS_WU * 1.8);
-  heliopauseMesh.visible = local.visible && camDist >= HELIOPAUSE_RADIUS_WU && t > 0.001;
+  // Scale-unification U2: the heliopause mesh lives in the local tier (scaled by
+  // SYSTEM_TIER_SCALE), so its true world radius is HELIOPAUSE_RADIUS_WU × that
+  // scale. Gate on the scaled radius so "camera outside the shell" is evaluated
+  // in the same (true-scale) frame camDist now lives in.
+  const helioR = HELIOPAUSE_RADIUS_WU * SYSTEM_TIER_SCALE;
+  const t = smooth01(camDist, helioR, helioR * 1.8);
+  heliopauseMesh.visible = local.visible && camDist >= helioR && t > 0.001;
   const mat = (heliopauseMesh as unknown as Mesh).material as MeshBasicMaterial | undefined;
   if (mat) mat.opacity = heliopauseBase * t;
 }
