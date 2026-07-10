@@ -6,10 +6,13 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { getEffectiveScale } from './scale-manager';
 import { VP } from './visual-params';
 import { Game } from '../core/state';
-import { AU_TO_WU } from '../core/metrics';
+import { AU_TO_WU_TRUE } from '../core/metrics';
 
-const START = 20 * AU_TO_WU;  // ramp start, 200 WU (transitionZoneInner default)
-const FULL = 100 * AU_TO_WU;  // ramp full,  1000 WU (transitionZoneOuter default)
+// Scale-unification U2: the system tier renders at TRUE scale, so the inflation
+// ramp window (authored in AU) converts with AU_TO_WU_TRUE (1 AU ≈ 0.004848 WU),
+// not the legacy 1 AU = 10 WU. START ≈ 0.097 WU, FULL ≈ 0.485 WU.
+const START = 20 * AU_TO_WU_TRUE;  // ramp start (transitionZoneInner default)
+const FULL = 100 * AU_TO_WU_TRUE;  // ramp full  (transitionZoneOuter default)
 const at = (camDist: number): number => {
   Game.data.camDist = camDist;
   return getEffectiveScale();
@@ -24,7 +27,7 @@ describe('visual inflation curve (Phase 2a)', () => {
 
   it('is true 1:1 scale when close to a target', () => {
     expect(at(0)).toBe(1.0);
-    expect(at(50)).toBe(1.0);
+    expect(at(START * 0.5)).toBe(1.0);
     expect(at(START)).toBe(1.0); // at the ramp start it is still 1:1
   });
 
@@ -41,13 +44,13 @@ describe('visual inflation curve (Phase 2a)', () => {
 
   it('is monotonically non-decreasing as the camera pulls back (inverted model)', () => {
     let prev = -Infinity;
-    for (let d = 0; d <= 1200; d += 50) {
+    for (let d = 0; d <= FULL * 1.2; d += FULL / 24) {
       const v = at(d);
       expect(v).toBeGreaterThanOrEqual(prev - 1e-9);
       prev = v;
     }
     // The inversion: closer is now SMALLER inflation than farther (old model was the reverse).
-    expect(at(100)).toBeLessThan(at(900));
+    expect(at(START + (FULL - START) * 0.25)).toBeLessThan(at(START + (FULL - START) * 0.75));
   });
 
   it('honors the user-configurable ceiling, and 1.0 disables inflation entirely', () => {

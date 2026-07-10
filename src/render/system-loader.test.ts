@@ -122,14 +122,16 @@ describe('system focus — staged Stage-B swap', () => {
     initSystemFocus({ ctx, renderer: null, markerEidFor: () => markerEid }, boot);
 
     // Perceptible: local visible + below the icon hand-off camDist — hold.
+    // Scale-unification U2: SWAP_HIDDEN_CAMDIST now rides SYSTEM_TIER_SCALE
+    // (≈ 3200 × 4.85e-4 ≈ 1.55 WU), so the hold/fire samples are true-scale.
     ctx.layers.local.visible = true;
-    Game.data.camDist = 2000;
+    Game.data.camDist = 1.0;
     requestSystemFocus('sol');
     updateSystemFocus();
     expect(getActiveSystemHandle()?.systemId).toBe('ee');
 
     // Zoomed out past the hand-off — swap fires this frame.
-    Game.data.camDist = 5000;
+    Game.data.camDist = 5.0;
     updateSystemFocus();
     expect(getActiveSystemHandle()?.systemId).toBe('sol');
     expect(ctx.renderObjectMap.size).toBe(16); // old EE fully out, Sol in

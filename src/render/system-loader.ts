@@ -26,7 +26,7 @@ import { Position } from '../core/components';
 import { Game } from '../core/state';
 import { Events } from '../core/events';
 import { GAME_EPOCH_ET } from '../core/time';
-import { AU_TO_WU } from '../core/metrics';
+import { AU_TO_WU, SYSTEM_TIER_SCALE } from '../core/metrics';
 import { asset } from '../core/assets';
 import { registerRenderObject } from './scene';
 import {
@@ -308,7 +308,10 @@ const SYSTEM_LABEL: Record<LoadableSystemId, { display: string; hud: string }> =
 // SWAP_OUT): local body icons are fully faded into the regional markers and
 // the meshes subtend sub-pixels — the seam where a local-tier swap is
 // invisible. layers.local.visible === false (arm+) also qualifies.
-const SWAP_HIDDEN_CAMDIST = 3200;
+// Scale-unification U2: rides SYSTEM_TIER_SCALE like visibility.ts SWAP_OUT, so
+// the deferred swap still triggers at the true-scale heliopause exit (not a
+// camDist the unified curve never reaches at the system tier).
+const SWAP_HIDDEN_CAMDIST = 3200 * SYSTEM_TIER_SCALE;
 
 interface SystemFocusRuntime {
   ctx: SystemLoaderCtx;
