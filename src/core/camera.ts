@@ -26,32 +26,42 @@ const FOV_LERP = 0.08;
 // ── Adaptive Focal Length ───────────────────────────────────────
 // FOV narrows as we approach the focused object (cinematic telephoto,
 // compresses depth) and widens at galactic scale so the spiral fits.
-// Curve is anchored on camDist with three breakpoints:
-//   ≤ 30 WU       (planet surface / station close-up)    → 32°  (~75mm)
-//   ~ 400 WU      (system / heliopause)                  → 50°  (~45mm, default-ish)
-//   ~ 3000 WU     (sector / arm)                         → 62°
-//   ≥ 9000 WU     (galaxy)                               → 72°  (wide)
+//
+// Scale-unification U2/U3: the system tier now renders at TRUE scale, so camDist
+// spans ~11 orders of magnitude (a planet at ~1e-4 WU → the galaxy at 3.6e7 WU).
+// The old absolute breakpoints (30/400/3000/9000 WU) all sat PAST the true-scale
+// system, pinning the whole system view at 32° telephoto (the FOV never opened
+// as you pulled back). Interpolate the same FOV values in LOG10(camDist) space so
+// the focal length opens smoothly across the entire dive. Anchors are
+// (log10 camDist WU → FOV°) — tune here, not at the call sites:
+//   ≲ 0.006 WU  orbit / planet close-up   → 32°  (~75mm telephoto)
+//   ~ 1.3  WU   heliopause / system bubble → 50°  (~45mm)
+//   ~ 200  WU   sector — local-arm patch   → 62°
+//   ≳ 3e6  WU   arm → full galaxy          → 72°  (wide)
 
 const FOV_NEAR = 32;
 const FOV_MID = 50;
 const FOV_FAR = 62;
 const FOV_WIDE = 72;
 
+const FOV_ANCHORS: readonly (readonly [number, number])[] = [
+  [-2.2, FOV_NEAR],
+  [0.1, FOV_MID],
+  [2.3, FOV_FAR],
+  [6.5, FOV_WIDE],
+];
+
 function fovForDistance(camDist: number): number {
-  if (camDist <= 30) return FOV_NEAR;
-  if (camDist <= 400) {
-    const t = (camDist - 30) / (400 - 30);
-    return FOV_NEAR + (FOV_MID - FOV_NEAR) * t;
+  const l = Math.log10(Math.max(camDist, 1e-6));
+  if (l <= FOV_ANCHORS[0][0]) return FOV_ANCHORS[0][1];
+  for (let i = 1; i < FOV_ANCHORS.length; i++) {
+    const [l1, f1] = FOV_ANCHORS[i];
+    if (l <= l1) {
+      const [l0, f0] = FOV_ANCHORS[i - 1];
+      return f0 + (f1 - f0) * ((l - l0) / (l1 - l0));
+    }
   }
-  if (camDist <= 3000) {
-    const t = (camDist - 400) / (3000 - 400);
-    return FOV_MID + (FOV_FAR - FOV_MID) * t;
-  }
-  if (camDist <= 9000) {
-    const t = (camDist - 3000) / (9000 - 3000);
-    return FOV_FAR + (FOV_WIDE - FOV_FAR) * t;
-  }
-  return FOV_WIDE;
+  return FOV_ANCHORS[FOV_ANCHORS.length - 1][1];
 }
 
 // Per-object focus scale: the close-in tiers (surface, low-orbit, orbit)
