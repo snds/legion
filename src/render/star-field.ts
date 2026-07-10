@@ -76,8 +76,8 @@ const starFragmentShader = /* glsl */ `
   }
 `;
 
-// Shared B−V → RGB used by both the field and the glare layer.
-const BV_COLOR_GLSL = /* glsl */ `
+// Shared B−V → RGB used by the field, the glare layer, and catalog-systems.
+export const BV_COLOR_GLSL = /* glsl */ `
   vec3 bvColor(float bv){
     bv = clamp(bv, -0.35, 2.0);
     vec3 c = mix(vec3(0.61,0.71,1.00), vec3(0.79,0.86,1.00), smoothstep(-0.35,0.0,bv));
