@@ -8,6 +8,7 @@ import { PanelManager } from '../panel-manager';
 import { registerPanel } from '../dock';
 import { Theme, FONTS } from '../theme';
 import { VP, type VisualParams } from '../../render/visual-params';
+import { DATA_SOURCES, PERMISSION_LABEL } from '../../data/data-sources';
 
 // ── Visual-effect sliders (UI 0–100% → VP value 0..max; 0 = off) ──
 interface FxDef { id: string; label: string; key: keyof VisualParams; max: number; }
@@ -102,6 +103,28 @@ function render(area: HTMLElement): void {
   h += `<div class="settings-group-title" style="margin-top:16px">KEYBOARD</div>`;
   SHORTCUTS.forEach(([key, desc]) => {
     h += `<div class="key-row"><kbd>${key}</kbd><span class="key-desc">${desc}</span></div>`;
+  });
+
+  // ── Credits · Data Sources ──
+  // Rendered straight from the DATA_SOURCES registry (src/data/data-sources.ts) —
+  // several licenses REQUIRE this attribution to be visible in-app.
+  h += `<div class="settings-group-title" style="margin-top:16px">CREDITS · DATA SOURCES</div>`;
+  DATA_SOURCES.forEach(s => {
+    const badge = s.shipped ? PERMISSION_LABEL[s.permission] : 'NOT SHIPPED';
+    const badgeColor = s.permission === 'unverified' || s.permission === 'non-commercial'
+      ? 'color:#e0a050' : 'opacity:0.5';
+    const title = s.url
+      ? `<a href="${s.url}" target="_blank" rel="noopener" style="color:inherit">${s.name}</a>`
+      : s.name;
+    // NOT .settings-row (flex) — each credit entry stacks its own lines.
+    h += `<div style="margin-top:8px">`
+      + `<div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px">`
+      + `<span style="font-size:11px">${title}</span>`
+      + `<span style="font-size:9px;letter-spacing:0.05em;white-space:nowrap;${badgeColor}">${badge}</span>`
+      + `</div>`
+      + `<div style="font-size:10px;opacity:0.55;margin-top:1px">${s.provider} · ${s.license}</div>`
+      + `<div style="font-size:10px;opacity:0.4;margin-top:1px">${s.creditLine}</div>`
+      + `</div>`;
   });
 
   // ── Reset ──
