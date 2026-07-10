@@ -77,6 +77,7 @@ function nominalState(ap: number): number {
  */
 export function updateBodyLOD(
   obj: Object3D, camDist: number, radiusWU: number, iconBias: number, prevState: number,
+  iconGroupScale = 1,
 ): number {
   const effAp = apparentPx(radiusWU, camDist) / iconBias;
 
@@ -97,16 +98,16 @@ export function updateBodyLOD(
       break;
     case 2: // MESH+ICON — full mesh, subtle small icon overlay.
       fadeMeshes(obj, 1);
-      showIcons(obj, ICON_OPACITY_CLOSE, camDist, true, SCREEN_PX_CLOSE, true);
+      showIcons(obj, ICON_OPACITY_CLOSE, camDist, true, SCREEN_PX_CLOSE, true, iconGroupScale);
       break;
     case 1: { // ICON_FADE_IN — icon fades in over the still-full mesh (SupCom).
       fadeMeshes(obj, 1);
       const t = MathUtils.clamp((BAND_ICON - effAp) / (BAND_ICON - BAND_FADE), 0, 1);
-      showIcons(obj, t * ICON_OPACITY, camDist, true, SCREEN_PX, true);
+      showIcons(obj, t * ICON_OPACITY, camDist, true, SCREEN_PX, true, iconGroupScale);
       break;
     }
     default: // ICON — mesh untouched (sub-pixel, shrinks out); icon only, no labels.
-      showIcons(obj, ICON_OPACITY, camDist, true, SCREEN_PX, false);
+      showIcons(obj, ICON_OPACITY, camDist, true, SCREEN_PX, false, iconGroupScale);
       break;
   }
   return state;
@@ -134,11 +135,16 @@ export function iconBiasFor(type: string | undefined, planetTypeId: number | und
  * camera distance. HW2-style: icons stay small and readable,
  * anchored to the 3D object position.
  */
-export function scaleFixed(icon: Sprite, camDist: number, screenPx = SCREEN_PX): void {
+export function scaleFixed(
+  icon: Sprite, camDist: number, screenPx = SCREEN_PX, groupScale = 1,
+): void {
   if (!icon?.userData) return;
   const aspect = icon.userData.aspect ?? 1.25;
-  // World size that produces exactly screenPx pixels on screen
-  const worldSize = (screenPx / window.innerHeight) * camDist * FOV_FACTOR;
+  // World size that produces exactly screenPx pixels on screen. `groupScale`
+  // compensates for a uniformly-scaled parent tier: the sprite renders inside a
+  // group scaled by `groupScale` (the local tier rides SYSTEM_TIER_SCALE), so
+  // set the local scale to worldSize/groupScale for the on-screen size to land.
+  const worldSize = (screenPx / window.innerHeight) * camDist * FOV_FACTOR / groupScale;
   icon.scale.set(worldSize, worldSize * aspect, 1);
 }
 
@@ -209,7 +215,7 @@ export function fadeMeshes(obj: Object3D, opacity: number): void {
  *  pass (docs/zoom-overlay-patterns.md Phase 3) lands. */
 export function showIcons(
   obj: Object3D, opacity: number, camDist: number, fixedSize = true, screenPx = SCREEN_PX,
-  labels = true,
+  labels = true, groupScale = 1,
 ): void {
   obj.traverse(child => {
     if (child.userData?.isIcon) {
@@ -217,7 +223,7 @@ export function showIcons(
       const op = opacity * localTierFade; // tier-fade hands local icons off at heliopause
       sprite.visible = op > 0.005;
       (sprite.material as SpriteMaterial).opacity = op;
-      if (fixedSize) scaleFixed(sprite, camDist, screenPx);
+      if (fixedSize) scaleFixed(sprite, camDist, screenPx, groupScale);
       else scaleWorld(sprite, camDist);
       for (const ch of sprite.children) {
         if (ch.userData?.isLabel) ch.visible = labels && sprite.visible;
