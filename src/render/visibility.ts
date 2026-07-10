@@ -319,7 +319,16 @@ export function updateVisibility(camera?: Camera): void {
   // persisting at full — the dense "inner sphere" stops out-shining the
   // surrounding tiers while staying readable as the survey layer.
   const localEase = 1 - 0.55 * smooth01(camDist, 3e4, 1.2e5);
-  targets?.catalogSystems?.setOpacity(0.9 * Math.max(0.15, swap * localEase) * galaxyDissolve);
+  // SURVEY FLOOR: the "never hard-vanishes" floor ramps DOWN at the deep system
+  // tiers (surface/orbit/inner) where the real-sky backdrop already carries the
+  // background stars — so the bright nearby catalogue stars read as a subtle
+  // survey layer instead of out-shining the true-scale system. It rises to the
+  // full floor by the heliopause, where the swap hand-off takes over. (Pre-U2
+  // this floor was a flat 0.15; at true scale that read a touch hot against the
+  // now-clean black frame.)
+  const helioR = HELIOPAUSE_RADIUS_WU * SYSTEM_TIER_SCALE;
+  const surveyFloor = 0.05 + 0.10 * smooth01(camDist, helioR * 0.4, helioR * 1.5);
+  targets?.catalogSystems?.setOpacity(0.9 * Math.max(surveyFloor, swap * localEase) * galaxyDissolve);
   targets?.catalogSystems?.setGalacticOpacity(0.9 * smooth01(camDist, 2e6, 8e6));
 
   // Progressive star shells: each annulus fades in at its scale and out past
