@@ -17,8 +17,7 @@ import {
   updateSectorFrame, type Cell, type Sector,
 } from './sector';
 import { regionForGalPc, regionKey } from './region';
-import { buildSectorCloud, disposeSectorCloud, updateSectorCloudFrame, type SectorCloud } from './sector-cloud';
-import { buildSectorStarField, disposeSectorStarField, type SectorStarField } from './sector-stars';
+import { buildSectorStarField, disposeSectorStarField, SECTOR_STAR_SIZE_SCALE, type SectorStarField } from './sector-stars';
 
 const EDGE = DEFAULT_SECTOR_EDGE_PC; // 250 pc
 // Deadzone (pc) for the camera-cell pick — the focus must move this far past a boundary before
@@ -29,12 +28,16 @@ const HYSTERESIS_PC = 20;
 // new cells on a crossing in one frame would hitch. Cap loads per frame to amortise it (the
 // camera cell always loads first so the cloud stays responsive). Worker pooling is later (B2).
 const MAX_LOADS_PER_FRAME = 2;
+// Point-size LOD reference (camDist WU): at/below this the sector stars render at
+// full size (you are among the near neighbourhood); above it uSizeScale shrinks
+// ∝ 1/camDist (down to a 0.1 floor) so the field thins to a faint dusting as the
+// camera pulls back toward the galaxy volume, instead of a same-px hyper-dense blob.
+const SECTOR_STAR_LOD_REF = 600;
 
 export interface ResidentSector {
   readonly cell: Cell;
   readonly sector: Sector;
   readonly stars: SectorStarField;
-  cloud: SectorCloud | null; // non-null ONLY for the camera's current cell (the 1 live volume)
   /** Synchronous star-generation cost at load (ms) — the hitch signal the region budgets sum. */
   readonly generationMs: number;
 }
@@ -75,18 +78,10 @@ function loadSector(mgr: SectorManager, cell: Cell): ResidentSector {
   const generationMs = performance.now() - t0;
   sector.group.add(stars.points);
   mgr.group.add(sector.group);
-  return { cell, sector, stars, cloud: null, generationMs };
-}
-
-function detachCloud(rs: ResidentSector): void {
-  if (!rs.cloud) return;
-  rs.sector.group.remove(rs.cloud.mesh);
-  disposeSectorCloud(rs.cloud);
-  rs.cloud = null;
+  return { cell, sector, stars, generationMs };
 }
 
 function unloadSector(mgr: SectorManager, rs: ResidentSector): void {
-  detachCloud(rs);
   rs.sector.group.remove(rs.stars.points);
   disposeSectorStarField(rs.stars);
   mgr.group.remove(rs.sector.group);
@@ -129,25 +124,25 @@ export function updateSectorManager(
     mgr.residents.set(cellKey(missing[n]!), loadSector(mgr, missing[n]!));
   }
 
-  // 2. Move the single live cloud to the camera's current cell (rebuild on crossing) — but
-  //    only once that cell is actually loaded (it loads first above, so usually this frame).
-  if (mgr.cameraCellKey !== camKey) {
-    const cur = mgr.residents.get(camKey);
-    if (cur) {
-      const prev = mgr.cameraCellKey ? mgr.residents.get(mgr.cameraCellKey) : undefined;
-      if (prev) detachCloud(prev);
-      if (!cur.cloud) { cur.cloud = buildSectorCloud(cur.sector); cur.sector.group.add(cur.cloud.mesh); }
-      mgr.cameraCell = cell;
-      mgr.cameraCellKey = camKey;
-    }
+  // 2. Track the committed camera cell (the volumetric per-cell cloud was removed —
+  //    the far field is the galaxy volume, the near field these true-particle stars).
+  if (mgr.cameraCellKey !== camKey && mgr.residents.has(camKey)) {
+    mgr.cameraCell = cell;
+    mgr.cameraCellKey = camKey;
   }
 
-  // 3. Re-root every resident to the floating-origin residual; update the live cloud.
+  // 3. Re-root every resident to the floating-origin residual, and drive the point-size
+  //    LOD from camDist. The star sprites are fixed screen-px, so as the camera pulls
+  //    back the neighbourhood subtends less area and same-px points pile into a dense
+  //    blob; shrink uSizeScale ∝ 1/camDist beyond the near neighbourhood so the field
+  //    thins to a faint dusting on pull-back (full-size only when you are among them),
+  //    handing the far field off to the galaxy volume.
+  const sizeScale = SECTOR_STAR_SIZE_SCALE * Math.min(1, Math.max(0.1, SECTOR_STAR_LOD_REF / camDist));
   let stars = 0;
   for (const rs of mgr.residents.values()) {
     updateSectorFrame(rs.sector);
+    rs.stars.material.uniforms.uSizeScale.value = sizeScale;
     stars += rs.stars.data.count;
-    if (rs.cloud) updateSectorCloudFrame(rs.sector, rs.cloud, camDist);
   }
   mgr.starCount = stars;
 }
