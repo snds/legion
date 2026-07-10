@@ -59,7 +59,15 @@ function isWorldVisible(obj: Object3D): boolean {
 
 let catalogSystems: CatalogSystemsHandle | null = null;
 export function setCatalogPicking(handle: CatalogSystemsHandle | null): void {
+  // The catalog group rides sceneRoot (cross-tier crossfade, main.ts), not a
+  // raycast layer — register it as its own selectable root. Remove the prior
+  // handle's group first so repeated injection never stacks duplicates.
+  if (catalogSystems) {
+    const i = selectables.indexOf(catalogSystems.group);
+    if (i >= 0) selectables.splice(i, 1);
+  }
   catalogSystems = handle;
+  if (handle) selectables.push(handle.group);
 }
 
 /** Synthesized hit payload for a catalogue star — no ECS entity, no marker;
