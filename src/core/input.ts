@@ -12,13 +12,40 @@ import { Game, ZOOM_STEPS } from './state';
 // ── Constants ──────────────────────────────────────────────────────
 
 const ORBIT_SPEED = 0.005;        // radians per pixel (monolithic: 0.005)
-const ZOOM_STEP = 0.012;          // zoom per scroll tick (finer than monolithic default)
+const ZOOM_STEP = 0.012;          // zoom per mouse-wheel notch (finer than monolithic default)
 const ZOOM_STEP_FINE = 0.003;     // Shift+wheel — surgical adjustments
 const ZOOM_STEP_FAST = 0.04;      // Ctrl/Alt+wheel — coarse tier jumps
 const PHI_MIN = 0.15;             // prevent flipping over top
 const PHI_MAX = Math.PI - 0.15;   // prevent flipping under bottom
 const DRAG_THRESHOLD = 4;         // pixels before drag registers
 const PINCH_ZOOM_K = 0.25;        // pinch: zoom per ln(finger-distance ratio)
+
+// ── Cross-device wheel normalization ───────────────────────────────
+// A mouse wheel fires ONE event per physical notch; a Mac trackpad fires dozens
+// of high-resolution pixel events per two-finger swipe, plus an inertial
+// momentum tail. Scaling zoom by the *sign* of each event (a whole step apiece)
+// therefore makes the trackpad wildly over-sensitive. Instead we normalize each
+// event to pixels (across deltaMode) and express it as a fraction of a "notch",
+// so zoom tracks physical scroll distance: one mouse notch still == one step,
+// while a trackpad's many sub-notch events sum to a sane amount.
+const WHEEL_PX_PER_NOTCH = 100;   // px of scroll that equals one mouse-wheel notch (one step)
+const WHEEL_LINE_PX = 40;         // deltaMode 1 (lines, e.g. Firefox mouse wheel) → px
+const WHEEL_PAGE_PX = 800;        // deltaMode 2 (pages) → px
+const WHEEL_MAX_NOTCHES = 2;      // per-event clamp so one fast flick / momentum spike can't leap tiers
+
+/**
+ * Convert a raw wheel `deltaY`/`deltaMode` into a signed notch count
+ * (one mouse-wheel notch ≈ ±1), normalized across delta modes and clamped.
+ * Pure and exported so the calibration is unit-testable — trackpad *feel*
+ * can't be verified headlessly, but the arithmetic can.
+ */
+export function wheelZoomNotches(deltaY: number, deltaMode: number): number {
+  let px = deltaY;
+  if (deltaMode === 1) px *= WHEEL_LINE_PX;
+  else if (deltaMode === 2) px *= WHEEL_PAGE_PX;
+  const notches = px / WHEEL_PX_PER_NOTCH;
+  return Math.max(-WHEEL_MAX_NOTCHES, Math.min(WHEEL_MAX_NOTCHES, notches));
+}
 
 export class InputManager {
   private canvas: HTMLElement;
@@ -84,15 +111,17 @@ export class InputManager {
       Game.data.dragButton = -1;
     });
 
-    // Scroll wheel — zoom.
-    //   plain wheel  → fine (ZOOM_STEP, ~83 ticks across the full range)
-    //   Shift+wheel  → ultra-fine (ZOOM_STEP_FINE, ~333 ticks) for surgical framing
+    // Scroll wheel — zoom. Step sizes are PER MOUSE-WHEEL NOTCH; wheelZoomNotches()
+    // normalizes the raw delta so a high-resolution trackpad swipe scales by
+    // physical distance rather than event count (see the helper above).
+    //   plain wheel  → fine (ZOOM_STEP, ~83 notches across the full range)
+    //   Shift+wheel  → ultra-fine (ZOOM_STEP_FINE, ~333 notches) for surgical framing
     //   Ctrl/Alt+wheel → coarse (ZOOM_STEP_FAST) for fast tier jumps
     this.canvas.addEventListener('wheel', (e) => {
       e.preventDefault();
       const step = e.shiftKey ? ZOOM_STEP_FINE : (e.ctrlKey || e.altKey || e.metaKey) ? ZOOM_STEP_FAST : ZOOM_STEP;
-      const delta = e.deltaY > 0 ? step : -step;
-      Game.data.targetZoom = Math.max(0, Math.min(1, Game.data.targetZoom + delta));
+      const notches = wheelZoomNotches(e.deltaY, e.deltaMode);
+      Game.data.targetZoom = Math.max(0, Math.min(1, Game.data.targetZoom + notches * step));
     }, { passive: false });
 
     // Context menu prevention
