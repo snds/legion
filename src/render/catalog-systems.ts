@@ -22,9 +22,14 @@ import {
 } from 'three';
 import { loadStarSystems, type CatalogStar } from '../data/star-systems';
 import { CURATED_SYSTEMS, HOME_SYSTEM } from '../data/curated-systems';
-import { WU_PER_PC } from '../core/metrics';
-import { driftedRegionalScenePos, DRIFT_MIN_STEP_MYR } from '../core/galactic-drift';
+import { WU_PER_PC, KPC_TO_WU, SOL_GAL_PC } from '../core/metrics';
+import { driftedRegionalScenePos, driftGalPc, DRIFT_MIN_STEP_MYR } from '../core/galactic-drift';
 import { BV_COLOR_GLSL } from './star-field';
+
+// Galaxy-group native frame: 1 pc = KPC_TO_WU/1000 WU (children of the galaxy
+// group are authored in this frame and ride its ×GALAXY_MODEL_SCALE lift —
+// same convention as the curated gal_system markers).
+const PC_TO_NATIVE = KPC_TO_WU / 1000;
 
 const vertexShader = /* glsl */ `
   attribute float aAbsMag; // absolute magnitude M
@@ -56,22 +61,52 @@ const fragmentShader = /* glsl */ `
   }
 `;
 
+// GALACTIC-frame representation: the same catalogue as small, slightly
+// warm-white-boosted highlight particles embedded in the generative disc.
+// Fixed pixel size (the galaxy group is ×GALAXY_MODEL_SCALE-scaled; px sizes
+// don't inherit scale) — they read as "surveyed" stars among the procedural
+// field rather than a second sky.
+const galacticVertexShader = /* glsl */ `
+  attribute float aAbsMag;
+  attribute float aBV;
+  uniform float uPixelRatio;
+  varying vec3 vColor;
+  varying float vBright;
+  ${BV_COLOR_GLSL}
+  void main(){
+    vColor = mix(bvColor(aBV), vec3(1.0), 0.25); // highlight lift vs the disc field
+    float dM = 4.83 - aAbsMag;
+    vBright = clamp(0.55 + dM * 0.08, 0.4, 1.2);
+    gl_PointSize = clamp(1.8 + dM * 0.25, 1.4, 3.6) * uPixelRatio;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
 export interface CatalogSystemsHandle {
-  /** Mount this into layers.regional; fills itself when the catalogue arrives. */
+  /** Mount this into the scene (regional-frame chart); fills itself when the
+   *  catalogue arrives. */
   group: Group;
+  /** GALACTIC-frame representation of the SAME stars — mount as a child of
+   *  the galaxy group (native-333 coords, rides its rotation + model scale).
+   *  Crossfades IN as the regional chart dissolves, so the space-agency
+   *  highlights persist as particles at arm/galaxy framing. */
+  galacticGroup: Group;
   /** Deduped catalogue stars, index-aligned with the position buffer. */
   stars: CatalogStar[];
   /** Heliocentric parsecs [x0,y0,z0, x1,…] — float64 authority for drift. */
   basePc: Float64Array;
   points: Points | null;
+  galacticPoints: Points | null;
   ready: Promise<void>;
-  /** Re-derive scene positions for the galactic-drift clock (Myr). Gated
-   *  internally to DRIFT_MIN_STEP_MYR, so calling every frame is free at
-   *  normal time compression. */
+  /** Re-derive scene positions (BOTH frames) for the galactic-drift clock
+   *  (Myr). Gated internally to DRIFT_MIN_STEP_MYR, so calling every frame is
+   *  free at normal time compression. */
   updateDrift(tMyr: number): void;
-  /** Per-frame presence (visibility.ts zoom-seam crossfade): drives the points
-   *  material's uOpacity. No-op until the async catalogue load lands. */
+  /** Per-frame presence (visibility.ts zoom-seam crossfade): drives the
+   *  regional chart's uOpacity. No-op until the async catalogue load lands. */
   setOpacity(v: number): void;
+  /** Per-frame presence of the galactic-frame representation. */
+  setGalacticOpacity(v: number): void;
 }
 
 /** True if a catalogue star duplicates a curated system (matched the same way
@@ -85,26 +120,43 @@ function isCurated(star: CatalogStar, desigs: Set<string>, names: Set<string>): 
 export function createCatalogSystems(): CatalogSystemsHandle {
   const group = new Group();
   group.name = 'catalog-systems';
+  const galacticGroup = new Group();
+  galacticGroup.name = 'catalog-systems-galactic';
 
   let lastDriftMyr = 0; // positions are built at the epoch (t = 0)
   const pcScratch = { x: 0, y: 0, z: 0 };
   const wuScratch = { x: 0, y: 0, z: 0 };
 
   const handle: CatalogSystemsHandle = {
-    group, stars: [], basePc: new Float64Array(0), points: null,
+    group, galacticGroup, stars: [], basePc: new Float64Array(0),
+    points: null, galacticPoints: null,
     ready: Promise.resolve(),
     updateDrift(tMyr: number): void {
       if (!handle.points || Math.abs(tMyr - lastDriftMyr) < DRIFT_MIN_STEP_MYR) return;
       lastDriftMyr = tMyr;
       const attr = handle.points.geometry.getAttribute('position') as BufferAttribute;
+      const gattr = handle.galacticPoints?.geometry.getAttribute('position') as BufferAttribute | undefined;
       const base = handle.basePc;
       for (let i = 0; i < handle.stars.length; i++) {
         pcScratch.x = base[i * 3]; pcScratch.y = base[i * 3 + 1]; pcScratch.z = base[i * 3 + 2];
         driftedRegionalScenePos(pcScratch, tMyr, wuScratch);
         attr.setXYZ(i, wuScratch.x, wuScratch.y, wuScratch.z);
+        if (gattr) {
+          // Galactic frame: absolute galactocentric orbit (same transform as
+          // the curated gal_system markers, native-333 coords).
+          driftGalPc(
+            SOL_GAL_PC.x + pcScratch.x, SOL_GAL_PC.y + pcScratch.y, SOL_GAL_PC.z + pcScratch.z,
+            tMyr, wuScratch,
+          );
+          gattr.setXYZ(i, wuScratch.x * PC_TO_NATIVE, wuScratch.y * PC_TO_NATIVE, wuScratch.z * PC_TO_NATIVE);
+        }
       }
       attr.needsUpdate = true;
       handle.points.geometry.computeBoundingSphere();
+      if (gattr) {
+        gattr.needsUpdate = true;
+        handle.galacticPoints!.geometry.computeBoundingSphere();
+      }
     },
     setOpacity(v: number): void {
       if (!handle.points) return;
@@ -113,6 +165,12 @@ export function createCatalogSystems(): CatalogSystemsHandle {
       // Fully dissolved (full-galaxy framing) ⇒ skip the draw AND the
       // raycast pick — invisible points must not steal clicks.
       handle.points.visible = v > 0.005;
+    },
+    setGalacticOpacity(v: number): void {
+      if (!handle.galacticPoints) return;
+      const mat = handle.galacticPoints.material as ShaderMaterial;
+      mat.uniforms.uOpacity.value = v;
+      handle.galacticPoints.visible = v > 0.005;
     },
   };
 
@@ -163,10 +221,36 @@ export function createCatalogSystems(): CatalogSystemsHandle {
     points.userData.type = 'catalog_star_points';
     group.add(points);
 
+    // ── Galactic-frame representation (same stars, disc-embedded) ──
+    const gpos = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) {
+      gpos[i * 3]     = (SOL_GAL_PC.x + basePc[i * 3])     * PC_TO_NATIVE;
+      gpos[i * 3 + 1] = (SOL_GAL_PC.y + basePc[i * 3 + 1]) * PC_TO_NATIVE;
+      gpos[i * 3 + 2] = (SOL_GAL_PC.z + basePc[i * 3 + 2]) * PC_TO_NATIVE;
+    }
+    const ggeo = new BufferGeometry();
+    ggeo.setAttribute('position', new BufferAttribute(gpos, 3));
+    ggeo.setAttribute('aAbsMag', new BufferAttribute(absMag, 1));
+    ggeo.setAttribute('aBV', new BufferAttribute(bv, 1));
+    ggeo.computeBoundingSphere();
+    const gmat = new ShaderMaterial({
+      vertexShader: galacticVertexShader, fragmentShader,
+      uniforms: {
+        uOpacity: { value: 0 }, // faded in by the zoom-seam crossfade
+        uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
+      },
+      transparent: true, depthWrite: false, blending: AdditiveBlending,
+    });
+    const galacticPoints = new Points(ggeo, gmat);
+    galacticPoints.name = 'catalog-system-points-galactic';
+    galacticPoints.visible = false; // until its crossfade lifts it
+    galacticGroup.add(galacticPoints);
+
     handle.stars = stars;
     handle.basePc = basePc;
     handle.points = points;
-    console.info(`[CatalogSystems] ${n} real systems placed (25 pc neighbourhood)`);
+    handle.galacticPoints = galacticPoints;
+    console.info(`[CatalogSystems] ${n} real systems placed (25 pc neighbourhood + galactic frame)`);
   });
 
   return handle;

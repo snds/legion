@@ -831,6 +831,12 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol', renderer: impo
 
   // ── Galaxy (visible at arm/galaxy tiers) ──
   const galaxyGroup = createGalaxy();
+  // Galactic-frame catalog representation: the same 3,066 real stars as
+  // highlight particles in the galaxy group's native frame (rides its
+  // rotation + ×GALAXY_MODEL_SCALE lift + tier visibility, exactly like the
+  // curated gal_system markers). Crossfaded against the regional chart by
+  // visibility.ts, so the space-agency layer persists at arm/galaxy framing.
+  galaxyGroup.add(catalogSystems.galacticGroup);
   galaxyGroup.position.copy(getGalaxyOffset());
   sceneRoot.add(galaxyGroup);
 
