@@ -36,10 +36,13 @@ interface ShellSpec {
 
 // Annuli tile 25 pc → 2.6 kpc in ~×3 steps; the last shell's fade-out
 // overlaps the physical galaxy's presence ramp (2e6 WU →) so its stars
-// dissolve into the disc field.
+// dissolve into the disc field. Counts grow OUTWARD: equal counts made the
+// innermost annulus (tiny volume) read as a conspicuously dense ball
+// against its much larger neighbour — the LOD hand-off keeps apparent
+// density continuous instead.
 const SHELLS: ShellSpec[] = [
-  { rMinPc: 25,   rMaxPc: 85,   count: 4000 },
-  { rMinPc: 85,   rMaxPc: 300,  count: 5000 },
+  { rMinPc: 25,   rMaxPc: 85,   count: 3000 },
+  { rMinPc: 85,   rMaxPc: 300,  count: 4500 },
   { rMinPc: 300,  rMaxPc: 900,  count: 5000 },
   { rMinPc: 900,  rMaxPc: 2600, count: 6000 },
 ];
@@ -91,10 +94,13 @@ function shellPresence(camDist: number, spec: ShellSpec): number {
   const rMin = spec.rMinPc * WU_PER_PC;
   const rMax = spec.rMaxPc * WU_PER_PC;
   const fadeIn = smooth01(camDist, rMin * 0.12, rMin * 0.35);
-  // Fade-out completes by ~2.2× the outer edge — for the last shell that is
-  // inside the physical galaxy's own rise, so the hand-off to the galaxy
-  // starfield finishes before full-disc framing (no lingering shell ball).
-  const fadeOut = 1 - smooth01(camDist, rMax * 0.9, rMax * 2.2);
+  // Fade-out begins as soon as the camera passes the shell's outer edge and
+  // completes by ~1.5× it — the LOD hand-off: once you are OUTSIDE a shell it
+  // yields to the next tier instead of lingering as a dense inner ball. The
+  // next shell is always fully in before this one starts leaving (its fade-in
+  // completes at rMin×0.35 = this shell's rMax×0.35 < rMax×0.5). For the last
+  // shell this lands inside the physical galaxy's rise.
+  const fadeOut = 1 - smooth01(camDist, rMax * 0.5, rMax * 1.5);
   return fadeIn * fadeOut;
 }
 

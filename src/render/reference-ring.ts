@@ -29,6 +29,7 @@ let ring: Group | null = null;
 let circle: LineLoop | null = null;
 let labelSprite: Sprite | null = null;
 let lastText = '';
+let presence = 0; // smoothed show/hide (no domain-flip pop)
 
 /** Nearest of {1,2,5,10}×10ⁿ to v — a "nice" round radius. */
 function niceRound(v: number): number {
@@ -67,9 +68,14 @@ export function updateReferenceRing(domain: DomainName, camDist: number, localRo
   // ring stays at the system centre once the floating origin re-roots the world
   // (Phase 2c). R≡0 today, so localRoot is (0,0,0) — no change.
   ring.position.copy(localRoot);
+  // Smoothed presence instead of a hard visible flip: the ring (and its
+  // label) eases in/out across domain changes rather than popping.
   const show = SHOW_DOMAINS.includes(domain);
-  ring.visible = show;
-  if (!show) return;
+  presence += ((show ? 1 : 0) - presence) * 0.14;
+  ring.visible = presence > 0.004;
+  (circle.material as LineBasicMaterial).opacity = 0.5 * presence;
+  if (labelSprite) (labelSprite.material as SpriteMaterial).opacity = presence;
+  if (!show) return; // keep last size/label while fading out
 
   // Same unit regime as the HUD readout: ly at the stellar tier, AU otherwise.
   const stellar = domain === 'sector';
