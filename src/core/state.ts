@@ -11,7 +11,7 @@
 
 import { Events } from './events';
 import { gameTimeToEt } from './time';
-import { AU_TO_WU, WU_PER_PC, AU_PER_PC } from './metrics';
+import { WU_PER_PC, SYSTEM_TIER_SCALE } from './metrics';
 
 // ── Zoom Step Definitions ────────────────────────────────────────
 
@@ -155,51 +155,39 @@ export function getCamDist(z: number): number {
   const lerpDist = (z0: number, z1: number, d0: number, d1: number): number =>
     d0 + (z - z0) / (z1 - z0) * (d1 - d0);
 
-  if (z < T_SURFACE)   return lerpDist(0,             T_SURFACE,    0.6,    2.5);
-  if (z < T_LOW_ORBIT) return lerpDist(T_SURFACE,     T_LOW_ORBIT,  2.5,    6.0);
-  if (z < T_ORBIT)     return lerpDist(T_LOW_ORBIT,   T_ORBIT,      6.0,    25);
-  if (z < T_INNER_SYS) return lerpDist(T_ORBIT,       T_INNER_SYS,  25,     120);
-  if (z < T_OUTER_SYS) return lerpDist(T_INNER_SYS,   T_OUTER_SYS,  120,    1000);
-  if (z < T_HELIO)     return lerpDist(T_OUTER_SYS,   T_HELIO,      1000,   2800);
-  // Phase 2c-1: the neighbourhood→galaxy span crosses ~4 orders of magnitude
-  // (2800 WU home bubble → 3.6e7 WU full galaxy frame, the disc now a unified
-  // 1.5e7-WU radius), so a GEOMETRIC (log-uniform) curve — a constant camDist
-  // RATIO per wheel tick — is what makes the continuous-zoom dive-in smooth.
-  // 2800 at z=T_HELIO is C0-continuous with the linear segment above; 3.6e7 at
-  // z=1.0 frames the disc edge-to-edge from outside. Sector ≈ 7.7e4, arm ≈ 2.1e6
-  // fall on this curve. Phase 3 may retune endpoints; the geometric shape is the
-  // point (linear segments across 4 orders felt like jump-cuts).
-  const GAL_NEAR = 2800;  // z = T_HELIO  (home bubble + nearest neighbours)
-  const GAL_FAR = 3.6e7;  // z = 1.0      (full Milky Way disc framed from outside)
+  // System tiers: the AUTHORED framing distances (planets at sma·10 etc.), then
+  // scaled by SYSTEM_TIER_SCALE so the camera sits proportionally close to the
+  // now-true-scale system — the zoomed-in VIEW is byte-identical (whole frame
+  // ×s), but the system occupies its true size in the unified world.
+  const S = SYSTEM_TIER_SCALE;
+  if (z < T_SURFACE)   return lerpDist(0,             T_SURFACE,    0.6,    2.5) * S;
+  if (z < T_LOW_ORBIT) return lerpDist(T_SURFACE,     T_LOW_ORBIT,  2.5,    6.0) * S;
+  if (z < T_ORBIT)     return lerpDist(T_LOW_ORBIT,   T_ORBIT,      6.0,    25)  * S;
+  if (z < T_INNER_SYS) return lerpDist(T_ORBIT,       T_INNER_SYS,  25,     120) * S;
+  if (z < T_OUTER_SYS) return lerpDist(T_INNER_SYS,   T_OUTER_SYS,  120,    1000) * S;
+  if (z < T_HELIO)     return lerpDist(T_OUTER_SYS,   T_HELIO,      1000,   2800) * S;
+  // Scale-unification U2/U3: ONE continuous geometric (log-uniform) curve from
+  // the true-scale heliopause (2800·S ≈ 1.36 WU) out to the full galaxy frame
+  // (3.6e7 WU). It is C0-continuous with the scaled system segment at T_HELIO,
+  // so the whole zoom is now a single unbroken physical pull-back — the empty
+  // heliopause→neighbourhood void is REAL distance the camera crosses (the
+  // nearest stars, ~1.3 pc, frame around z≈0.76), not a scale seam. The galaxy
+  // end is unchanged (already unified). Velocity per-frame is tunable later.
+  const GAL_NEAR = 2800 * S; // z = T_HELIO — true-scale home bubble
+  const GAL_FAR = 3.6e7;     // z = 1.0     — full Milky Way disc framed from outside
   const tg = (z - T_HELIO) / (1.0 - T_HELIO);
   return GAL_NEAR * Math.pow(GAL_FAR / GAL_NEAR, tg);
 }
 
-// ── Physical view distance (scale-unification U1) ────────────────
-// ONE continuous physical distance (parsecs) for the whole zoom range —
-// the single honest ruler that replaces the per-tier readout switch. The
-// render camDist above still uses the legacy per-tier WU scales (the system
-// tier is compressed 1 AU = 10 WU until U2 sites it at true scale); this
-// function reinterprets camDist through each tier's TRUE metric and, across
-// the heliopause→neighbourhood void, sweeps continuously instead of
-// teleporting (the 279 AU → 9.5 ly jump). Below the void it reads the
-// system frame (÷ AU_TO_WU → AU → pc); above it the unified frame
-// (÷ WU_PER_PC → pc). The empty gap between the heliopause (~0.0014 pc) and
-// the nearest stars (~1.3 pc) is real space the zoom crosses fast — the
-// readout now shows that traversal instead of a discontinuity.
-const VOID_Z = 0.08; // zoom budget the physical readout spends crossing the void
+// ── Physical view distance (scale-unification) ───────────────────
+// ONE continuous physical distance (parsecs). Now that the whole world rides a
+// single metric (1 pc = WU_PER_PC everywhere, system tier included), this is
+// simply camDist ÷ WU_PER_PC — no per-tier switch, no void blend. The identity
+// AU_TO_WU_TRUE·AU_PER_PC = WU_PER_PC means the system-tier AU readouts are
+// preserved exactly (0.06 AU at surface, etc.) while sweeping continuously into
+// ly and kpc. The heliopause→neighbourhood jump (279 AU → 9.5 ly) is gone.
 export function physicalDistancePc(z: number): number {
-  const sysPc = (cz: number): number => getCamDist(cz) / AU_TO_WU / AU_PER_PC;
-  const uniPc = (cz: number): number => getCamDist(cz) / WU_PER_PC;
-  if (z <= T_HELIO) return sysPc(z);
-  if (z >= T_HELIO + VOID_Z) return uniPc(z);
-  // Log-space sweep across the void so the physical distance is continuous
-  // and monotonic through the empty gap.
-  const t = (z - T_HELIO) / VOID_Z;
-  const s = t * t * (3 - 2 * t); // smoothstep
-  const a = Math.log(sysPc(T_HELIO));
-  const b = Math.log(uniPc(T_HELIO + VOID_Z));
-  return Math.exp(a + (b - a) * s);
+  return getCamDist(z) / WU_PER_PC;
 }
 
 // ── State Shape ──────────────────────────────────────────────────

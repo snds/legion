@@ -93,7 +93,7 @@ import { initVisualEditor } from './ui/panels/visual-editor'; // ADMIN VISUAL ED
 import { requestPersistence, startAutosave } from './persistence/save-manager';
 import { STAR_SYSTEMS } from './data/star-catalog';
 import { COSMIC_OBJECTS } from './data/cosmic-objects';
-import { LY_TO_WU, KPC_TO_WU, SOL_GAL_PC } from './core/metrics';
+import { LY_TO_WU, KPC_TO_WU, SOL_GAL_PC, SYSTEM_TIER_SCALE } from './core/metrics';
 import { PlanetState, Identity, EntityType, BobState, Personality, StarSystem } from './core/components';
 
 // ── HMR State ──
@@ -532,6 +532,14 @@ async function boot(): Promise<void> {
     starLight.position.copy(_localRoot);
     worldExtras.oortCloud.position.copy(_localRoot);
     worldExtras.eclipticGrid.position.copy(_localRoot);
+    // Scale-unification U2: render the system geometry (authored at AU_TO_WU=10)
+    // at TRUE scale in the unified frame. Uniform group scale carries positions,
+    // meshes, moons, comets, belt and heliopause together, so the zoomed-in view
+    // is unchanged while the system occupies its real (tiny) size among the
+    // catalogue stars. camDist is scaled in lock-step (state.getCamDist).
+    layers.local.scale.setScalar(SYSTEM_TIER_SCALE);
+    worldExtras.oortCloud.scale.setScalar(SYSTEM_TIER_SCALE);
+    worldExtras.eclipticGrid.scale.setScalar(SYSTEM_TIER_SCALE);
     Broker.getTierRoot('regional', _regionalRoot);
     layers.regional.position.copy(_regionalRoot);
     worldExtras.sectorOrb.position.copy(_regionalRoot);

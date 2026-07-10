@@ -352,8 +352,8 @@ export class CameraController {
       // Frustum stays in sync with the new camDist range; we approximate
       // dist as camera→target so near/far don't clip mid-flight.
       const distToTarget = this.cam.position.distanceTo(this._flightTmp);
-      this.cam.near = Math.max(0.01, distToTarget * 0.001);
-      this.cam.far = Math.max(1000, distToTarget * 100);
+      this.cam.near = distToTarget * 0.001; // proportional (U4 — see orbit branch)
+      this.cam.far = distToTarget * 100;
       const targetFov = fovForDistance(distToTarget);
       this.cam.fov += (targetFov - this.cam.fov) * FOV_LERP;
       setIconFov(this.cam.fov);
@@ -428,9 +428,14 @@ export class CameraController {
     );
     this.cam.lookAt(this.focus.x, this.focus.y, this.focus.z);
 
-    // Dynamic near/far planes based on zoom
-    this.cam.near = Math.max(0.01, dist * 0.001);
-    this.cam.far = Math.max(1000, dist * 100);
+    // Dynamic near/far planes — PROPORTIONAL to camDist (no absolute floors).
+    // Scale-unification U4: camDist now spans ~1e-6 WU (a planet at true scale)
+    // to ~3.6e7 WU (the galaxy), so the old 0.01/1000 WU floors would swallow
+    // the whole scene at the system tier. Proportional planes bracket whatever
+    // is framed; the logarithmic depth buffer (renderer) keeps the ratio
+    // resolvable. ~1e5 near/far ratio, matched to the old close-tier behaviour.
+    this.cam.near = dist * 0.001;
+    this.cam.far = dist * 100;
 
     // Adaptive focal length — FOV lerps toward distance-derived target.
     // FOV_LERP (0.08) keeps the change smooth and noticeable without
