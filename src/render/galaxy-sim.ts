@@ -19,6 +19,8 @@ import {
   ShaderMaterial, SRGBColorSpace, type Texture, TextureLoader, Vector2, Vector3, WebGLRenderTarget, type WebGLRenderer,
 } from 'three';
 import { WU_PER_PC } from '../core/metrics';
+import { saveDevDefaults } from '../core/dev-defaults';
+import savedGalaxyDefaults from '../config/galaxy-defaults.json';
 import {
   samplePhysicalGalaxy, buildPhysicalGalaxyPoints, sampleDust, buildDustPoints, sampleStarGas, buildStarGasPoints,
   sampleProminentStars, RIM_MAX,
@@ -92,6 +94,9 @@ export interface GalaxyPreset {
   cloudEnabled?: boolean;
   starsEnabled?: boolean;
   dustEnabled?: boolean;
+  /** Structure sample seed — without it a saved look regenerates with the
+   *  default seed and comes back structurally DIFFERENT after reload. */
+  seed?: number;
 }
 
 /** The galaxy's tuning surface, handed to the LAB panel: the declarative section schema plus the persistence
@@ -100,17 +105,21 @@ export interface GalaxyControls {
   readonly sections: Section[];
   readonly collapseKey: string;   // localStorage key for per-section collapse state
   snapshot(): GalaxyPreset;       // the exact current look as a preset (for Save + Copy-JSON)
-  save(): void;                   // persist snapshot() to the interim localStorage key
+  /** Persist snapshot(): dev server writes the COMMITTED galaxy-defaults.json
+   *  (→ 'committed'); localStorage interim is always written too as the
+   *  fallback (prod / endpoint down → 'local'). */
+  save(): Promise<'committed' | 'local'>;
   revert(): void;                 // clear interim → back to the canonical committed look
   reseed(): void;                 // new random sample
   rebuild(): void;                // full-count resample (bake-time 'change')
   previewRebuild(): void;         // throttled preview resample (bake-time 'input')
 }
 
-/** CANONICAL committed look. Empty = ship the DEFAULT_* code look. Paste the LAB panel's Copy-JSON blob here
- *  to promote a tuned look so it ships to every browser/deploy. Precedence: DEFAULT_* → this → localStorage
- *  interim (a per-dev override that masks this until Revert). */
-export const SAVED_GALAXY_DEFAULTS: GalaxyPreset = {};
+/** CANONICAL committed look — src/config/galaxy-defaults.json, WRITTEN by the LAB panel's Save button
+ *  through the dev server's write-back endpoint (vite.config.ts). Ships to every browser/deploy and
+ *  survives restarts. Precedence: DEFAULT_* → this → localStorage interim (a per-browser fallback that
+ *  masks this until Revert). Copy-JSON remains available for manual promotion/inspection. */
+export const SAVED_GALAXY_DEFAULTS: GalaxyPreset = savedGalaxyDefaults as GalaxyPreset;
 
 const PREVIEW_COUNT = 550_000; // fast resample while dragging; full count on release
 const STORE_KEY = 'legion.galaxy.interim';   // saved interim defaults (cfg/dust/cloud)
@@ -156,6 +165,7 @@ export function createPhysicalGalaxy(opts: { renderer?: WebGLRenderer } = {}): P
   let prominentSize = 6.0;     // size multiplier (× base star sprite)
   let prominentBright = 3.0;   // brightness multiplier
   let prominentVariance = 0.7; // 0 = uniform … 1 = a few giants among many small (size+brightness spread)
+  let seed = 4;                // structure sample seed — part of the preset (a look IS its seed)
 
   // Look precedence: DEFAULT_* (above) → SAVED_GALAXY_DEFAULTS (committed canonical) → localStorage interim (a
   // per-dev Saved override). One helper drives every merge path so the field-set never drifts.
@@ -179,6 +189,7 @@ export function createPhysicalGalaxy(opts: { renderer?: WebGLRenderer } = {}): P
     if (typeof p.cloudEnabled === 'boolean') cloudEnabled = p.cloudEnabled;
     if (typeof p.starsEnabled === 'boolean') starsEnabled = p.starsEnabled;
     if (typeof p.dustEnabled === 'boolean') dustEnabled = p.dustEnabled;
+    if (typeof p.seed === 'number') seed = p.seed;
   };
   applyPreset(SAVED_GALAXY_DEFAULTS);
   try {
@@ -189,7 +200,6 @@ export function createPhysicalGalaxy(opts: { renderer?: WebGLRenderer } = {}): P
     }
   } catch { /* corrupt storage → committed defaults */ }
 
-  let seed = 4;
   let current: StarDust | null = null;
   let data: PhysicalGalaxyData;
 
@@ -459,14 +469,20 @@ export function createPhysicalGalaxy(opts: { renderer?: WebGLRenderer } = {}): P
     gasBlurEnabled, gasBlurScale, gasBlurRadius, gasGain,
     prominentEnabled, prominentCount, prominentSize, prominentBright, prominentVariance,
     cloudEnabled, starsEnabled, dustEnabled,
+    seed,
   });
-  const save = (): void => {
-    try { localStorage.setItem(STORE_KEY, JSON.stringify(snapshot())); } catch { /* storage denied — non-fatal */ }
+  const save = async (): Promise<'committed' | 'local'> => {
+    const snap = snapshot();
+    // localStorage always (instant fallback); the dev endpoint writes the
+    // COMMITTED src/config/galaxy-defaults.json — the durable save.
+    try { localStorage.setItem(STORE_KEY, JSON.stringify(snap)); } catch { /* storage denied — non-fatal */ }
+    return saveDevDefaults('galaxy', snap);
   };
   const revert = (): void => {
     try { localStorage.removeItem(STORE_KEY); } catch { /* ignore */ }
     Object.assign(cfg, DEFAULT_PHYSICAL_CONFIG);
     Object.assign(dustCfg, DEFAULT_DUST_CONFIG);
+    seed = 4;
     gasIntensity = 2.0; dustOpacity = 1.0; gasPuffKpc = 1.15; gasCore = 1.0; warp = 0; warpOffsetMyr = 0;
     gasBlurEnabled = true; gasBlurScale = 0.5; gasBlurRadius = 3.0; gasGain = 1.2;
     prominentEnabled = true; prominentCount = 4000; prominentSize = 6.0; prominentBright = 3.0; prominentVariance = 0.7;
