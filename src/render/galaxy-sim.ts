@@ -31,9 +31,12 @@ export interface PhysicalGalaxySystem {
   readonly root: Group;                 // add to a scene (standalone) or the galactic-tier frame (in-game)
   readonly cfg: PhysicalGalaxyConfig;    // live config (panel mutates this)
   readonly data: PhysicalGalaxyData;     // current sampled star set
-  /** Per frame: rigid pattern rotation (time-warp) + refresh the gas puffs' viewport-height uniform. Call
-   *  after the caller has positioned `root`. `cloudActive` is retained for host-API compatibility. */
-  update(camera: Camera, dtSeconds: number, cloudActive?: boolean): void;
+  /** Per frame: advance the differential-rotation clock + refresh the gas puffs' viewport-height uniform.
+   *  Call after the caller has positioned `root`. `cloudActive` is retained for host-API compatibility.
+   *  `gameTimeMyr` is the SIM clock (core/galactic-drift.gameTimeToMyr(Game.data.gameTime)) — the disc
+   *  streams on it, so the visible swirl and the drifting system markers share one clock; the LAB
+   *  time-warp slider accumulates a PREVIEW offset on top. */
+  update(camera: Camera, dtSeconds: number, cloudActive?: boolean, gameTimeMyr?: number): void;
   /** Render the gas ALONE (isolated on its own layer) to a half-res HDR target and gaussian-blur it, returning
    *  the blurred texture + composite gain for the host's post-processing to add over the scene. Null when the
    *  gas is hidden or blur is off (then the gas renders inline/sharp on layer 0). No-op on the main framebuffer. */
@@ -134,8 +137,9 @@ export function createPhysicalGalaxy(opts: { renderer?: WebGLRenderer } = {}): P
   const dustCfg: DustConfig = { ...DEFAULT_DUST_CONFIG };
   let gasIntensity = 2.0; // star-gas per-puff brightness (baked into the puff colour on resample)
   let dustOpacity = 1.0;  // live opacity scale (uOpacityScale)
-  let warp = 0;           // warp rate (Myr per real second); 0 = frozen "moment in time"
-  let simTimeMyr = 0;     // accumulated galactic time (Myr, float64) → the star/gas orbit uTime uniform
+  let warp = 0;           // LAB preview-warp rate (Myr per real second); 0 = follow the sim clock
+  let warpOffsetMyr = 0;  // accumulated LAB preview offset, added on top of the sim's drift clock
+  let simTimeMyr = 0;     // last applied galactic time (Myr, float64) → the star/gas orbit uTime uniform
   let cloudEnabled = true; // gas on/off (panel toggle)
   let gasPuffKpc = 1.15;   // star-gas puff DIAMETER (kpc) — bake-time; bigger ⇒ sparse puffs overlap into a smoother mist
   let gasCore = 1.0;       // core-gas volume/brightness multiplier — scales ONLY the nucleus gas, independent of gas intensity
@@ -463,7 +467,7 @@ export function createPhysicalGalaxy(opts: { renderer?: WebGLRenderer } = {}): P
     try { localStorage.removeItem(STORE_KEY); } catch { /* ignore */ }
     Object.assign(cfg, DEFAULT_PHYSICAL_CONFIG);
     Object.assign(dustCfg, DEFAULT_DUST_CONFIG);
-    gasIntensity = 2.0; dustOpacity = 1.0; gasPuffKpc = 1.15; gasCore = 1.0; warp = 0;
+    gasIntensity = 2.0; dustOpacity = 1.0; gasPuffKpc = 1.15; gasCore = 1.0; warp = 0; warpOffsetMyr = 0;
     gasBlurEnabled = true; gasBlurScale = 0.5; gasBlurRadius = 3.0; gasGain = 1.2;
     prominentEnabled = true; prominentCount = 4000; prominentSize = 6.0; prominentBright = 3.0; prominentVariance = 0.7;
     cloudEnabled = true; starsEnabled = true; dustEnabled = true;
@@ -473,13 +477,16 @@ export function createPhysicalGalaxy(opts: { renderer?: WebGLRenderer } = {}): P
   const reseed = (): void => { seed++; rebuild(); };
   const controls: GalaxyControls = { sections, collapseKey: COLLAPSE_KEY, snapshot, save, revert, reseed, rebuild, previewRebuild };
 
-  const update = (_camera: Camera, dt: number, _cloudActive = true): void => {
-    if (warp !== 0 && current) {
-      // Phase-1 galactic motion: advance the orbit clock; the star + gas vertex shaders stream each particle
-      // along its circular orbit at Ω(R) (inner faster ⇒ differential rotation). At simTime 0 → identical to
-      // the baked galaxy. simTime is a float64 accumulator; passed to float32 uTime (precise for any realistic
-      // session — omega·t stays well within float32 until ~1e6 Myr of warp).
-      simTimeMyr += warp * dt; // dt s · warp Myr/s = Myr
+  const update = (_camera: Camera, dt: number, _cloudActive = true, gameTimeMyr = 0): void => {
+    // Phase-1 galactic motion: the star + gas vertex shaders stream each particle along its circular
+    // orbit at Ω(R) (inner faster ⇒ differential rotation). At clock 0 → identical to the baked galaxy.
+    // The clock = the SIM's galactic-drift time (so the disc co-rotates with the drifting system
+    // markers) + the LAB warp slider's accumulated PREVIEW offset (Myr/s of real time; 0 = follow sim).
+    // Both terms are float64; passed to float32 uTime (precise until ~1e6 Myr — beyond any session).
+    warpOffsetMyr += warp * dt; // dt s · warp Myr/s = Myr
+    const t = gameTimeMyr + warpOffsetMyr;
+    if (current && t !== simTimeMyr) {
+      simTimeMyr = t;
       current.material.uniforms.uTime!.value = simTimeMyr;
       current.gasMat.uniforms.uTime!.value = simTimeMyr;
       current.prominentMat.uniforms.uTime!.value = simTimeMyr; // prominent stars orbit with the field

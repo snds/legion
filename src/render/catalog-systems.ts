@@ -23,6 +23,7 @@ import {
 import { loadStarSystems, type CatalogStar } from '../data/star-systems';
 import { CURATED_SYSTEMS, HOME_SYSTEM } from '../data/curated-systems';
 import { WU_PER_PC } from '../core/metrics';
+import { driftedRegionalScenePos, DRIFT_MIN_STEP_MYR } from '../core/galactic-drift';
 import { BV_COLOR_GLSL } from './star-field';
 
 const vertexShader = /* glsl */ `
@@ -64,6 +65,10 @@ export interface CatalogSystemsHandle {
   basePc: Float64Array;
   points: Points | null;
   ready: Promise<void>;
+  /** Re-derive scene positions for the galactic-drift clock (Myr). Gated
+   *  internally to DRIFT_MIN_STEP_MYR, so calling every frame is free at
+   *  normal time compression. */
+  updateDrift(tMyr: number): void;
 }
 
 /** True if a catalogue star duplicates a curated system (matched the same way
@@ -78,9 +83,26 @@ export function createCatalogSystems(): CatalogSystemsHandle {
   const group = new Group();
   group.name = 'catalog-systems';
 
+  let lastDriftMyr = 0; // positions are built at the epoch (t = 0)
+  const pcScratch = { x: 0, y: 0, z: 0 };
+  const wuScratch = { x: 0, y: 0, z: 0 };
+
   const handle: CatalogSystemsHandle = {
     group, stars: [], basePc: new Float64Array(0), points: null,
     ready: Promise.resolve(),
+    updateDrift(tMyr: number): void {
+      if (!handle.points || Math.abs(tMyr - lastDriftMyr) < DRIFT_MIN_STEP_MYR) return;
+      lastDriftMyr = tMyr;
+      const attr = handle.points.geometry.getAttribute('position') as BufferAttribute;
+      const base = handle.basePc;
+      for (let i = 0; i < handle.stars.length; i++) {
+        pcScratch.x = base[i * 3]; pcScratch.y = base[i * 3 + 1]; pcScratch.z = base[i * 3 + 2];
+        driftedRegionalScenePos(pcScratch, tMyr, wuScratch);
+        attr.setXYZ(i, wuScratch.x, wuScratch.y, wuScratch.z);
+      }
+      attr.needsUpdate = true;
+      handle.points.geometry.computeBoundingSphere();
+    },
   };
 
   handle.ready = loadStarSystems().then((all) => {
