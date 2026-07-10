@@ -185,6 +185,20 @@ async function boot(): Promise<void> {
 
   // ── 3. Camera ──
   const camCtrl = new CameraController(camera);
+  // Scale-unification U2: teach the camera to resolve a tracked LOCAL-tier body's
+  // ABSOLUTE world position directly, instead of the getWorldPosition()+R round-
+  // trip that oscillates at the true-scale local group (layers.local.scale =
+  // SYSTEM_TIER_SCALE). A local body is a direct child of layers.local, so its
+  // authored obj.position is its local-frame coordinate; the true absolute is
+  // tierOrigin(0) + anchor + obj.position·SYSTEM_TIER_SCALE. Non-local objects
+  // (regional/galactic markers ride their tier 1:1) return null → the camera
+  // falls back to the residual read + R, which reconverges fine at 1:1.
+  const _trackAnchor = new Vector3();
+  camCtrl.setAbsoluteResolver((obj, out) => {
+    if (obj.parent !== layers.local) return null;
+    getActiveAnchor(_trackAnchor);
+    return out.copy(obj.position).multiplyScalar(SYSTEM_TIER_SCALE).add(_trackAnchor);
+  });
   // Dev-mode global for console-driven testing (flight mode etc).
   if (import.meta.env?.DEV) {
     (globalThis as Record<string, unknown>).__cam = camCtrl;

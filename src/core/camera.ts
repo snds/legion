@@ -90,6 +90,46 @@ export class CameraController {
   // means "use absolute camDist"; >1 multiplies close-tier distances.
   private focusScale = 1.0;
 
+  // Scale-unification U2: resolve a tracked object's ABSOLUTE world position
+  // directly, injected by main.ts so the camera stays decoupled from the tier/
+  // anchor/scale plumbing (importing system-loader here would invert the core→
+  // render layering). Returns the absolute position in `out`, or null when the
+  // object isn't a recognised tier body — the caller then falls back to the
+  // residual→absolute round-trip (getWorldPosition() + R).
+  //
+  // WHY DIRECT: under the true-scale local tier (layers.local.scale =
+  // SYSTEM_TIER_SCALE ≈ 4.85e-4), the getWorldPosition()+R round-trip is a
+  // fragile fixed point — at ~2000× smaller scale the tracked planet's residual
+  // read + rebase failed to reconverge and the focus stuck at the object's raw
+  // unscaled local coordinate, landing the tiny system off-frame. A local body
+  // is a direct child of layers.local, so its authored obj.position IS its
+  // local-frame coordinate; the true absolute is simply
+  // tierOrigin(0) + anchor + obj.position·SYSTEM_TIER_SCALE — independent of any
+  // matrix/rebase timing, so it cannot oscillate. See scale-unification-plan.md.
+  private _absoluteResolver: ((obj: Object3D, out: Vector3) => Vector3 | null) | null = null;
+
+  /** Inject the tracked-object absolute-position resolver (see field doc). */
+  setAbsoluteResolver(fn: (obj: Object3D, out: Vector3) => Vector3 | null): void {
+    this._absoluteResolver = fn;
+  }
+
+  /**
+   * ABSOLUTE world position of a tracked object, written into `this._trackPos`.
+   * Prefers the injected direct resolver (true-scale-safe); falls back to the
+   * residual render-frame read un-rebased to absolute (getWorldPosition() + R)
+   * for objects the resolver doesn't recognise (regional/galactic markers,
+   * which ride their tier at 1:1 and reconverge fine). R≡0 when inactive.
+   */
+  private _trackedAbsolute(obj: Object3D): Vector3 {
+    const resolved = this._absoluteResolver?.(obj, this._trackPos) ?? null;
+    if (resolved) return resolved;
+    obj.getWorldPosition(this._trackPos);
+    const r = Broker.getSceneRebase(this._r);
+    return this._trackPos.set(
+      this._trackPos.x + r.x, this._trackPos.y + r.y, this._trackPos.z + r.z,
+    );
+  }
+
   // World-space velocity tracking — frame-by-frame derivative of camera
   // position. Consumers (star streak shader, motion-blur effects) read this
   // each frame to compute per-feature visual response to camera motion.
@@ -304,14 +344,10 @@ export class CameraController {
     this.trackedObject = obj;
     if (obj) {
       // Seed the focus target immediately so the first frame doesn't
-      // lurch from wherever the camera previously was.
-      obj.getWorldPosition(this._trackPos);
-      // Un-residual the render-frame position to ABSOLUTE (floating origin; see
-      // the tracking refresh in update()). R≡0 when inactive.
-      const rb = Broker.getSceneRebase(this._r);
-      Game.data.camFocusTarget = {
-        x: this._trackPos.x + rb.x, y: this._trackPos.y + rb.y, z: this._trackPos.z + rb.z,
-      };
+      // lurch from wherever the camera previously was. ABSOLUTE frame — via the
+      // direct resolver at true scale, else the residual+R round-trip.
+      const abs = this._trackedAbsolute(obj);
+      Game.data.camFocusTarget = { x: abs.x, y: abs.y, z: abs.z };
       // Derive close-tier scale factor from the body's geometry radius.
       const r = (obj.userData?.bodyRadius as number | undefined) ?? FOCUS_REFERENCE_RADIUS;
       this.focusScale = Math.max(0.1, r / FOCUS_REFERENCE_RADIUS);
@@ -381,17 +417,13 @@ export class CameraController {
     // If the camera is locked onto an object, refresh focus target from
     // its current world position before the focus lerp runs.
     if (this.trackedObject) {
-      // getWorldPosition() is in the RE-ROOTED render frame (shifted by −R under
-      // the floating origin); add R back so camFocusTarget is ABSOLUTE — the frame
-      // the orbit math + the rebase work in. The R that re-rooted the graph last
-      // frame cancels exactly, so a tracked camera does NOT oscillate. (three.js
-      // composes matrixWorld in JS float64, and the residual is small, so the
-      // read is precise.) R≡0 when inactive ⇒ identity.
-      this.trackedObject.getWorldPosition(this._trackPos);
-      const r = Broker.getSceneRebase(this._r);
-      data.camFocusTarget = {
-        x: this._trackPos.x + r.x, y: this._trackPos.y + r.y, z: this._trackPos.z + r.z,
-      };
+      // Refresh the focus target from the tracked object's ABSOLUTE world
+      // position (the frame the orbit math + rebase work in). The direct
+      // resolver computes it from the authored local coordinate + anchor + scale
+      // (true-scale-safe, no oscillation); regional/galactic markers fall back
+      // to the residual read + R. R≡0 when the floating origin is inactive.
+      const abs = this._trackedAbsolute(this.trackedObject);
+      data.camFocusTarget = { x: abs.x, y: abs.y, z: abs.z };
     }
 
     // ── Orbit Angle Interpolation (lerp 0.1) ──
