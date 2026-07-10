@@ -238,15 +238,29 @@ class VisualParamsStore {
     // visual-defaults.json, written by "Save as default" via the dev
     // endpoint — survives restarts/browsers/deploys) → per-browser
     // localStorage tweaks (PERSIST_KEYS only).
-    this.data = { ...DEFAULTS, ...(savedVisualDefaults as Partial<VisualParams>) };
-    // Restore persisted user graphics settings over the defaults.
+    //
+    // STALENESS RULE: both payloads carry a `_savedAt` stamp. localStorage
+    // only overrides when it is NEWER than the committed promotion —
+    // otherwise a browser that saved settings months ago silently masks a
+    // freshly-promoted default forever (bloom/vignette did exactly this).
+    // Tweaks made AFTER a promotion still stick (they get a fresh stamp).
+    const committed = savedVisualDefaults as Partial<VisualParams> & { _savedAt?: number };
+    const committedAt = committed._savedAt ?? 0;
+    this.data = { ...DEFAULTS };
+    for (const k of Object.keys(DEFAULTS) as (keyof VisualParams)[]) {
+      if (committed[k] !== undefined) (this.data[k] as unknown) = committed[k];
+    }
     try {
       const raw = typeof localStorage !== 'undefined' && localStorage.getItem(STORAGE_KEY);
       if (raw) {
-        const saved = JSON.parse(raw) as Partial<VisualParams>;
-        for (const k of PERSIST_KEYS) {
-          if (saved[k] !== undefined) (this.data[k] as unknown) = saved[k];
+        const saved = JSON.parse(raw) as Partial<VisualParams> & { _savedAt?: number };
+        if ((saved._savedAt ?? 0) >= committedAt) {
+          for (const k of PERSIST_KEYS) {
+            if (saved[k] !== undefined) (this.data[k] as unknown) = saved[k];
+          }
         }
+        // else: stale (pre-promotion) browser save — dropped; the next
+        // persist() rewrites it with current values and a fresh stamp.
       }
     } catch { /* ignore corrupt storage */ }
   }
@@ -254,8 +268,9 @@ class VisualParamsStore {
   private persist(): void {
     try {
       if (typeof localStorage === 'undefined') return;
-      const out: Partial<VisualParams> = {};
+      const out: Partial<VisualParams> & { _savedAt?: number } = {};
       for (const k of PERSIST_KEYS) (out[k] as unknown) = this.data[k];
+      out._savedAt = Date.now();
       localStorage.setItem(STORAGE_KEY, JSON.stringify(out));
     } catch { /* storage full / denied — non-fatal */ }
   }
@@ -299,12 +314,16 @@ class VisualParamsStore {
    *  for untouched params. Resolves 'committed' on success, 'local' in prod
    *  or if the endpoint is unreachable. */
   async saveAsDefaults(): Promise<'committed' | 'local'> {
-    const diff: Partial<VisualParams> = {};
+    const diff: Partial<VisualParams> & { _savedAt?: number } = {};
     const keys = Object.keys(DEFAULTS) as (keyof VisualParams)[];
     for (const k of keys) {
       if (this.data[k] !== DEFAULTS[k]) (diff[k] as unknown) = this.data[k];
     }
-    return saveDevDefaults('visual', diff);
+    diff._savedAt = Date.now();
+    const where = await saveDevDefaults('visual', diff);
+    // Restamp this browser's own storage so it stays newer than the promotion.
+    if (where === 'committed') this.persist();
+    return where;
   }
 
   exportJSON(): string {

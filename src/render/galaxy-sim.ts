@@ -192,9 +192,13 @@ export function createPhysicalGalaxy(opts: { renderer?: WebGLRenderer } = {}): P
     if (typeof p.seed === 'number') seed = p.seed;
   };
   applyPreset(SAVED_GALAXY_DEFAULTS);
+  // STALENESS RULE (matches visual-params): the localStorage interim only
+  // overrides when NEWER than the committed promotion — a months-old browser
+  // save must not silently mask a freshly-promoted galaxy-defaults.json.
+  const committedAt = (savedGalaxyDefaults as { _savedAt?: number })._savedAt ?? 0;
   try {
-    const j = JSON.parse(localStorage.getItem(STORE_KEY) ?? 'null') as (GalaxyPreset & { cloud?: { intensity?: number } }) | null;
-    if (j) {
+    const j = JSON.parse(localStorage.getItem(STORE_KEY) ?? 'null') as (GalaxyPreset & { cloud?: { intensity?: number }; _savedAt?: number }) | null;
+    if (j && (j._savedAt ?? 0) >= committedAt) {
       if (typeof j.gasIntensity !== 'number' && typeof j.cloud?.intensity === 'number') j.gasIntensity = j.cloud.intensity; // back-compat
       applyPreset(j);
     }
@@ -472,7 +476,8 @@ export function createPhysicalGalaxy(opts: { renderer?: WebGLRenderer } = {}): P
     seed,
   });
   const save = async (): Promise<'committed' | 'local'> => {
-    const snap = snapshot();
+    // Stamped so the staleness rule can order this against future promotions.
+    const snap = { ...snapshot(), _savedAt: Date.now() };
     // localStorage always (instant fallback); the dev endpoint writes the
     // COMMITTED src/config/galaxy-defaults.json — the durable save.
     try { localStorage.setItem(STORE_KEY, JSON.stringify(snap)); } catch { /* storage denied — non-fatal */ }
