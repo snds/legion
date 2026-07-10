@@ -23,6 +23,7 @@ import {
   AdditiveBlending, BufferAttribute, BufferGeometry, Group, Points, ShaderMaterial,
 } from 'three';
 import { WU_PER_PC } from '../core/metrics';
+import { VP } from './visual-params';
 import { HOME_GAL_PC } from './sector/sector';
 import { emissionAtGalPc, armPhaseAt } from './sector/sector-stars';
 import { mulberry32, seedFrom } from '../data/system-gen';
@@ -225,10 +226,14 @@ export function createStarShells(): StarShellsHandle {
     group,
     ready,
     updatePresence(camDist: number): void {
+      // Legacy progressive shells are OFF by default (Phase 5a) — the catalog +
+      // streamed sector particles carry the neighbourhood into the volume. The
+      // Settings toggle (starShellsEnabled) brings them back for comparison.
+      const enabled = VP.get('starShellsEnabled');
       for (let s = 0; s < SHELLS.length; s++) {
         const mat = materials[s];
         if (!mat) continue;
-        const p = shellPresence(camDist, SHELLS[s]);
+        const p = enabled ? shellPresence(camDist, SHELLS[s]) : 0;
         mat.uniforms.uOpacity.value = p;
         (group.children[s] as Points).visible = p > 0.004;
       }
