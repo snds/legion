@@ -6,15 +6,17 @@
 
 import {
   WebGLRenderer, Scene, PerspectiveCamera,
-  ShaderMaterial, Vector2,
+  ShaderMaterial, type Texture, type WebGLRenderTarget, Vector2,
 } from 'three';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { Pass } from 'three/examples/jsm/postprocessing/Pass.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { SMAAPass } from 'three/examples/jsm/postprocessing/SMAAPass.js';
 import { KarisBloomPass } from './bloom';
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { AutoExposurePass } from './auto-exposure';
+import { GALAXY_PROMINENT_LAYER, GALAXY_DUST_LAYER } from './galaxy-sim';
 import { VP } from './visual-params';
 
 // ── NaN Sanitization Shader ──────────────────────────────────────
@@ -231,6 +233,61 @@ const VignetteShader = {
   `,
 };
 
+// ── Galaxy gas-blur composite ────────────────────────────────────
+// Adds the physical galaxy's offscreen-blurred gas texture over the scene BEFORE tone-mapping. A value-preserving
+// exp tone-map on the gas keeps the dense core's amber hue as it compresses (so it doesn't blow to white). The
+// pass is disabled unless a gas texture is set for the frame (setGasBlur) — inert on every non-galaxy view.
+const GasCompositeShader = {
+  uniforms: {
+    tDiffuse: { value: null as Texture | null },
+    uGasTex: { value: null as Texture | null },
+    uGain: { value: 1.0 },
+  },
+  vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+  fragmentShader: `
+    uniform sampler2D tDiffuse; uniform sampler2D uGasTex; uniform float uGain; varying vec2 vUv;
+    void main() {
+      vec4 scene = texture2D(tDiffuse, vUv);
+      vec3 g = texture2D(uGasTex, vUv).rgb * uGain;
+      float v = max(max(g.r, g.g), g.b);
+      float t = 1.0 - exp(-v);          // value-preserving compression: amber core stays amber, not white
+      g = v > 1e-5 ? g * (t / v) : g;
+      gl_FragColor = vec4(scene.rgb + g, scene.a);
+    }`,
+};
+
+// ── Layer-overlay pass ───────────────────────────────────────────
+// Renders ONE camera render-layer's objects over the composer's current buffer, IN PLACE (needsSwap=false,
+// no clear), so their own material blending composites them — additive prominent stars over the gas, then dust
+// NormalBlending darkening everything. Placed AFTER the gas composite + BEFORE tone-mapping, so those features
+// read against the bright gas instead of being washed out by it. Gated off unless the galaxy disc is shown.
+class LayerOverlayPass extends Pass {
+  private readonly scene: Scene;
+  private readonly camera: PerspectiveCamera;
+  private readonly layer: number;
+  constructor(scene: Scene, camera: PerspectiveCamera, layer: number) {
+    super();
+    this.scene = scene;
+    this.camera = camera;
+    this.layer = layer;
+    this.needsSwap = false; // draw over the read buffer; next pass keeps reading it
+    this.enabled = false;   // the galaxy loop enables this only at galaxy tier
+  }
+  render(renderer: WebGLRenderer, _writeBuffer: WebGLRenderTarget, readBuffer: WebGLRenderTarget): void {
+    const prevMask = this.camera.layers.mask;
+    const prevAutoClear = renderer.autoClear;
+    const prevBg = this.scene.background;          // CRITICAL: null the sky so render() doesn't repaint the
+    this.scene.background = null;                  // background over the composited buffer (wiping stars/gas)
+    this.camera.layers.set(this.layer);           // render ONLY this galaxy layer
+    renderer.autoClear = false;                    // composite onto the existing scene+gas
+    renderer.setRenderTarget(this.renderToScreen ? null : readBuffer);
+    renderer.render(this.scene, this.camera);
+    renderer.autoClear = prevAutoClear;
+    this.camera.layers.mask = prevMask;            // restore for the following passes
+    this.scene.background = prevBg;
+  }
+}
+
 // ── Composer Setup ───────────────────────────────────────────────
 
 export interface PostProcessingContext {
@@ -243,6 +300,10 @@ export interface PostProcessingContext {
   colorGradingPass: ShaderPass;
   resize: (w: number, h: number) => void;
   render: (elapsedTime?: number) => void;
+  /** Feed the galaxy's blurred-gas texture (or null to disable) for this frame's composite. */
+  setGasBlur: (tex: Texture | null, gain: number) => void;
+  /** Enable/disable the galaxy overlay passes (prominent stars + dust-last). On only at galaxy tier. */
+  setGalaxyOverlays: (show: boolean) => void;
   /** Index where lens flare pass should be inserted (after bloom, before vignette) */
   lensFlareInsertIndex: number;
 }
@@ -260,6 +321,20 @@ export function createPostProcessing(
   // 1. Render pass
   const renderPass = new RenderPass(scene, camera);
   composer.addPass(renderPass);
+
+  // 1.25. Galaxy gas-blur composite (right after the scene, before exposure/bloom/tone-map) — inert unless the
+  // galaxy feeds it a blurred-gas texture each frame via setGasBlur().
+  const gasCompositePass = new ShaderPass(GasCompositeShader);
+  gasCompositePass.enabled = false;
+  composer.addPass(gasCompositePass);
+
+  // 1.5/1.75. Galaxy overlays rendered OVER the composited gas (so they aren't washed out by it): prominent
+  // stars (additive, they punch through), then dust LAST (extinction darkens the composited stars+gas → lanes
+  // read). Both inert unless setGalaxyOverlays(true) at galaxy tier. Layers match galaxy-sim's assignments.
+  const prominentStarsPass = new LayerOverlayPass(scene, camera, GALAXY_PROMINENT_LAYER);
+  composer.addPass(prominentStarsPass);
+  const dustOverlayPass = new LayerOverlayPass(scene, camera, GALAXY_DUST_LAYER);
+  composer.addPass(dustOverlayPass);
 
   // 1.5. Auto-exposure metering tap — reads the raw scene HDR and drives
   // renderer.toneMappingExposure (consumed by the AgX OutputPass). The VP
@@ -366,6 +441,16 @@ export function createPostProcessing(
     filmGrainPass,
     colorGradingPass,
     resize,
+    setGasBlur: (tex: Texture | null, gain: number) => {
+      const u = (gasCompositePass.material as ShaderMaterial).uniforms;
+      u.uGasTex.value = tex;
+      u.uGain.value = gain;
+      gasCompositePass.enabled = tex !== null;
+    },
+    setGalaxyOverlays: (show: boolean) => {
+      prominentStarsPass.enabled = show;
+      dustOverlayPass.enabled = show;
+    },
     render: (elapsedTime?: number) => {
       // Update film grain time uniform for animated noise
       if (elapsedTime !== undefined) {

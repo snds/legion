@@ -157,14 +157,6 @@ async function boot(): Promise<void> {
     return;
   }
 
-  // ── NEW physically-generated galaxy (?galaxy-sim) — the global density-wave star set (no sectors, no
-  // image), standalone, to judge the new generation before wiring it into the engine's galaxy tier. ──
-  if (new URLSearchParams(location.search).has('galaxy-sim')) {
-    const { bootGalaxySim } = await import('./render/galaxy-sim');
-    bootGalaxySim(renderCtx, () => _hmr.bootGen === myGen);
-    return;
-  }
-
   // ── Independent galaxy PAINT MODE (?paint-mode) — the standalone painting-tool shell: only the
   // full-galaxy build-out + a free-fly camera, none of the system-tier streaming/transitions. ──
   if (new URLSearchParams(location.search).has('paint-mode')) {
@@ -231,7 +223,6 @@ async function boot(): Promise<void> {
   Theme.apply();
   initDetailPanel();
   initSettingsPanel();
-  initGalaxyLabPanel(); // TEMPORARY galaxy tuning surface
   initRosterPanel();
   SelectionPanels.init();
   initDock();
@@ -265,7 +256,11 @@ async function boot(): Promise<void> {
   // ── 8. World Population ──
   const params = new URLSearchParams(window.location.search);
   const systemId = (params.get('system') === 'sol' ? 'sol' : 'ee') as 'ee' | 'sol';
-  const worldExtras = populateWorld(sceneCtx, systemId);
+  const worldExtras = populateWorld(sceneCtx, systemId, renderCtx.renderer);
+
+  // Galaxy LAB panel — the in-game tuning surface, driven by the physical galaxy's control schema. Null under
+  // ?proto-buildout (no physical galaxy) → the panel/button simply don't mount.
+  initGalaxyLabPanel(worldExtras.physGalaxy?.controls ?? null);
 
   // Sector tour (Inc 6) — flag-gated node-to-node fly-through. __sectorTour.start() flies
   // the camera between the sector's systems in nearest-neighbour order (looping), so you
@@ -508,10 +503,20 @@ async function boot(): Promise<void> {
     if (worldExtras.sectorFill) updateSectorFill(worldExtras.sectorFill); // capped corridor fill
     if (worldExtras.galaxyBuildout) updateGalaxyBuildout(worldExtras.galaxyBuildout); // full-galaxy fill
     if (worldExtras.physGalaxy) {
-      // Ride the galactic-tier floating origin (same centre as the legacy galaxy group), then rotate the
-      // pattern + refresh the cloud's world→local matrix. Gas raymarch only near galaxy scale.
-      worldExtras.physGalaxy.root.position.copy(getGalaxyOffset());
-      worldExtras.physGalaxy.update(camera, frameTime, Game.data.camDist > 1e6);
+      // Show the physical disc only near galaxy scale (crossfade > 0), so it never draws over the system/surface
+      // tiers; when shown, ride the galactic-tier floating origin and advance the star/gas/dust motion, then
+      // render the gas alone through the blur (offscreen) and hand it to the post chain to composite this frame.
+      const showDisc = getGalaxyCrossfade(Game.data.camDist) > 0;
+      worldExtras.physGalaxy.root.visible = showDisc;
+      postCtx.setGalaxyOverlays(showDisc); // prominent-stars + dust-last passes (rendered over the gas)
+      if (showDisc) {
+        worldExtras.physGalaxy.root.position.copy(getGalaxyOffset());
+        worldExtras.physGalaxy.update(camera, frameTime, Game.data.camDist > 1e6);
+        const gb = worldExtras.physGalaxy.renderGasBlur(renderCtx.renderer, scene, camera);
+        postCtx.setGasBlur(gb?.texture ?? null, gb?.gain ?? 1);
+      } else {
+        postCtx.setGasBlur(null, 1);
+      }
     }
 
     // 7. Audio
@@ -625,7 +630,7 @@ interface WorldExtras {
   physGalaxy: PhysicalGalaxySystem | null;
 }
 
-function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol'): WorldExtras {
+function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol', renderer: import('three').WebGLRenderer): WorldExtras {
   // Phase 2b: loose top-level objects (oort/grid/ring/galaxy/sector-orb) ride
   // sceneRoot, not the bare scene, so the frame broker can re-root them in 2c.
   const { sceneRoot, layers, renderObjectMap } = ctx;
@@ -863,13 +868,22 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol'): WorldExtras {
   // tier floating origin (re-rooted each frame in the loop), at scale 1.0 since the physical positions are
   // ALREADY in the unified frame (1 kpc = 1e6 WU) — no ×GALAXY_MODEL_SCALE. The full tuning panel rides
   // along so the look can keep being refined in-context.
-  const physGalaxy = params.has('proto-galaxy') ? createPhysicalGalaxy({ withPanel: true }) : null;
+  // PHYSICAL GALAXY — the DEFAULT in-game disc visual (no flag needed). At construction createPhysicalGalaxy
+  // applies the committed SAVED_GALAXY_DEFAULTS preset then overlays any per-browser Saved look from localStorage,
+  // so tuning in the LAB panel persists across refreshes AND dev-server restarts (localStorage is origin-keyed),
+  // while a promoted preset ships canonically. ?proto-buildout opts OUT (that legacy comparison owns the disc
+  // view). The legacy createGalaxy() stays untouched (sky-cube bake source + Sgr A* + system markers + grid +
+  // labels); setDiscVisual(false) hides only its disc EMISSION. Pass the renderer so update() keeps the gas
+  // puffs' uViewportH in sync on resize. The tuning surface is the in-game LAB panel (initGalaxyLabPanel).
+  const physGalaxy = params.has('proto-buildout')
+    ? null
+    : createPhysicalGalaxy({ renderer });
   if (physGalaxy) {
     physGalaxy.root.position.copy(getGalaxyOffset()); // galactic-tier centre; re-rooted per frame in the loop
     sceneRoot.add(physGalaxy.root);
-    setDiscVisual(false); // the physical galaxy IS the disc visual now
+    setDiscVisual(false); // the physical galaxy IS the disc visual now (legacy disc emission hidden)
     (globalThis as Record<string, unknown>).__physGalaxy = physGalaxy;
-    console.info('[proto-galaxy] physical galaxy active — legacy disc hidden; tune via the panel');
+    console.info('[galaxy] physical galaxy = default disc (canonical preset + localStorage override; tune via LAB)');
   }
 
   // ── Sector orb (Homeworld-style sensor bubble, visible at sector tier) ──

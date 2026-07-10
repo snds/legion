@@ -21,6 +21,10 @@ export const galacticStarsVertexShader = /* glsl */ `
   // Per-star spiral-arm crestiness (0 gap … 1 crest). Only meaningful for sector stars; the disc
   // geometry omits it (defaults to 0). Drives the arm-phase DEBUG recolour below.
   attribute float aCrest;
+  // Phase-1 galactic-motion orbit: (R0_kpc, phi0_rad, y0_kpc, omega_radPerMyr). Azimuth streams as
+  // phi0 + omega*uTime; at uTime=0 this reproduces the baked position exactly.
+  attribute vec4 aOrbit;
+  uniform float uTime;     // Myr (0 = frozen; advanced by the time-warp slider)
   uniform float uArmDebug; // 0 = normal colour, 1 = recolour by arm phase (debug topology view)
   varying vec3 vColor;
   // Per-vertex screen-space streak direction (normalized) + amount (0..MAX).
@@ -50,7 +54,13 @@ export const galacticStarsVertexShader = /* glsl */ `
     // seam continuity is obvious. uArmDebug lerps between the true colour and the topology ramp.
     vec3 armCol = mix(vec3(0.9, 0.25, 0.18), vec3(0.30, 0.85, 1.0), aCrest);
     vColor = mix(color, armCol, uArmDebug);
-    vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+    // Galactic motion (Phase 1): stream each star along its circular guiding orbit at Ω(R). Inner stars have
+    // larger omega ⇒ differential rotation. Trig runs in kpc (O(1-16)); ×KPC_TO_WU (1e6) LAST so ±1e7 WU
+    // never enters cos/sin (float precision). At uTime=0, phi=phi0 ⇒ this equals the baked position.
+    const float KPC_TO_WU = 1000000.0;
+    float phi = aOrbit.y + aOrbit.w * uTime;
+    vec3 orbitPos = vec3(aOrbit.x * cos(phi), aOrbit.z, aOrbit.x * sin(phi)) * KPC_TO_WU;
+    vec4 mvPosition = modelViewMatrix * vec4(orbitPos, 1.0);
 
     // Transform world-space camera velocity into view space. modelViewMatrix
     // is V * M; for direction transforms we want only the rotational part,

@@ -1,148 +1,23 @@
 // ═══════════════════════════════════════════════════════════════════
-// GALAXY LAB PANEL — dedicated dev control surface (TEMPORARY)
+// GALAXY LAB PANEL — the in-game control surface for the physical galaxy.
 //
-// A floating button + dialog of live sliders for nudging the galaxy
-// visuals at the galaxy tier (where headless verification can't reach).
-// Self-contained DOM + inline styles so it can be removed in one delete:
-// drop this file, its initGalaxyLabPanel() call in main.ts, and re-bake
-// the chosen values into galaxy-density.ts. See galaxy-lab.ts.
+// A floating '🌌 LAB' button + dialog that renders the galaxy system's
+// declarative control schema (createPhysicalGalaxy().controls). It owns
+// ALL DOM; the galaxy owns the schema + persistence logic. Tuning here
+// mutates the live galaxy; Save writes the per-browser interim override,
+// Copy-JSON emits the payload to promote into SAVED_GALAXY_DEFAULTS
+// (galaxy-sim.ts) so a look ships canonically.
 // ═══════════════════════════════════════════════════════════════════
 
-import {
-  GALAXY_TUNE, GALAXY_TUNE_DEFAULTS, applyGalaxyTune, persistGalaxyTune,
-  type GalaxyTune,
-} from '../render/galaxy-lab';
-
-interface Knob {
-  key: keyof GalaxyTune;
-  label: string;
-  min: number; max: number; step: number;
-  group: string;
-  hint?: string;
-}
-
-const KNOBS: Knob[] = [
-  // ── Arms ──
-  { key: 'armContrast',  label: 'Arm contrast',       min: 0,      max: 3,    step: 0.05,   group: 'ARMS', hint: 'arm brightness vs inter-arm' },
-  { key: 'armSharp',     label: 'Arm definition',     min: 0.5,    max: 6,    step: 0.1,    group: 'ARMS', hint: 'higher = thinner, sharper arms' },
-  { key: 'armFloor',     label: 'Arm wispiness',      min: 0,      max: 1,    step: 0.02,   group: 'ARMS', hint: 'lower = more broken/wispy' },
-  { key: 'armScale',     label: 'Arm clump scale',    min: 100,    max: 2000, step: 20,     group: 'ARMS', hint: 'size of the FBM clumps (WU)' },
-  // ── Disc ──
-  { key: 'discWidth',    label: 'Disc thickness',     min: 0.3,    max: 2.5,  step: 0.05,   group: 'DISC', hint: 'vertical flatness (×)' },
-  { key: 'bulgeAmp',     label: 'Bulge brightness',   min: 0,      max: 3,    step: 0.05,   group: 'DISC', hint: 'central glow (de-blob)' },
-  { key: 'dustStrength', label: 'Dust strength',      min: 0,      max: 4,    step: 0.05,   group: 'DISC', hint: 'dark lanes / inter-arm gaps' },
-  { key: 'emission',     label: 'Overall brightness', min: 0.0002, max: 0.01, step: 0.0002, group: 'DISC', hint: 'volume emission scale' },
-  // ── Features ──
-  { key: 'hiiAmp',       label: 'HII knot glow',      min: 0,      max: 3,    step: 0.05,   group: 'FEATURES', hint: 'in-model star-forming knots' },
-  { key: 'nebulaOpacity',label: 'Nebula opacity',     min: 0,      max: 2,    step: 0.05,   group: 'FEATURES', hint: 'billboard nebulae' },
-  { key: 'nebulaSize',   label: 'Nebula size',        min: 0.2,    max: 3,    step: 0.05,   group: 'FEATURES', hint: 'billboard nebulae' },
-  { key: 'particleSize', label: 'Star particle size', min: 0.2,    max: 3,    step: 0.05,   group: 'FEATURES', hint: 'galaxy star points' },
-];
-
-function fmt(v: number): string {
-  if (Math.abs(v) < 0.01 && v !== 0) return v.toExponential(1);
-  return Number.isInteger(v) ? String(v) : v.toFixed(2);
-}
+import type { GalaxyControls, Ctrl, Toggle } from '../render/galaxy-sim';
 
 let panelEl: HTMLElement | null = null;
 
-function syncSliders(root: HTMLElement): void {
-  for (const k of KNOBS) {
-    const slider = root.querySelector<HTMLInputElement>(`#gl-${k.key}`);
-    const val = root.querySelector<HTMLElement>(`#gl-${k.key}-val`);
-    if (slider) slider.value = String(GALAXY_TUNE[k.key]);
-    if (val) val.textContent = fmt(GALAXY_TUNE[k.key]);
-  }
-}
+/** Mount the LAB button + dialog driving `controls`. Null (e.g. ?proto-buildout, no physical galaxy) → no-op. */
+export function initGalaxyLabPanel(controls: GalaxyControls | null): void {
+  if (typeof document === 'undefined' || document.getElementById('galaxy-lab-btn') || !controls) return;
 
-function buildPanel(): HTMLElement {
-  const panel = document.createElement('div');
-  panel.id = 'galaxy-lab';
-  panel.style.cssText = [
-    'position:fixed', 'right:16px', 'bottom:64px', 'width:300px',
-    'max-height:72vh', 'overflow-y:auto', 'z-index:9999', 'display:none',
-    'background:rgba(8,10,18,0.94)', 'border:1px solid rgba(120,150,220,0.35)',
-    'border-radius:8px', 'padding:12px 14px',
-    'font-family:ui-monospace,Menlo,monospace', 'color:#cdd6f0',
-    'box-shadow:0 8px 32px rgba(0,0,0,0.6)', 'backdrop-filter:blur(6px)',
-  ].join(';');
-
-  let h = `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-      <div style="font-size:12px;letter-spacing:1px;font-weight:600;color:#aab8e8">🌌 GALAXY LAB</div>
-      <button id="gl-close" style="background:none;border:none;color:#8893b8;font-size:14px;cursor:pointer">✕</button>
-    </div>
-    <div style="font-size:10px;opacity:0.55;line-height:1.4;margin-bottom:10px">
-      Zoom all the way out to the galaxy tier to see changes. Tune, then
-      <b>Copy values</b> and paste them back to bake into the model.
-    </div>`;
-
-  let lastGroup = '';
-  for (const k of KNOBS) {
-    if (k.group !== lastGroup) {
-      h += `<div style="font-size:10px;letter-spacing:1px;color:#7f8cc0;margin:10px 0 4px;border-bottom:1px solid rgba(120,150,220,0.18);padding-bottom:2px">${k.group}</div>`;
-      lastGroup = k.group;
-    }
-    h += `<div style="margin:6px 0">
-        <div style="display:flex;justify-content:space-between;font-size:10px;margin-bottom:2px">
-          <span title="${k.hint ?? ''}">${k.label}</span>
-          <span id="gl-${k.key}-val" style="opacity:0.7">${fmt(GALAXY_TUNE[k.key])}</span>
-        </div>
-        <input type="range" id="gl-${k.key}" min="${k.min}" max="${k.max}" step="${k.step}"
-          value="${GALAXY_TUNE[k.key]}" style="width:100%;accent-color:#7f9cff;height:14px">
-      </div>`;
-  }
-
-  h += `<div style="display:flex;gap:6px;margin-top:12px">
-      <button id="gl-copy" style="flex:1;font-size:10px;padding:6px;background:rgba(90,120,220,0.25);color:#cdd6f0;border:1px solid rgba(120,150,220,0.4);border-radius:4px;cursor:pointer">Copy values</button>
-      <button id="gl-reset" style="flex:1;font-size:10px;padding:6px;background:rgba(60,60,80,0.4);color:#cdd6f0;border:1px solid rgba(120,130,160,0.3);border-radius:4px;cursor:pointer">Reset</button>
-    </div>`;
-
-  panel.innerHTML = h;
-
-  // Wire sliders
-  for (const k of KNOBS) {
-    const slider = panel.querySelector<HTMLInputElement>(`#gl-${k.key}`);
-    const val = panel.querySelector<HTMLElement>(`#gl-${k.key}-val`);
-    if (!slider) continue;
-    slider.oninput = () => {
-      const v = parseFloat(slider.value);
-      GALAXY_TUNE[k.key] = v;
-      if (val) val.textContent = fmt(v);
-      applyGalaxyTune();
-      persistGalaxyTune();
-    };
-  }
-
-  // Close
-  const closeBtn = panel.querySelector<HTMLButtonElement>('#gl-close');
-  if (closeBtn) closeBtn.onclick = () => { panel.style.display = 'none'; };
-
-  // Copy values → clipboard (JSON the user can paste back to me)
-  const copyBtn = panel.querySelector<HTMLButtonElement>('#gl-copy');
-  if (copyBtn) copyBtn.onclick = () => {
-    const json = JSON.stringify(GALAXY_TUNE, null, 2);
-    void navigator.clipboard?.writeText(json).then(
-      () => { copyBtn.textContent = 'Copied!'; setTimeout(() => { copyBtn.textContent = 'Copy values'; }, 1200); },
-      () => { copyBtn.textContent = 'Copy failed'; setTimeout(() => { copyBtn.textContent = 'Copy values'; }, 1200); },
-    );
-  };
-
-  // Reset to model defaults
-  const resetBtn = panel.querySelector<HTMLButtonElement>('#gl-reset');
-  if (resetBtn) resetBtn.onclick = () => {
-    Object.assign(GALAXY_TUNE, GALAXY_TUNE_DEFAULTS);
-    applyGalaxyTune();
-    persistGalaxyTune();
-    syncSliders(panel);
-  };
-
-  return panel;
-}
-
-export function initGalaxyLabPanel(): void {
-  if (typeof document === 'undefined' || document.getElementById('galaxy-lab-btn')) return;
-
-  panelEl = buildPanel();
+  panelEl = buildPanel(controls);
   document.body.appendChild(panelEl);
 
   const btn = document.createElement('button');
@@ -159,10 +34,166 @@ export function initGalaxyLabPanel(): void {
   ].join(';');
   btn.onclick = () => {
     if (!panelEl) return;
-    const open = panelEl.style.display !== 'none';
-    if (open) { panelEl.style.display = 'none'; return; }
-    syncSliders(panelEl); // reflect any persisted/reset values
-    panelEl.style.display = 'block';
+    panelEl.style.display = panelEl.style.display === 'none' ? 'block' : 'none';
   };
   document.body.appendChild(btn);
+}
+
+function fmt(c: Ctrl, v: number): string {
+  return `${Number.isInteger(c.step) && !c.scale ? v : +v.toFixed(2)}${c.unit ?? ''}`;
+}
+
+function buildPanel(controls: GalaxyControls): HTMLElement {
+  const collapsed = new Set<string>((() => {
+    try { return JSON.parse(localStorage.getItem(controls.collapseKey) ?? '[]') as string[]; } catch { return []; }
+  })());
+  const persistCollapse = (): void => {
+    try { localStorage.setItem(controls.collapseKey, JSON.stringify([...collapsed])); } catch { /* ignore */ }
+  };
+
+  const panel = document.createElement('div');
+  panel.id = 'galaxy-lab';
+  panel.style.cssText = 'position:fixed;right:16px;bottom:64px;z-index:9999;display:none;width:224px;'
+    + 'max-height:calc(100vh - 96px);overflow:auto;padding:10px 12px;'
+    + 'background:rgba(12,15,20,0.94);border:1px solid #2a3340;border-radius:8px;color:#cfd8e3;'
+    + 'font:12px/1.5 ui-monospace,SFMono-Regular,monospace;letter-spacing:0.02em;user-select:none;'
+    + 'box-shadow:0 8px 32px rgba(0,0,0,0.6)';
+
+  // Sticky header + collapse-all glyph.
+  const title = document.createElement('div');
+  title.style.cssText = 'position:sticky;top:0;z-index:2;display:flex;align-items:center;justify-content:space-between;'
+    + 'margin:-10px -12px 6px;padding:9px 12px 7px;background:rgba(12,15,20,0.98);border-bottom:1px solid #2a3340;'
+    + 'font-weight:600;letter-spacing:0.08em;color:#eaf0f7';
+  const titleLabel = document.createElement('span'); titleLabel.textContent = '🌌 GALAXY';
+  const collapseAll = document.createElement('span');
+  collapseAll.style.cssText = 'cursor:pointer;font-weight:400;color:#9fb0c3;font-size:13px;line-height:1;'
+    + 'padding:2px 4px;border-radius:4px;user-select:none';
+  title.append(titleLabel, collapseAll);
+  panel.appendChild(title);
+
+  const refreshers: Array<() => void> = []; // re-sync every input's value+label (used by Revert)
+
+  const addCtrl = (host: HTMLElement, c: Ctrl): void => {
+    const row = document.createElement('div');
+    row.style.cssText = 'margin-top:6px;display:flex;justify-content:space-between';
+    const name = document.createElement('span'); name.textContent = c.label;
+    const val = document.createElement('span'); val.style.opacity = '0.8';
+    row.append(name, val);
+    const input = document.createElement('input');
+    input.type = 'range';
+    input.min = String(c.min); input.max = String(c.max); input.step = String(c.step);
+    input.style.cssText = 'width:100%;accent-color:#6aa3ff';
+    const sync = (): void => { const v = c.get(); input.value = String(v); val.textContent = fmt(c, v); };
+    sync();
+    input.addEventListener('input', () => {
+      c.set(+input.value); val.textContent = fmt(c, +input.value);
+      if (c.live) c.live(); else controls.previewRebuild();
+    });
+    if (!c.live) input.addEventListener('change', () => { controls.rebuild(); });
+    host.append(row, input);
+    refreshers.push(sync);
+  };
+
+  const addToggle = (host: HTMLElement, t: Toggle): void => {
+    const row = document.createElement('label');
+    row.style.cssText = 'margin-top:6px;display:flex;justify-content:space-between;align-items:center;cursor:pointer';
+    const name = document.createElement('span'); name.textContent = t.label;
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.style.cssText = 'accent-color:#6aa3ff;width:14px;height:14px;margin:0';
+    const sync = (): void => { box.checked = t.get(); };
+    sync();
+    box.addEventListener('change', () => {
+      t.set(box.checked);
+      if (t.live) t.live(); else controls.rebuild();
+    });
+    row.append(name, box);
+    host.appendChild(row);
+    refreshers.push(sync);
+  };
+
+  const sectionEntries: Array<{ key: string; setOpen: (open: boolean) => void; isOpen: () => boolean }> = [];
+  const refreshCollapseIcon = (): void => {
+    const allClosed = sectionEntries.length > 0 && sectionEntries.every((e) => !e.isOpen());
+    collapseAll.textContent = allClosed ? '⊞' : '⊟';
+    collapseAll.title = allClosed ? 'Expand all' : 'Collapse all';
+  };
+  for (const sec of controls.sections) {
+    const header = document.createElement('div');
+    header.style.cssText = 'margin-top:9px;padding-top:6px;border-top:1px solid #222b36;cursor:pointer;'
+      + 'display:flex;justify-content:space-between;color:#9fb0c3;font-size:11px;letter-spacing:0.06em';
+    const body = document.createElement('div');
+    const caret = document.createElement('span');
+    const label = document.createElement('span'); label.textContent = sec.title.toUpperCase();
+    header.append(label, caret);
+    const setOpen = (open: boolean): void => { body.style.display = open ? '' : 'none'; caret.textContent = open ? '▾' : '▸'; };
+    setOpen(!collapsed.has(sec.key));
+    sectionEntries.push({ key: sec.key, setOpen, isOpen: () => body.style.display !== 'none' });
+    header.addEventListener('click', () => {
+      const open = body.style.display === 'none';
+      setOpen(open);
+      if (open) collapsed.delete(sec.key); else collapsed.add(sec.key);
+      persistCollapse();
+      refreshCollapseIcon();
+    });
+    panel.append(header, body);
+    for (const c of sec.ctrls) {
+      if ('kind' in c) addToggle(body, c); else addCtrl(body, c);
+    }
+  }
+  collapseAll.addEventListener('click', () => {
+    const collapse = sectionEntries.some((e) => e.isOpen());
+    for (const e of sectionEntries) {
+      e.setOpen(!collapse);
+      if (collapse) collapsed.add(e.key); else collapsed.delete(e.key);
+    }
+    persistCollapse();
+    refreshCollapseIcon();
+  });
+  refreshCollapseIcon();
+
+  // ── footer: Re-seed · Save (interim) · Revert (canonical) · Copy JSON (promote) ──
+  const btn = (text: string, onClick: () => void): HTMLButtonElement => {
+    const b = document.createElement('button');
+    b.textContent = text;
+    b.style.cssText = 'flex:1;padding:6px 2px;background:#1c2530;color:#cfd8e3;border:1px solid #34404e;'
+      + 'border-radius:5px;cursor:pointer;font:inherit;font-size:11px';
+    b.addEventListener('click', onClick);
+    return b;
+  };
+  const flash = (b: HTMLButtonElement, text: string): void => {
+    const orig = b.textContent; b.textContent = text;
+    setTimeout(() => { b.textContent = orig; }, 1000);
+  };
+
+  const footer1 = document.createElement('div');
+  footer1.style.cssText = 'margin-top:11px;border-top:1px solid #2a3340;padding-top:8px;display:flex;gap:5px';
+  const saveBtn = btn('Save', () => { controls.save(); flash(saveBtn, 'Saved ✓'); });
+  const revertBtn = btn('Revert', () => {
+    controls.revert();
+    for (const r of refreshers) r(); // re-sync inputs to the reverted (canonical) values
+    flash(revertBtn, 'Canonical');
+  });
+  footer1.append(btn('Re-seed', () => { controls.reseed(); }), saveBtn, revertBtn);
+  panel.appendChild(footer1);
+
+  const footer2 = document.createElement('div');
+  footer2.style.cssText = 'margin-top:5px;display:flex;gap:5px';
+  const copyBtn = btn('Copy JSON → promote to SAVED_GALAXY_DEFAULTS', () => {
+    const json = JSON.stringify(controls.snapshot(), null, 2);
+    void navigator.clipboard?.writeText(json).then(
+      () => flash(copyBtn, 'Copied ✓'),
+      () => flash(copyBtn, 'Copy failed'),
+    );
+  });
+  copyBtn.style.fontSize = '10px';
+  footer2.appendChild(copyBtn);
+  panel.appendChild(footer2);
+
+  const help = document.createElement('div');
+  help.style.cssText = 'margin-top:7px;opacity:0.5;font-size:10px;line-height:1.4';
+  help.textContent = 'Save → this browser · Revert → canonical · Copy JSON → paste into SAVED_GALAXY_DEFAULTS to ship';
+  panel.appendChild(help);
+
+  return panel;
 }
