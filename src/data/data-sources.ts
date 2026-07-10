@@ -90,17 +90,48 @@ export const DATA_SOURCES: DataSource[] = [
     usedFor: 'Real orbital elements for the eight Sol planets at the game epoch.',
     shipped: true,
   },
+  // Sol texture provenance was verified forensically on 2026-07-10 (embedded
+  // PDS captions/XMP + MD5 + pixel correlation against candidate sources) —
+  // full per-file table in public/textures/sol/NOTICE.txt.
   {
-    name: 'Solar-system texture maps',
-    provider: 'UNKNOWN — present since initial import',
+    name: 'Solar System Scope planet textures',
+    provider: 'INOVE / Solar System Scope',
+    url: 'https://www.solarsystemscope.com/textures/',
+    license: 'CC BY 4.0',
+    permission: 'attribution',
+    creditLine: 'Planet, Moon and Saturn-ring textures by Solar System Scope (solarsystemscope.com), CC BY 4.0.',
+    usedFor: 'mercury/venus/earth/mars/jupiter/saturn/uranus/neptune/moon .jpg + saturn_ring_alpha.png '
+        + '(10 files). Verified: ring byte-identical (MD5); the rest correlate ≥ 0.997 (re-grade/upscale only).',
+    shipped: true,
+  },
+  {
+    name: 'Voyager–Galileo global mosaics (Galilean moons)',
+    provider: 'USGS Astrogeology Science Center · NASA/JPL',
+    url: 'https://astrogeology.usgs.gov/search',
+    license: 'US Government work — public domain',
+    permission: 'public-domain',
+    creditLine: 'Io, Europa, Ganymede and Callisto maps: USGS Astrogeology Science Center '
+        + 'Voyager–Galileo SSI global mosaics (NASA/JPL).',
+    usedFor: 'io/europa/ganymede/callisto .jpg (4 files). Verified: Europa + Callisto exactly match the '
+        + 'USGS 1024-px browse products (corr 1.000); Io carries the Galileo PDS caption; Ganymede is an '
+        + 'older edition of the same mosaic (corr 0.965).',
+    shipped: true,
+  },
+  {
+    name: 'Titan, Phobos & Deimos maps',
+    provider: 'UNKNOWN — real-mission-data derivatives, author unidentified',
     url: '',
     license: 'Unverified',
     permission: 'unverified',
-    creditLine: 'Planetary surface maps — provenance under verification.',
-    usedFor: 'Sol planet/moon surface textures (public/textures/sol/*).',
+    creditLine: 'Titan/Phobos/Deimos maps — authorship under verification.',
+    usedFor: 'titan.jpg, phobos.jpg, deimos.jpg (3 files).',
     shipped: true,
-    note: 'No provenance was recorded when these were added. Confirm the original source '
-        + '(NASA/USGS vs. third-party, e.g. Solar System Scope CC BY 4.0) before any public release.',
+    note: 'Content derives from real mission data (Cassini for Titan; Viking-era relief for the Mars '
+        + 'moons) but the specific map authors were not identified; the likely candidates (Albers, '
+        + 'DeviantArt map makers) publish NON-COMMERCIAL terms. Tested and ruled out: Solar System '
+        + 'Scope, JHT Planet Pixel Emporium, USGS Cassini ISS mosaic, Stooke PDS photomosaics. '
+        + 'REPLACE before any public release — public-domain drop-ins: USGS Cassini ISS global mosaic '
+        + '(Titan), USGS Viking/Mars-Express mosaics (Phobos/Deimos) — or generate procedurally.',
   },
   {
     name: 'ESA Gaia DR3',
