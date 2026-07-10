@@ -309,12 +309,21 @@ export function updateVisibility(camera?: Camera): void {
   // galaxy framing — the space-agency stars persist at every zoom level.
   // 0.9 is the layers' base uOpacity.
   const galaxyDissolve = 1 - smooth01(camDist, 2e6, 1.2e7);
-  targets?.catalogSystems?.setOpacity(0.9 * Math.max(0.15, swap) * galaxyDissolve);
+  // LOCAL EASE: once the camera is well past the 25-pc survey ball itself
+  // (~140 ly out), the chart dims toward the shells' level instead of
+  // persisting at full — the dense "inner sphere" stops out-shining the
+  // surrounding tiers while staying readable as the survey layer.
+  const localEase = 1 - 0.55 * smooth01(camDist, 3e4, 1.2e5);
+  targets?.catalogSystems?.setOpacity(0.9 * Math.max(0.15, swap * localEase) * galaxyDissolve);
   targets?.catalogSystems?.setGalacticOpacity(0.9 * smooth01(camDist, 2e6, 8e6));
 
   // Progressive star shells: each annulus fades in at its scale and out past
   // it — the "spheres of stars" ladder from the survey sphere to the disc.
   targets?.starShells?.updatePresence(camDist);
+
+  // Galactic-plane UI (sector rings + quadrant spokes): rise with the disc
+  // across the sector→arm pull-back instead of popping in on the domain flip.
+  updateSectorGridPresence(camDist);
 
   // Per-object icon/mesh state — runs every frame for smooth transitions
   updateIconStates(domain);
@@ -388,6 +397,27 @@ function updateSectorOrbPresence(camDist: number): void {
       ud._baseOpacity ??= mat.opacity;
       mat.opacity = ud._baseOpacity * presence;
     }
+  });
+}
+
+/** Galactic-plane UI (the 'sector-grid' rings/spokes inside the galaxy
+ *  group): scale each line's base uOpacity by a camDist ramp so the plane
+ *  furniture rises with the disc across the sector→arm pull-back instead of
+ *  popping in when the galaxy group's visible flag flips. */
+function updateSectorGridPresence(camDist: number): void {
+  const grid = targets?.galaxyArms?.getObjectByName('sector-grid');
+  if (!grid) return;
+  const presence = smooth01(camDist, 2.5e5, 1.2e6);
+  grid.visible = presence > 0.002;
+  if (!grid.visible) return;
+  grid.traverse(child => {
+    const mat = (child as Mesh).material as
+      | (Material & { uniforms?: { uOpacity?: { value: number } } })
+      | undefined;
+    if (!mat?.uniforms?.uOpacity) return;
+    const ud = mat.userData as { _baseOpacity?: number };
+    ud._baseOpacity ??= mat.uniforms.uOpacity.value;
+    mat.uniforms.uOpacity.value = ud._baseOpacity * presence;
   });
 }
 

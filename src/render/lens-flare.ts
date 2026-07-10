@@ -83,12 +83,22 @@ export function createLensFlare(postCtx: PostProcessingContext): LensFlareSystem
     const inFront = screenPos.z < 1;
     const inViewport = Math.abs(screenPos.x) < 1.3 && Math.abs(screenPos.y) < 1.3;
 
+    // ZOOM SCALING: the flare used to hold one apparent size from surface all
+    // the way to the heliopause, then hard-cut at the domain flip. Shrink the
+    // glare/flare/halo with camera distance (full size inside ~6 AU, gently
+    // receding beyond) and ease intensity out across the heliopause band so
+    // the exit is a fade, not a pop.
+    const camDist = Game.data.camDist;
+    const sizeScale = Math.min(1, Math.max(0.2, Math.pow(60 / Math.max(camDist, 1), 0.35)));
+    const t = Math.min(1, Math.max(0, (camDist - 1600) / (3000 - 1600)));
+    const helioFade = 1 - t * t * (3 - 2 * t);
+
     // Target intensity based on visibility
     let targetIntensity = 0;
     if (inFront && inViewport) {
       // Fade based on distance from screen center (stronger when looking directly at star)
       const centerDist = Math.sqrt(screenPos.x * screenPos.x + screenPos.y * screenPos.y);
-      targetIntensity = Math.max(0, 1.0 - centerDist * 0.4);
+      targetIntensity = Math.max(0, 1.0 - centerDist * 0.4) * helioFade;
     }
 
     // Exponential smoothing for smooth fade
@@ -99,6 +109,11 @@ export function createLensFlare(postCtx: PostProcessingContext): LensFlareSystem
     const mat = pass.material as ShaderMaterial;
     mat.uniforms.uIntensity.value = currentIntensity;
     mat.uniforms.uTime.value = elapsedTime;
+    // Size uniforms per frame = VP base × zoom scale (the VP.subscribe writes
+    // below are superseded for these three keys but kept harmless).
+    mat.uniforms.uGlareSize.value = VP.get('lensFlareGlareSize') * sizeScale;
+    mat.uniforms.uFlareSize.value = VP.get('lensFlareFlareSize') * sizeScale;
+    mat.uniforms.uHaloScale.value = VP.get('lensFlareHaloScale') * sizeScale;
 
     // Convert from NDC (-1 to 1) to UV (0 to 1)
     mat.uniforms.uLightPos.value.set(
