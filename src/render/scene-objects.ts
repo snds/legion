@@ -14,7 +14,7 @@ import {
   EllipseCurve,
 } from 'three';
 import { createIcon } from './icons';
-import { AU_TO_WU as AU } from '../core/metrics';
+import { AU_TO_WU as AU, SYSTEM_TIER_SCALE } from '../core/metrics';
 
 // ── Station Data ─────────────────────────────────────────────────
 
@@ -164,7 +164,13 @@ export function createOortCloud(): Group {
   geo.setAttribute('position', new Float32BufferAttribute(positions, 3));
   geo.setAttribute('color', new Float32BufferAttribute(colors, 3));
   const pts = new Points(geo, new PointsMaterial({
-    size: 1.5, vertexColors: true, sizeAttenuation: true,
+    // Scale-unification U2: the oort cloud renders in the local tier, which is
+    // scaled by SYSTEM_TIER_SCALE. PointsMaterial.size is a WORLD size projected
+    // via sizeAttenuation and is NOT affected by the group scale, so at true
+    // scale (camera ~2000× closer to the shrunk shell) the raw size would blow
+    // each point up ~2000× into overlapping sprites. Pre-scale by SYSTEM_TIER_
+    // SCALE so the apparent size is byte-identical to the pre-U2 view.
+    size: 1.5 * SYSTEM_TIER_SCALE, vertexColors: true, sizeAttenuation: true,
     transparent: true, opacity: 0.3,
     // PointsMaterial defaults depthWrite TRUE — left on, this sparse Oort shell
     // punched depth holes in the (depth-tested) background star sphere behind
@@ -207,7 +213,12 @@ export function createEclipticGrid(): Group {
   geo.setAttribute('position', new Float32BufferAttribute(dotPositions, 3));
   geo.setAttribute('color', new Float32BufferAttribute(dotColors, 3));
   const pts = new Points(geo, new PointsMaterial({
-    size: 0.4, vertexColors: true, sizeAttenuation: true,
+    // Scale-unification U2: the ecliptic grid renders in the local tier (scaled
+    // by SYSTEM_TIER_SCALE). PointsMaterial.size is world-space + sizeAttenuation
+    // and ignores the group scale, so the un-scaled size ballooned each grid dot
+    // ~2000× at true scale — overlapping into a blocky grey wash that filled the
+    // frame. Pre-scale by SYSTEM_TIER_SCALE to restore the pre-U2 apparent size.
+    size: 0.4 * SYSTEM_TIER_SCALE, vertexColors: true, sizeAttenuation: true,
     transparent: true, opacity: 0.5, depthWrite: false,
   }));
   group.add(pts);

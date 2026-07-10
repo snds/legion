@@ -10,6 +10,7 @@ import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { lensFlareVertexShader, lensFlareFragmentShader } from './shaders/lens-flare';
 import { VP } from './visual-params';
 import { Game } from '../core/state';
+import { SYSTEM_TIER_SCALE } from '../core/metrics';
 import type { PostProcessingContext } from './post-processing';
 
 export interface LensFlareSystem {
@@ -88,7 +89,15 @@ export function createLensFlare(postCtx: PostProcessingContext): LensFlareSystem
     // glare/flare/halo with camera distance (full size inside ~6 AU, gently
     // receding beyond) and ease intensity out across the heliopause band so
     // the exit is a fade, not a pop.
-    const camDist = Game.data.camDist;
+    //
+    // Scale-unification U2: these distance bands (60/1600/3000 WU) were tuned for
+    // the legacy system-tier camDist magnitudes (1 AU = 10 WU). The unified metric
+    // renders the system at TRUE scale, so camDist is SYSTEM_TIER_SCALE× smaller —
+    // left raw it clamps sizeScale to 1 and pins helioFade at 1 across the whole
+    // system, so the flare never shrinks or fades and blows out the frame as you
+    // pull back. Convert camDist back to the legacy frame (÷ SYSTEM_TIER_SCALE) so
+    // the bands ride the scale and the flare behaves exactly as before U2.
+    const camDist = Game.data.camDist / SYSTEM_TIER_SCALE;
     const sizeScale = Math.min(1, Math.max(0.2, Math.pow(60 / Math.max(camDist, 1), 0.35)));
     const t = Math.min(1, Math.max(0, (camDist - 1600) / (3000 - 1600)));
     const helioFade = 1 - t * t * (3 - 2 * t);
