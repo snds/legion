@@ -18,7 +18,8 @@
 
 import { asset } from '../core/assets';
 import {
-  generateSystem, parseSpectral, classifyByRadius, type GenSystem,
+  generateSystem, parseSpectral, classifyByRadius, genBelts, snowLineAu,
+  seedFrom, mulberry32, type GenSystem,
 } from './system-gen';
 import { realPlanetsFor } from './exoplanets';
 
@@ -86,7 +87,12 @@ export function resolveSystem(star: CatalogStar): ResolvedSystem {
         const inHZ = au >= hzAu * 0.75 && au <= hzAu * 1.5 && (kind === 'rocky' || kind === 'super-earth');
         return { kind, au: +au.toPrecision(3), inHZ };
       });
-    return { star: sp, planets, hzAu, habitableCount: planets.filter((p) => p.inHZ).length, real: true };
+    // Belts placed against the REAL observed orbits, same formation rule as
+    // the generator (deterministic per star identity).
+    const snowAu = snowLineAu(sp.lumSun);
+    const beltRng = mulberry32(seedFrom((star.name || star.desig) + '|belts'));
+    const belts = genBelts(planets.map((p) => p.au), snowAu, beltRng);
+    return { star: sp, planets, hzAu, snowAu, belts, habitableCount: planets.filter((p) => p.inHZ).length, real: true };
   }
   return { ...generateSystem(star.name || star.desig, star.spect), real: false };
 }

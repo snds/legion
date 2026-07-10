@@ -38,7 +38,8 @@ import { createHeliopause } from './particles';
 import { createAsteroidBelt } from './asteroid-belt';
 import { hasProceduralRecipe } from './procedural-textures';
 import {
-  EPS_ERI_STAR, EPS_ERI_PLANETS, SOL_STAR, SOL_PLANETS, SOL_MOONS, createInitialBobs,
+  EPS_ERI_STAR, EPS_ERI_PLANETS, EPS_ERI_BELTS, SOL_STAR, SOL_PLANETS, SOL_MOONS, SOL_BELTS,
+  createInitialBobs,
 } from '../data/star-catalog';
 import { applySolEphemeris } from '../data/jpl-ephemeris';
 import { loadExoplanets } from '../data/exoplanets';
@@ -234,12 +235,16 @@ export function instantiateLocalSystem(
     add(orbLine);
   }
 
-  // ── Asteroid Belt (instanced, flat-shaded) ──
-  const beltInner = isSol ? 2.1 : 2.5;
-  const beltOuter = isSol ? 3.3 : 4.5;
-  const asteroidBelt = createAsteroidBelt(beltInner, beltOuter);
-  asteroidBelt.group.name = 'asteroid-belt';
-  add(asteroidBelt.group);
+  // ── Asteroid Belts (instanced, flat-shaded) ──
+  // From the system's data: placement follows observed formation structure
+  // (main belt between the rockies and the innermost giant near the snow
+  // line; debris belts beyond the outermost planet). The old hardcoded EE
+  // belt (2.5–4.5 AU) crossed Jotunheim's 3.4 AU orbit.
+  for (const belt of (isSol ? SOL_BELTS : EPS_ERI_BELTS)) {
+    const asteroidBelt = createAsteroidBelt(belt.innerAU, belt.outerAU, belt);
+    asteroidBelt.group.name = `asteroid-belt-${belt.name.toLowerCase().replace(/\s+/g, '-')}`;
+    add(asteroidBelt.group);
+  }
 
   // ── Heliopause ──
   add(createHeliopause());

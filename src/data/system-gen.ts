@@ -34,10 +34,21 @@ export interface GenPlanet {
   inHZ: boolean;       // within the (rough) habitable zone
 }
 
+/** A generated asteroid/debris belt. Placement is CONSTRAINED (formation
+ *  physics, below); density is free to vary per system. */
+export interface GenBelt {
+  kind: 'main' | 'debris';
+  innerAU: number;
+  outerAU: number;
+  density: number;     // vs the Sol-main-belt baseline
+}
+
 export interface GenSystem {
   star: StellarParams;
   planets: GenPlanet[];
   hzAu: number;        // habitable-zone centre, AU
+  snowAu: number;      // snow/ice line, AU (2.7·√L — where volatiles condense)
+  belts: GenBelt[];
   habitableCount: number;
 }
 
@@ -143,9 +154,92 @@ export function generateSystem(idKey: string, spect: string): GenSystem {
     }
     const inHZ = au >= hzAu * 0.75 && au <= hzAu * 1.5 && (kind === 'rocky' || kind === 'super-earth');
     planets.push({ kind, au: +au.toPrecision(3), inHZ });
-    // Next orbit: a randomised Titius–Bode-like spacing (1.4–2.1×).
-    au *= 1.4 + rng() * 0.7;
+    // Next orbit: a randomised Titius–Bode-like spacing (1.4–2.1×) — WIDENED
+    // when the step crosses the snow line: a giant forming at the ice line
+    // suppresses accretion inside its orbit, leaving the Mars→Jupiter-style
+    // gap (3.4× in Sol) that the main asteroid belt then occupies.
+    const snow = 2.7 * Math.sqrt(Math.max(star.lumSun, 1e-4));
+    let spacing = 1.4 + rng() * 0.7;
+    if (au < snow && au * spacing > snow * 0.6) spacing *= 1.35 + rng() * 0.75;
+    au *= spacing;
   }
 
-  return { star, planets, hzAu, habitableCount: planets.filter((p) => p.inHZ).length };
+  const snowAu = snowLineAu(star.lumSun);
+  const belts = genBelts(planets.map((p) => p.au), snowAu, rng);
+
+  return { star, planets, hzAu, snowAu, belts, habitableCount: planets.filter((p) => p.inHZ).length };
+}
+
+/** Snow/ice line ≈ 2.7·√(L/L☉) AU — the volatile condensation front. */
+export function snowLineAu(lumSun: number): number {
+  return +(2.7 * Math.sqrt(Math.max(lumSun, 1e-4))).toPrecision(3);
+}
+
+/**
+ * Belt placement — follows observed formation structure. The MAIN belt is a
+ * failed planet: it can only live in a wide gap between two orbits near the
+ * snow line, where the outer neighbour's resonances stopped accretion (Sol:
+ * 2.06–3.27 AU between Mars and Jupiter). DEBRIS belts (Kuiper analogues)
+ * live beyond the outermost planet. Count/density/width vary; WHERE a belt
+ * lives does not. Belts never cross a planet's orbit by construction
+ * (inner/outer are clamped fractions of the neighbour orbits). Shared by the
+ * generator AND the real-exoplanet path (star-systems.resolveSystem), which
+ * places belts against the REAL observed orbits.
+ */
+export function genBelts(planetAus: number[], snowAu: number, rng: () => number): GenBelt[] {
+  const belts: GenBelt[] = [];
+  let bestGap: { inner: number; outer: number; score: number } | null = null;
+  for (let i = 0; i < planetAus.length - 1; i++) {
+    const a1 = planetAus[i], a2 = planetAus[i + 1];
+    if (a2 / a1 < 1.8) continue;                 // gap too tight for a stable belt
+    const inner = a1 * 1.25, outer = a2 * 0.75;  // clearance off both orbits
+    if (outer / inner < 1.12) continue;
+    const mid = Math.sqrt(inner * outer);
+    if (mid < snowAu * 0.25 || mid > snowAu * 6) continue; // belts form near the ice line
+    // Prefer wide gaps centred near the snow line.
+    const score = (outer / inner) / (1 + Math.abs(Math.log(mid / snowAu)));
+    if (!bestGap || score > bestGap.score) bestGap = { inner, outer, score };
+  }
+  let main: GenBelt | null = null;
+  if (bestGap && rng() < 0.85) {
+    main = {
+      kind: 'main',
+      innerAU: +bestGap.inner.toPrecision(3),
+      outerAU: +bestGap.outer.toPrecision(3),
+      density: +(0.5 + rng() * 0.8).toPrecision(2),
+    };
+  } else {
+    // No qualifying inter-planet gap. If the system never reached its ice
+    // line (or has no planets at all), planetesimals still pile up THERE —
+    // the observed exo-belt case: rings at the snow line around stars whose
+    // planets sit well inside it, and the bare A-star debris rings
+    // (Fomalhaut, Vega) around sparse systems.
+    const aLast = planetAus.length ? planetAus[planetAus.length - 1] : 0;
+    if (aLast < snowAu * 0.8 && rng() < 0.6) {
+      const inner = Math.max(snowAu * 0.8, aLast * 1.4);
+      const outer = snowAu * 1.6;
+      if (outer / inner >= 1.15) {
+        main = {
+          kind: 'main',
+          innerAU: +inner.toPrecision(3),
+          outerAU: +outer.toPrecision(3),
+          density: +(0.3 + rng() * 0.7).toPrecision(2),
+        };
+      }
+    }
+  }
+  if (main) belts.push(main);
+  if (planetAus.length > 0 && rng() < 0.55) {
+    let inner = planetAus[planetAus.length - 1] * (1.5 + rng() * 0.5);
+    // A snow-line main belt can lie beyond the outermost planet — keep the
+    // debris ring clear of it.
+    if (main && main.outerAU * 1.25 > inner) inner = main.outerAU * 1.25;
+    belts.push({
+      kind: 'debris',
+      innerAU: +inner.toPrecision(3),
+      outerAU: +(inner * (1.4 + rng() * 0.5)).toPrecision(3),
+      density: +(0.15 + rng() * 0.3).toPrecision(2),
+    });
+  }
+  return belts;
 }

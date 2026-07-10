@@ -126,18 +126,33 @@ export interface AsteroidBeltSystem {
   group: Group;
 }
 
+/** Per-belt look knobs — density/orientation/volume are free to vary per
+ *  system; WHERE the belt lives is the caller's (data-layer) responsibility. */
+export interface BeltOptions {
+  /** Asteroid + dust count multiplier vs the VP baseline (1 = Sol main belt). */
+  density?: number;
+  /** Belt-plane tilt off the ecliptic, degrees. */
+  inclinationDeg?: number;
+  /** Full vertical spread in AU. Default 0.05 AU = the legacy thin slab. */
+  thicknessAU?: number;
+}
+
 /**
  * Create an asteroid belt with main body rocks and dust particles.
  */
 export function createAsteroidBelt(
   innerAU: number,
   outerAU: number,
+  opts: BeltOptions = {},
 ): AsteroidBeltSystem {
   const group = new Group();
   group.name = 'asteroid-belt';
+  const density = opts.density ?? 1;
+  const thicknessWU = (opts.thicknessAU ?? 0.05) * AU_SCALE;
+  if (opts.inclinationDeg) group.rotation.x = (opts.inclinationDeg * Math.PI) / 180;
 
-  const asteroidCount = VP.get('asteroidCount');
-  const dustCount = VP.get('dustCount');
+  const asteroidCount = Math.max(0, Math.round(VP.get('asteroidCount') * density));
+  const dustCount = Math.max(0, Math.round(VP.get('dustCount') * density));
   const detail = VP.get('asteroidDetail');
   const noiseMag = VP.get('asteroidNoiseMagnitude');
   const craterProb = VP.get('asteroidCraterProbability');
@@ -190,7 +205,7 @@ export function createAsteroidBelt(
 
       const r = sma * AU_SCALE;
       const theta = Math.random() * Math.PI * 2;
-      const yOffset = (Math.random() - 0.5) * 0.5;
+      const yOffset = (Math.random() - 0.5) * thicknessWU;
 
       pos.set(
         r * Math.cos(theta),
@@ -257,7 +272,7 @@ export function createAsteroidBelt(
 
     const r = sma * AU_SCALE;
     const theta = Math.random() * Math.PI * 2;
-    const yOffset = (Math.random() - 0.5) * 0.6;
+    const yOffset = (Math.random() - 0.5) * thicknessWU * 1.2; // dust rides slightly proud of the rocks
 
     pos.set(r * Math.cos(theta), yOffset, r * Math.sin(theta));
 

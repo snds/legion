@@ -7,7 +7,7 @@
 // Entity creation uses world.ts factories with this data as input.
 // ═══════════════════════════════════════════════════════════════════
 
-import type { SystemConfig, PlanetConfig, BobConfig, StarConfig, MoonConfig } from '../core/world';
+import type { SystemConfig, PlanetConfig, BobConfig, StarConfig, MoonConfig, BeltConfig } from '../core/world';
 import { PlanetType, ExplorationStatus, BobFocus, BobAutonomy } from '../core/components';
 import { CURATED_SYSTEMS, regionalScenePos, distanceLy } from './curated-systems';
 
@@ -93,6 +93,19 @@ export const EPS_ERI_PLANETS: PlanetConfig[] = [
     hasAtmosphere: false, atmosColor: 0, inclination: 0.15,
     axialTilt: 28, dayLength: 0.67,
   },
+];
+
+// ε Eridani belts. Placement follows solar-system formation structure: the
+// MAIN belt fills the gap between the rocky inner system (Pax, apoapsis
+// 1.65 AU) and the innermost giant (Jotunheim, periapsis 3.16 AU), just
+// outside the system's snow line (2.7·√L ≈ 1.6 AU for L ≈ 0.34 L☉) where the
+// giant's resonances stop accretion — the same mechanism as Sol's main belt.
+// The OUTER debris belt matches the real ε Eri observation (a cold ring near
+// ~20 AU) and sits well clear of Helheim's apoapsis (12 AU). The old single
+// belt (2.5–4.5 AU) CROSSED Jotunheim's orbit — physically impossible.
+export const EPS_ERI_BELTS: BeltConfig[] = [
+  { name: 'Main Belt',         innerAU: 1.9, outerAU: 2.6, density: 1.0,  thicknessAU: 0.06 },
+  { name: 'Outer Debris Belt', innerAU: 14,  outerAU: 20,  density: 0.35, inclinationDeg: 3, thicknessAU: 0.9 },
 ];
 
 // ── Sol System ─────────────────────────────────────────────────
@@ -213,6 +226,15 @@ export const SOL_MOONS: MoonConfig[] = [
     size: 0.03, color: 0x99aabb, sma: 5.0, ecc: 0.00002,
     inclination: 2.737, dayLength: 5.877, tidalLock: true,
   },
+];
+
+// Sol belts — the REAL observed values. Main belt between Mars (apoapsis
+// 1.67 AU) and Jupiter (periapsis 4.95 AU); classical Kuiper belt between the
+// 2:3 and 1:2 Neptune resonances (39.4–47.7 AU), mean inclination a few
+// degrees, much thicker and sparser than the main belt.
+export const SOL_BELTS: BeltConfig[] = [
+  { name: 'Main Belt',   innerAU: 2.06, outerAU: 3.27, density: 1.0,  thicknessAU: 0.06 },
+  { name: 'Kuiper Belt', innerAU: 39.4, outerAU: 47.7, density: 0.3,  inclinationDeg: 1.9, thicknessAU: 4.0 },
 ];
 
 // ── Initial Bobs ─────────────────────────────────────────────────

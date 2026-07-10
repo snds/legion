@@ -92,6 +92,23 @@ export function createStarEntity(cfg: StarConfig): number {
   return eid;
 }
 
+/** An asteroid/debris belt. WHERE a belt lives follows observed formation
+ *  structure (see data/star-catalog.ts belts + data/system-gen.ts genBelts):
+ *  the main belt sits in the gap between the rocky inner system and the
+ *  innermost giant, near the snow line; debris belts sit beyond the outermost
+ *  planet. Density/orientation/volume are free to vary per system. */
+export interface BeltConfig {
+  name: string;
+  innerAU: number;
+  outerAU: number;
+  /** Asteroid/dust count multiplier vs the VP baseline (1 = Sol main belt). */
+  density?: number;
+  /** Belt-plane tilt off the ecliptic, degrees. */
+  inclinationDeg?: number;
+  /** Full vertical spread in AU (default ≈ the classic thin main-belt slab). */
+  thicknessAU?: number;
+}
+
 export interface PlanetConfig {
   name: string;
   designation: string;
