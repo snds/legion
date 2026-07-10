@@ -11,7 +11,7 @@
 // ═══════════════════════════════════════════════════════════════════
 
 import { PerspectiveCamera, Vector3, type Object3D } from 'three';
-import { Game, getCamDist } from './state';
+import { Game, getCamDist, T_LOW_ORBIT, T_ORBIT } from './state';
 import { Events } from './events';
 import { setIconFov } from '../render/icon-system';
 import { Broker } from '../render/scale-manager';
@@ -60,20 +60,16 @@ function fovForDistance(camDist: number): number {
 // a gas giant 2.0 WU → scale 6.67; a small moon 0.08 WU → scale 0.27.
 const FOCUS_REFERENCE_RADIUS = 0.3;
 
-function tierScaleMultiplier(domain: string, scale: number): number {
-  // Close-in tiers should scale with the focused body; system+ tiers
-  // are absolute (their frame is the system, not the body).
-  switch (domain) {
-    case 'surface':
-    case 'low-orbit':
-      return scale;
-    case 'orbit':
-      // Half-scale lerp so ORBIT can frame a body+its moons without
-      // ballooning for a gas giant.
-      return 1 + (scale - 1) * 0.5;
-    default:
-      return 1;
-  }
+function focusScaleMultiplier(zoomLevel: number, scale: number): number {
+  // The close-in tiers frame the focused BODY (× its radius scale); system+ tiers are absolute (× 1). This used
+  // to be a per-DOMAIN step, which made camDist JUMP at the tier boundaries mid-zoom when tracking a non-reference
+  // body. Ramp it CONTINUOUSLY in the zoom level instead — full body scale through low-orbit, easing to 1 across
+  // the ORBIT tier — so the wheel zoom is smooth end-to-end (no snap) while framing the same at each tier centre.
+  if (scale === 1) return 1;
+  if (zoomLevel <= T_LOW_ORBIT) return scale;
+  if (zoomLevel >= T_ORBIT) return 1;
+  const t = (zoomLevel - T_LOW_ORBIT) / (T_ORBIT - T_LOW_ORBIT); // 0 at low-orbit end … 1 at inner-system start
+  return scale + (1 - scale) * t;
 }
 
 export class CameraController {
@@ -409,7 +405,7 @@ export class CameraController {
     // (surface / low-orbit / orbit) multiply by focusScale so the
     // framing is proportional to the focused body's actual radius.
     const baseDist = getCamDist(data.zoomLevel);
-    data.camDist = baseDist * tierScaleMultiplier(data.zoomDomain, this.focusScale);
+    data.camDist = baseDist * focusScaleMultiplier(data.zoomLevel, this.focusScale);
 
     // ── Focus Interpolation (lerp 0.05) ──
     if (data.camFocusTarget) {

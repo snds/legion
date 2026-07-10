@@ -111,8 +111,8 @@ export type DomainName =
 // occupies a comfortable slice of the wheel and the hotkey snaps in
 // ZOOM_STEPS land roughly in the middle of each tier.
 const T_SURFACE   = 0.06;
-const T_LOW_ORBIT = 0.11;
-const T_ORBIT     = 0.21;
+export const T_LOW_ORBIT = 0.11;
+export const T_ORBIT     = 0.21;
 const T_INNER_SYS = 0.32;
 const T_OUTER_SYS = 0.46;
 const T_HELIO     = 0.60;
