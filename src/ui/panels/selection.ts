@@ -8,13 +8,15 @@
 import * as THREE from 'three';
 import { Game } from '../../core/state';
 import { Notifications } from '../notifications';
+import { resolveSystem, type CatalogStar } from '../../data/star-systems';
+import { loadExoplanets } from '../../data/exoplanets';
 import type { TooltipData } from '../tooltip';
 
 // ── Type Icons ───────────────────────────────────────────────────
 
 const TYPE_ICONS: Record<string, string> = {
   star: '✦', planet: '◍', bob: '◇', station: '⬡', comet: '◗',
-  moon: '○', gal_system: '✦', system: '✦', phenomenon: '⊕',
+  moon: '○', gal_system: '✦', system: '✦', catalog_star: '✦', phenomenon: '⊕',
   alien: '▵', alien_civ: '▵', bob_transit: '➤', galaxy: '◔',
   nebula: '☁', dyson_sphere: '◉', dyson_swarm: '◌', megastructure: '⬢',
 };
@@ -124,11 +126,23 @@ function toggle(): void {
 
 // ── Inspector Card ───────────────────────────────────────────────
 
+// One-shot exoplanet-sidecar kick: the first catalog-star inspector render can
+// precede the archive load (planets show GENERATED) — re-render that panel
+// once when the sidecar lands so it upgrades to the real set.
+let exoKicked = false;
+function kickExoplanets(d: TooltipData): void {
+  if (exoKicked) return;
+  exoKicked = true;
+  void loadExoplanets().then(() => {
+    if (currentData === d && activePanel === 'inspector') renderInspector(d);
+  });
+}
+
 function renderInspector(d: TooltipData): void {
   if (!inspEl) return;
   const icon = TYPE_ICONS[d.type] || '·';
   const displayName = d.commonName || d.callsign || d.name || '';
-  const subtitle = d.type.toUpperCase()
+  const subtitle = d.type.replace(/_/g, ' ').toUpperCase()
     + (d.focus ? ' · ' + d.focus : '')
     + (d.planetType ? ' · ' + d.planetType : '');
 
@@ -198,6 +212,30 @@ function renderInspector(d: TooltipData): void {
       + R('DISTANCE', ((d.distLy ?? 0)).toFixed(1) + ' LY')
       + R('BOBS', String(d.bobCount ?? 0))
       + R('PLANETS', String((d as Record<string, unknown>).planets ?? '?')));
+  }
+  else if (d.type === 'catalog_star') {
+    h += S('STAR',
+      R('SPECTRAL', d.spectralType || '—')
+      + R('CONSTELLATION', d.constellation || '—')
+      + R('DISTANCE', ((d.distLy ?? 0)).toFixed(1) + ' LY')
+      + R('APP MAG', d.mag != null ? d.mag.toFixed(2) : '—'));
+    const star = (d as Record<string, unknown>)._catalogStar as CatalogStar | undefined;
+    if (star) {
+      // Real planets ride the exoplanet sidecar — kick it (idempotent) and
+      // re-render this panel once when it first arrives.
+      kickExoplanets(d);
+      const sys = resolveSystem(star);
+      let ph = R('SOURCE', sys.real ? 'NASA ARCHIVE' : 'GENERATED')
+        + R('HAB ZONE', '~' + sys.hzAu + ' AU')
+        + R('HABITABLE', String(sys.habitableCount));
+      sys.planets.forEach((p, i) => {
+        // Letter designations b, c, … in orbit order (archive convention).
+        ph += R(String.fromCharCode(98 + i) + ' · ' + p.kind.toUpperCase(),
+          p.au + ' AU' + (p.inHZ ? ' · HZ' : ''));
+      });
+      if (sys.planets.length === 0) ph += R('PLANETS', 'NONE DETECTED');
+      h += S(sys.real ? 'PLANETS · CONFIRMED' : 'PLANETS · PREDICTED', ph);
+    }
   }
   else {
     h += S('INFO', R('TYPE', d.type) + R('NAME', d.name ?? '—'));

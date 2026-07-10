@@ -26,23 +26,23 @@ import { createScene, registerRenderObject, type SceneContext } from './render/s
 import { setMaxAnisotropy } from './render/icons';
 import { setBakeRenderer } from './render/texture-baker';
 import { VP } from './render/visual-params';
-import {
-  createHeliopause,
-} from './render/particles';
 import { createCatalogStars } from './render/star-field';
 import { createCatalogSystems, type CatalogSystemsHandle } from './render/catalog-systems';
 import { bakeGalaxyBackdrop } from './render/galaxy-backdrop';
-import { createAsteroidBelt } from './render/asteroid-belt';
 import {
-  createStarMesh, createPlanetMesh, createMoonMesh, createBobMesh,
-  createSystemMarker, createCosmicMarker, createMarkerStem, createOrbitLine, updateSunSystem,
+  createSystemMarker, createCosmicMarker, createMarkerStem, updateSunSystem,
   updatePlanetShaders, updateOrbitLineResolution,
 } from './render/objects';
+import {
+  instantiateLocalSystem, initSystemFocus, updateSystemFocus, requestSystemFocus,
+  getActiveSystemHandle, getActiveAnchor, loadableSystemId,
+  type LocalSystemHandle, type LoadableSystemId,
+} from './render/system-loader';
 import { CameraController } from './core/camera';
 import { InputManager } from './core/input';
 import { Game } from './core/state';
 import { Events } from './core/events';
-import { world, Strings, createStarEntity, createPlanetEntity, createMoonEntity, createBobEntity, createSystemEntity } from './core/world';
+import { world, createSystemEntity } from './core/world';
 import { runSystems, type FrameContext } from './core/systems';
 import { setCommandTick } from './network/commands';
 import { Bus } from './network/command-bus';
@@ -58,8 +58,8 @@ import { initStepControls, updateStepControlsFrame } from './ui/step-controls';
 import { PanelManager } from './ui/panel-manager';
 import { initDock } from './ui/dock';
 import { initHUD, updateHUD } from './ui/hud';
-import { Tooltip } from './ui/tooltip';
-import { initRaycast } from './ui/raycast';
+import { Tooltip, type TooltipData } from './ui/tooltip';
+import { initRaycast, setCatalogPicking } from './ui/raycast';
 import { Theme } from './ui/theme';
 import { initDetailPanel } from './ui/panels/detail';
 import { initSettingsPanel } from './ui/panels/settings';
@@ -68,11 +68,7 @@ import { initRosterPanel } from './ui/panels/roster';
 import { SelectionPanels } from './ui/panels/selection';
 import { initVisibility, updateVisibility } from './render/visibility';
 import { createReferenceRing, updateReferenceRing } from './render/reference-ring';
-import {
-  createStationMesh, createCometMesh, createOortCloud,
-  createEclipticGrid,
-  STATION_DATA, COMET_DATA, type StationConfig,
-} from './render/scene-objects';
+import { createOortCloud, createEclipticGrid } from './render/scene-objects';
 import { createGalaxy, getGalaxyOffset, getGalaxyCrossfade, updateGalaxyAnimations, updateGalaxyLOD, updateGalaxyMarkerScale, updateGalaxyFrame, updateStarStreaks, createSectorOrb, setDiscVisual } from './render/galaxy';
 import { createGalaxyBuildout, updateGalaxyBuildout, buildoutStatus, type GalaxyBuildout } from './render/sector/galaxy-buildout';
 import { createPhysicalGalaxy, type PhysicalGalaxySystem } from './render/galaxy-sim';
@@ -94,15 +90,9 @@ import { createLensFlare, type LensFlareSystem } from './render/lens-flare';
 import { Debug } from './debug/debug-overlay';
 import { initVisualEditor } from './ui/panels/visual-editor'; // ADMIN VISUAL EDITOR — REMOVE
 import { requestPersistence, startAutosave } from './persistence/save-manager';
-import {
-  STAR_SYSTEMS, EPS_ERI_STAR, EPS_ERI_PLANETS,
-  SOL_STAR, SOL_PLANETS, SOL_MOONS,
-  createInitialBobs,
-} from './data/star-catalog';
+import { STAR_SYSTEMS } from './data/star-catalog';
 import { COSMIC_OBJECTS } from './data/cosmic-objects';
-import { AU_TO_WU, LY_TO_WU, KPC_TO_WU, SOL_GAL_PC } from './core/metrics';
-import { applySolEphemeris } from './data/jpl-ephemeris';
-import { GAME_EPOCH_ET } from './core/time';
+import { LY_TO_WU, KPC_TO_WU, SOL_GAL_PC } from './core/metrics';
 import { PlanetState, Identity, EntityType, BobState, Personality, StarSystem } from './core/components';
 
 // ── HMR State ──
@@ -263,6 +253,10 @@ async function boot(): Promise<void> {
   const systemId = (params.get('system') === 'sol' ? 'sol' : 'ee') as 'ee' | 'sol';
   const worldExtras = populateWorld(sceneCtx, systemId, renderCtx.renderer);
 
+  // Catalog Points picking — raycast resolves a Points-hit index back to the
+  // CatalogStar record through this handle (single-click info panel).
+  setCatalogPicking(worldExtras.catalogSystems);
+
   // Galaxy LAB panel — the in-game tuning surface, driven by the physical galaxy's control schema. Null under
   // ?proto-buildout (no physical galaxy) → the panel/button simply don't mount.
   initGalaxyLabPanel(worldExtras.physGalaxy?.controls ?? null);
@@ -294,9 +288,11 @@ async function boot(): Promise<void> {
   }
 
   // ── 8b. Tab Cycling Through Bobs ──
+  // Reads the LIVE system handle — bob entities are re-created on focus swaps
+  // (Sol has none; cycling is a no-op there).
   let bobCycleIndex = -1;
   Events.on('camera:focus-bob', () => {
-    const bobEids = worldExtras.bobEids;
+    const bobEids = getActiveSystemHandle()?.bobEids ?? [];
     if (bobEids.length === 0) return;
     bobCycleIndex = (bobCycleIndex + 1) % bobEids.length;
     const eid = bobEids[bobCycleIndex];
@@ -308,6 +304,28 @@ async function boot(): Promise<void> {
       Game.selectEntity(eid, userData);
     }
   });
+
+  // ── 8b-bis. Dev hooks (system focus) ──
+  // __legionFocusSystem('Sol') mirrors double-clicking that curated marker
+  // (select + focus + Stage-B lazy load); __legionActiveSystem() reports the
+  // loaded local system id. Console-driven verification path.
+  (globalThis as Record<string, unknown>).__legionFocusSystem = (name: string): boolean => {
+    const idx = STAR_SYSTEMS.findIndex((s) => s.name.toLowerCase() === String(name).toLowerCase());
+    if (idx < 0) return false;
+    const eid = worldExtras.systemEids[idx];
+    const marker = renderObjectMap.get(eid);
+    if (!marker) return false;
+    const wp = marker.getWorldPosition(new Vector3());
+    Game.selectEntity(eid, marker.userData as Record<string, unknown>);
+    SelectionPanels.open(marker.userData as TooltipData);
+    Events.emit('camera:focus-on', { x: wp.x, y: wp.y, z: wp.z });
+    Events.emit('camera:focus-object', { obj: marker });
+    const loadable = loadableSystemId(marker.userData.name as string);
+    if (loadable) requestSystemFocus(loadable);
+    return true;
+  };
+  (globalThis as Record<string, unknown>).__legionActiveSystem = (): string | null =>
+    getActiveSystemHandle()?.systemId ?? null;
 
   // ── 8c. Layer Visibility ──
   initVisibility(
@@ -411,6 +429,7 @@ async function boot(): Promise<void> {
   // so physics/AI are deterministic and reproducible regardless of frame rate or
   // display refresh, while rendering and cosmetic shader clocks run per frame.
   const _localRoot = new Vector3();    // scratch: local-tier root (frame broker, 2c)
+  const _sysAnchor = new Vector3();    // scratch: active-system anchor (system focus)
   const _regionalRoot = new Vector3(); // scratch: regional-tier root
   const _focusWU = new Vector3();      // scratch: camera focus, absolute scene-WU (Phase B streaming)
   const _focusGalPc = new Vector3();   // scratch: camera focus → galactocentric pc (Phase B streaming)
@@ -479,6 +498,11 @@ async function boot(): Promise<void> {
     // 6. Camera (render-rate)
     camCtrl.update(frameTime);
 
+    // 6a-bis. System focus (lazy system loading) — perform any pending local-
+    // tier swap while the tier is imperceptible (hidden inside the zoom
+    // transition), and refresh the active anchor from the marker's Position.
+    updateSystemFocus();
+
     // 6b. Frame broker (scale-unification Phase 2b) — compute this frame's
     // floating-origin rebase R immediately AFTER the camera update and BEFORE
     // any world-space consumer, so every consumer sees one coherent R per frame
@@ -495,6 +519,12 @@ async function boot(): Promise<void> {
     // origin flip translates every tier coherently, instead of yanking the
     // camera away while the system stays at absolute (0,0,0).
     Broker.getTierRoot('local', _localRoot);
+    // Active-system anchor: the local tier renders the FOCUSED system at its
+    // regional marker position (home ⇒ (0,0,0) — byte-identical default).
+    // Every downstream _localRoot consumer (layers.local, star light, oort,
+    // grid, reference ring, lens flare) follows the same anchored root.
+    getActiveAnchor(_sysAnchor);
+    _localRoot.add(_sysAnchor);
     layers.local.position.copy(_localRoot);
     starLight.position.copy(_localRoot);
     worldExtras.oortCloud.position.copy(_localRoot);
@@ -676,7 +706,9 @@ interface WorldExtras {
   oortCloud: import('three').Group;
   galaxyArms: import('three').Group;
   sectorOrb: import('three').Group;
-  bobEids: number[];
+  /** Boot-time local-system handle; the LIVE handle after focus swaps is
+   *  getActiveSystemHandle() (system-loader.ts). */
+  activeSystem: LocalSystemHandle;
   protoSector: import('./render/sector/sector').Sector | null;
   sectorMgr: SectorManager | null;
   regionMgr: RegionManager | null;
@@ -693,105 +725,10 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol', renderer: impo
   // sceneRoot, not the bare scene, so the frame broker can re-root them in 2c.
   const { sceneRoot, layers, renderObjectMap } = ctx;
 
-  const isSol = systemId === 'sol';
-  const star = isSol ? SOL_STAR : EPS_ERI_STAR;
-  // Sol planets get their real JPL orbital elements (positions + plane
-  // orientations) evaluated at the game epoch; fictional systems keep authored
-  // elements. Periods then follow from a^1.5 in the on-rails propagator.
-  const planets = isSol ? applySolEphemeris(SOL_PLANETS, GAME_EPOCH_ET) : EPS_ERI_PLANETS;
-  const moons = isSol ? SOL_MOONS : [];
-
-  // ── Star ──
-  const starEid = createStarEntity(star);
-  const starLabel = isSol ? 'SOL' : 'ε ERIDANI';
-  const starSublabel = isSol ? 'G2V' : 'K2V · HOME';
-  const starMesh = createStarMesh(star.color, star.radius, starLabel, starSublabel);
-  layers.local.add(starMesh);
-  registerRenderObject(renderObjectMap, starEid, starMesh);
-
-  // ── Planets ──
-  const planetEidMap = new Map<string, number>(); // name → eid for moon parent lookup
-  for (const pCfg of planets) {
-    const eid = createPlanetEntity(pCfg);
-    planetEidMap.set(pCfg.name, eid);
-
-    const mesh = createPlanetMesh(
-      pCfg.color, pCfg.size, pCfg.planetType,
-      pCfg.hasAtmosphere, pCfg.atmosColor,
-      pCfg.name, pCfg.status,
-      pCfg.texturePath, pCfg.ringTexturePath,
-      pCfg.axialTilt ?? 0, pCfg.dayLength ?? 1,
-    );
-    layers.local.add(mesh);
-    registerRenderObject(renderObjectMap, eid, mesh);
-
-    // Orbit line — solid low-opacity white; registered for hover brightening.
-    // Full elements so the drawn path matches the propagator exactly.
-    const orbit = createOrbitLine({
-      sma: pCfg.sma,
-      ecc: pCfg.ecc,
-      inclination: pCfg.inclination ?? 0,
-      argPeriapsis: pCfg.argPeriapsis ?? 0,
-      longAscNode: pCfg.longAscNode ?? 0,
-    }, { bodyName: pCfg.name });
-    layers.local.add(orbit);
-  }
-
-  // ── Moons ──
-  for (const mCfg of moons) {
-    const parentEid = planetEidMap.get(mCfg.parentName) ?? 0;
-    const eid = createMoonEntity(mCfg, parentEid);
-
-    const mesh = createMoonMesh(
-      mCfg.color, mCfg.size, mCfg.name,
-      mCfg.texturePath, mCfg.dayLength ?? 1,
-    );
-    layers.local.add(mesh);
-    registerRenderObject(renderObjectMap, eid, mesh);
-  }
-
-  // ── Stations (orbiting planets — EE only) ──
-  if (!isSol) {
-    for (const sCfg of STATION_DATA) {
-      const stationMesh = createStationMesh(sCfg);
-      const parentPlanet = planets[sCfg.parentIdx];
-      if (parentPlanet) {
-        const AU = AU_TO_WU;
-        const angle = sCfg.orbitOffset * Math.PI * 2;
-        const r = parentPlanet.sma * AU + 0.5;
-        stationMesh.position.set(
-          Math.cos(angle) * r,
-          0.1,
-          Math.sin(angle) * r,
-        );
-      }
-      layers.local.add(stationMesh);
-    }
-  }
-
-  // ── Bobs (EE only) ──
-  const bobEids: number[] = [];
-  if (!isSol) {
-    const homeSystemEid = 0;
-    for (const bCfg of createInitialBobs(homeSystemEid)) {
-      const eid = createBobEntity(bCfg);
-      bobEids.push(eid);
-      const mesh = createBobMesh(bCfg.color, bCfg.name, bCfg.callsign);
-      layers.local.add(mesh);
-      registerRenderObject(renderObjectMap, eid, mesh);
-    }
-  }
-
-  // ── Comets ──
-  for (const cCfg of COMET_DATA) {
-    const { body, orbLine } = createCometMesh(cCfg);
-    // Position comet near perihelion
-    const AU = AU_TO_WU;
-    const periR = cCfg.sma * (1 - cCfg.ecc) * (AU / 100);
-    body.position.set(periR, 0, 0);
-    layers.local.add(body);
-    layers.local.add(orbLine);
-  }
+  // ── Local system (star / planets / moons / stations / bobs / comets /
+  // belt / heliopause) — extracted to system-loader.ts so focus swaps can
+  // dispose + re-instantiate the local tier at runtime (lazy system loading).
+  const activeSystem = instantiateLocalSystem(ctx, systemId, renderer);
 
   // ── Star System Markers (Regional View) ──
   const systemEids: number[] = [];
@@ -841,6 +778,19 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol', renderer: impo
   // "15"-unit threshold would yield ZERO edges (closest pair is ~352 WU apart).
   buildStarGraph(systemEids);
 
+  // ── System-focus manager (lazy system loading) ──
+  // Stage B swaps need the scene ctx + the curated marker entities (the swap
+  // anchor rides the marker's ECS Position, so it follows galactic drift).
+  initSystemFocus({
+    ctx,
+    renderer,
+    markerEidFor: (id: LoadableSystemId): number | null => {
+      const name = id === 'sol' ? 'Sol' : 'Epsilon Eridani';
+      const idx = STAR_SYSTEMS.findIndex((s) => s.name === name);
+      return idx >= 0 ? systemEids[idx] ?? null : null;
+    },
+  }, activeSystem);
+
   // ── Catalog systems — the full real 25-pc neighbourhood ──
   // Every HYG star (~3k) at its TRUE 3D position in the regional frame,
   // filling the space between the curated markers. Loads async; the group
@@ -856,17 +806,6 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol', renderer: impo
   // (real constellations), magnitude-sized, B−V-coloured. Replaces the old
   // random fictional shell. Loads its packed binary asynchronously.
   layers.background.add(createCatalogStars());
-
-  // ── Debris Disk ──
-  // ── Asteroid Belt (instanced, flat-shaded) ──
-  const beltInner = isSol ? 2.1 : 2.5;
-  const beltOuter = isSol ? 3.3 : 4.5;
-  const asteroidBelt = createAsteroidBelt(beltInner, beltOuter);
-  asteroidBelt.group.name = 'asteroid-belt';
-  layers.local.add(asteroidBelt.group);
-
-  // ── Heliopause ──
-  layers.local.add(createHeliopause());
 
   // ── Oort Cloud (visible at heliopause+) ──
   const oortCloud = createOortCloud();
@@ -963,7 +902,7 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol', renderer: impo
   const sectorOrb = createSectorOrb(19.1 * LY_TO_WU);
   sceneRoot.add(sectorOrb);
 
-  return { eclipticGrid, oortCloud, galaxyArms: galaxyGroup, sectorOrb, bobEids, protoSector, sectorMgr, regionMgr, sectorFill, galaxyBuildout, physGalaxy, catalogSystems, systemEids };
+  return { eclipticGrid, oortCloud, galaxyArms: galaxyGroup, sectorOrb, activeSystem, protoSector, sectorMgr, regionMgr, sectorFill, galaxyBuildout, physGalaxy, catalogSystems, systemEids };
 }
 
 // ── Start ────────────────────────────────────────────────────────

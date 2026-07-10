@@ -11,14 +11,17 @@
 
 import {
   Raycaster, Vector2, Vector3, CanvasTexture, Sprite, SpriteMaterial,
-  type PerspectiveCamera, type Object3D, type Scene,
+  type PerspectiveCamera, type Object3D, type Scene, type Intersection, type Points,
 } from 'three';
 import { Tooltip, type TooltipData } from './tooltip';
 import { SelectionPanels } from './panels/selection';
 import { Game, ZOOM_STEPS } from '../core/state';
 import { Events } from '../core/events';
 import { setOrbitHighlight } from '../render/objects';
+import { loadableSystemId, preloadSystem, requestSystemFocus } from '../render/system-loader';
 import type { LayerGroups } from '../render/scene';
+import type { CatalogSystemsHandle } from '../render/catalog-systems';
+import type { CatalogStar } from '../data/star-systems';
 
 let camera: PerspectiveCamera;
 let selectables: Object3D[] = [];
@@ -49,11 +52,44 @@ function isWorldVisible(obj: Object3D): boolean {
   return true;
 }
 
+// ── Catalog Points Picking ───────────────────────────────────────
+// The ~3k-star catalogue renders as ONE THREE.Points — a hit resolves to an
+// index, mapped back to the CatalogStar record via this handle (injected by
+// main.ts after populateWorld; initRaycast runs before the world exists).
+
+let catalogSystems: CatalogSystemsHandle | null = null;
+export function setCatalogPicking(handle: CatalogSystemsHandle | null): void {
+  catalogSystems = handle;
+}
+
+/** Synthesized hit payload for a catalogue star — no ECS entity, no marker;
+ *  the record IS the data. `point` carries the star's true world position
+ *  (the hit object is the whole Points cloud). */
+function catalogStarHit(star: CatalogStar, hit: Intersection): HitResult {
+  const points = hit.object as Points;
+  const pos = new Vector3()
+    .fromBufferAttribute(points.geometry.getAttribute('position'), hit.index!)
+    .applyMatrix4(points.matrixWorld);
+  const data: TooltipData = {
+    type: 'catalog_star',
+    name: star.name,
+    designation: star.desig,
+    spectralType: star.spect,
+    constellation: star.con,
+    distLy: star.distLy,
+    mag: star.mag,
+    _catalogStar: star,
+  };
+  return { data, object: hit.object, point: pos };
+}
+
 // ── Hit Test ─────────────────────────────────────────────────────
 
 interface HitResult {
   data: TooltipData;
   object: Object3D;
+  /** World position for hits without a positioned object (catalog points). */
+  point?: Vector3;
 }
 
 export function getHit(clientX: number, clientY: number): HitResult | null {
@@ -61,16 +97,34 @@ export function getHit(clientX: number, clientY: number): HitResult | null {
   mouseVec.y = -(clientY / window.innerHeight) * 2 + 1;
   raycaster.setFromCamera(mouseVec, camera);
 
+  // Catalog Points hit corridor (world units around each point). Scaled with
+  // the view distance so points stay reliably clickable at sector zoom
+  // (~120 WU at a typical ~5000 WU sector view) without a fat corridor when
+  // the camera is close.
+  raycaster.params.Points.threshold = Math.max(60, Game.data.camDist * 0.025);
+
   const hits = raycaster.intersectObjects(selectables, true);
+  let pointsHit: Intersection | null = null;
   for (let i = 0; i < hits.length; i++) {
     // Walk parent chain to find entity userData
     let obj: Object3D | null = hits[i].object;
+    // Catalog star points: remember the first hit but DEFER — any non-Points
+    // hit (curated marker, body) wins the click even when a point is closer
+    // along the ray.
+    if (obj.userData.type === 'catalog_star_points') {
+      if (!pointsHit && hits[i].index != null && isWorldVisible(obj)) pointsHit = hits[i];
+      continue;
+    }
     while (obj && !obj.userData.type) {
       obj = obj.parent;
     }
     if (!obj || !obj.userData.type) continue;
     if (!isWorldVisible(obj)) continue;
     return { data: obj.userData as TooltipData, object: obj };
+  }
+  if (pointsHit && catalogSystems) {
+    const star = catalogSystems.stars[pointsHit.index!];
+    if (star) return catalogStarHit(star, pointsHit);
   }
   return null;
 }
@@ -154,7 +208,10 @@ function setHoverState(hit: HitResult | null): void {
     return;
   }
   hoveredObject = hit.object;
-  hit.object.getWorldPosition(_hoverPos);
+  // Catalog points carry their world position on the hit (the object is the
+  // whole Points cloud, whose origin is meaningless for the reticule).
+  if (hit.point) _hoverPos.copy(hit.point);
+  else hit.object.getWorldPosition(_hoverPos);
   hoverIndicator.position.copy(_hoverPos);
 
   // Size the reticule to a constant screen-pixel diameter regardless
@@ -172,6 +229,7 @@ function pixelsForType(type: string): number {
     case 'star':
     case 'gal_system':
     case 'system':
+    case 'catalog_star':
     case 'phenomenon':
     case 'alien':
     case 'alien_civ':
@@ -205,6 +263,7 @@ function warpZoomForType(type: string): number | null {
       return ZOOM_STEPS[3].val;  // INNER SYSTEM
     case 'system':         // regional system marker
     case 'gal_system':     // galactic system marker
+    case 'catalog_star':   // catalogue star point (no local tier yet)
     case 'nebula':         // cosmic objects share the local-map framing
     case 'dyson_sphere':
     case 'dyson_swarm':
@@ -286,10 +345,18 @@ export function initRaycast(
     if (hit) {
       // Pull the real ECS eid out of userData (set by registerRenderObject).
       // Non-ECS objects (stations, galactic markers, alien civs, transit
-      // chevrons, Sgr A*) have no eid — fall through to 0 as placeholder.
+      // chevrons, Sgr A*, catalog stars) have no eid — fall through to 0.
       const eid = (hit.data as Record<string, unknown>).eid as number | undefined ?? 0;
       Game.selectEntity(eid, hit.data as unknown as Record<string, unknown>);
       SelectionPanels.open(hit.data);
+      // Stage A: single-click on a loadable system starts the staged preload
+      // (Sol textures + exoplanet sidecar). Catalog stars have no loadable
+      // local tier yet — the info panel alone is the payoff.
+      const t = hit.data.type as string;
+      if (t === 'system' || t === 'gal_system') {
+        const sysId = loadableSystemId(hit.data.name as string | undefined);
+        if (sysId) preloadSystem(sysId);
+      }
     } else {
       // Click on empty space — deselect
       Game.deselectEntity();
@@ -316,7 +383,10 @@ export function initRaycast(
     if (!hit) return;
     if ((hit.data.type as string) === 'orbit') return; // hover-only affordance
 
-    hit.object.getWorldPosition(worldPos);
+    // Catalog points carry their world position on the hit — the Points
+    // cloud's own origin is meaningless as a focus target.
+    if (hit.point) worldPos.copy(hit.point);
+    else hit.object.getWorldPosition(worldPos);
     const eid = (hit.data as Record<string, unknown>).eid as number | undefined ?? 0;
     Game.selectEntity(eid, hit.data as unknown as Record<string, unknown>);
     SelectionPanels.open(hit.data);
@@ -333,9 +403,18 @@ export function initRaycast(
         targetZoomLevel: target,
       });
     } else {
-      // Plain dblclick → focus at current zoom + track object.
+      // Plain dblclick → focus at current zoom + track object. A Points cloud
+      // is not trackable — the synthesized point already IS the star.
       Events.emit('camera:focus-on', { x: worldPos.x, y: worldPos.y, z: worldPos.z });
-      Events.emit('camera:focus-object', { obj: hit.object });
+      if (!hit.point) Events.emit('camera:focus-object', { obj: hit.object });
+    }
+
+    // Stage B: focusing a loadable system swaps the local tier to it — the
+    // swap defers until the zoom transition hides the local tier.
+    const t = hit.data.type as string;
+    if (t === 'system' || t === 'gal_system') {
+      const sysId = loadableSystemId(hit.data.name as string | undefined);
+      if (sysId) requestSystemFocus(sysId);
     }
   }
 

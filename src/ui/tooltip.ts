@@ -30,6 +30,9 @@ export interface TooltipData {
   bobCount?: number;
   hasBobs?: boolean;
   status?: string;
+  // Catalog star (synthesized by raycast from the CatalogStar record)
+  constellation?: string;
+  mag?: number;
   [key: string]: unknown;
 }
 
@@ -68,6 +71,12 @@ function buildHTML(d: TooltipData): string {
       + row('DIST', ((d.distLy ?? 0)).toFixed(1) + ' LY');
     if (d.bobCount != null) h += row('BOBS', String(d.bobCount));
     if (d.hasBobs === false) h += row('STATUS', 'UNEXPLORED');
+
+  } else if (d.type === 'catalog_star') {
+    h = `<div class="ht-name">${d.name ?? ''}</div>`
+      + `<div class="ht-type">${d.spectralType || '—'}${d.constellation ? ' · ' + d.constellation : ''}</div>`
+      + row('DIST', ((d.distLy ?? 0)).toFixed(1) + ' LY')
+      + row('MAG', (d.mag ?? 0).toFixed(1));
 
   } else if (d.type === 'star') {
     h = `<div class="ht-name">${d.name ?? ''}</div>`
