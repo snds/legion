@@ -83,7 +83,11 @@ import { createSectorFill, fillStatus, updateSectorFill, type SectorFill } from 
 import { setArmDebug } from './render/sector/sector-stars';
 import { absWUToGalPc, HOME_GAL_PC } from './render/sector/sector';
 import { runSectorTour, type SectorTourHandle } from './render/sector/sector-tour';
-import { regionalScenePos, type CuratedSystem } from './data/curated-systems';
+import { regionalScenePos, CURATED_SYSTEMS, type CuratedSystem } from './data/curated-systems';
+import { Position } from './core/components';
+import {
+  gameTimeToMyr, driftedRegionalScenePos, driftGalPc, DRIFT_MIN_STEP_MYR,
+} from './core/galactic-drift';
 import { Broker } from './render/scale-manager';
 import { createPostProcessing, type PostProcessingContext } from './render/post-processing';
 import { createLensFlare, type LensFlareSystem } from './render/lens-flare';
@@ -96,7 +100,7 @@ import {
   createInitialBobs,
 } from './data/star-catalog';
 import { COSMIC_OBJECTS } from './data/cosmic-objects';
-import { AU_TO_WU, LY_TO_WU } from './core/metrics';
+import { AU_TO_WU, LY_TO_WU, KPC_TO_WU, SOL_GAL_PC } from './core/metrics';
 import { applySolEphemeris } from './data/jpl-ephemeris';
 import { GAME_EPOCH_ET } from './core/time';
 import { PlanetState, Identity, EntityType, BobState, Personality, StarSystem } from './core/components';
@@ -338,6 +342,16 @@ async function boot(): Promise<void> {
   const ANALYTIC_INTENSITY = 0.0025;
   let skyBase = ANALYTIC_INTENSITY;
   let skyTexReady = false;
+
+  // Galactic-drift bookkeeping (loop step 6b): last clock the marker/entity
+  // positions were derived for, + a reusable output (never aliased).
+  let lastDriftAppliedMyr = 0;
+  const driftScratch = { x: 0, y: 0, z: 0 };
+  // The drift clock. Dev override: set __legionDriftMyr = <Myr> in the console
+  // to preview the swirl (markers + disc share it); null/undefined = sim clock.
+  const currentDriftMyr = (): number =>
+    ((globalThis as Record<string, unknown>).__legionDriftMyr as number | undefined)
+      ?? gameTimeToMyr(Game.data.gameTime);
   // Orientation: the photo's galactic centre (image centre) maps to +X. The
   // live analytic galaxy's Sgr A* sits toward −X (its model places home at +X,
   // centre at the origin), so a π yaw points the photo's bulge at Sgr A* and
@@ -512,12 +526,52 @@ async function boot(): Promise<void> {
       postCtx.setGalaxyOverlays(showDisc); // prominent-stars + dust-last passes (rendered over the gas)
       if (showDisc) {
         worldExtras.physGalaxy.root.position.copy(getGalaxyOffset());
-        worldExtras.physGalaxy.update(camera, frameTime, Game.data.camDist > 1e6);
+        // Pass the sim's galactic-drift clock so the disc's differential rotation
+        // and the drifting system markers stay on ONE clock (LAB warp adds a
+        // preview offset on top inside update()).
+        worldExtras.physGalaxy.update(
+          camera, frameTime, Game.data.camDist > 1e6, currentDriftMyr(),
+        );
         const gb = worldExtras.physGalaxy.renderGasBlur(renderCtx.renderer, scene, camera);
         postCtx.setGasBlur(gb?.texture ?? null, gb?.gain ?? 1);
       } else {
         postCtx.setGasBlur(null, 1);
       }
+    }
+
+    // 6b. Galactic drift — systems orbit Sgr A* (core/galactic-drift). Epoch
+    // positions are re-derived from the sim clock; gated to DRIFT_MIN_STEP_MYR
+    // (100 game-years) so this is a no-op at normal time compression. Circular
+    // orbits keep y fixed, so marker stems stay valid. The star-graph links are
+    // NOT rebuilt (drift is sub-link-width for any realistic session).
+    {
+      const driftMyr = currentDriftMyr();
+      if (Math.abs(driftMyr - lastDriftAppliedMyr) >= DRIFT_MIN_STEP_MYR) {
+        lastDriftAppliedMyr = driftMyr;
+        // Curated systems: write the ECS Position; renderSync moves the markers.
+        for (let i = 0; i < worldExtras.systemEids.length; i++) {
+          const eid = worldExtras.systemEids[i];
+          driftedRegionalScenePos(CURATED_SYSTEMS[i].solPc, driftMyr, driftScratch);
+          Position.x[eid] = driftScratch.x;
+          Position.y[eid] = driftScratch.y;
+          Position.z[eid] = driftScratch.z;
+        }
+        // Galactic-tier system markers: absolute galactocentric swing.
+        const pcToWuNative = KPC_TO_WU / 1000;
+        worldExtras.galaxyArms.traverse((obj) => {
+          const sys = obj.userData as { type?: string; solPc?: { x: number; y: number; z: number } };
+          if (sys.type !== 'gal_system' || !sys.solPc) return;
+          driftGalPc(
+            SOL_GAL_PC.x + sys.solPc.x, SOL_GAL_PC.y + sys.solPc.y, SOL_GAL_PC.z + sys.solPc.z,
+            driftMyr, driftScratch,
+          );
+          obj.position.set(
+            driftScratch.x * pcToWuNative, driftScratch.y * pcToWuNative, driftScratch.z * pcToWuNative,
+          );
+          (obj.userData as { _pos?: Vector3 })._pos?.copy(obj.position);
+        });
+      }
+      worldExtras.catalogSystems.updateDrift(driftMyr); // gated internally
     }
 
     // 7. Audio
@@ -630,6 +684,8 @@ interface WorldExtras {
   galaxyBuildout: GalaxyBuildout | null;
   physGalaxy: PhysicalGalaxySystem | null;
   catalogSystems: CatalogSystemsHandle;
+  /** Curated-system entity ids, index-aligned with CURATED_SYSTEMS (drift). */
+  systemEids: number[];
 }
 
 function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol', renderer: import('three').WebGLRenderer): WorldExtras {
@@ -907,7 +963,7 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol', renderer: impo
   const sectorOrb = createSectorOrb(19.1 * LY_TO_WU);
   sceneRoot.add(sectorOrb);
 
-  return { eclipticGrid, oortCloud, galaxyArms: galaxyGroup, sectorOrb, bobEids, protoSector, sectorMgr, regionMgr, sectorFill, galaxyBuildout, physGalaxy, catalogSystems };
+  return { eclipticGrid, oortCloud, galaxyArms: galaxyGroup, sectorOrb, bobEids, protoSector, sectorMgr, regionMgr, sectorFill, galaxyBuildout, physGalaxy, catalogSystems, systemEids };
 }
 
 // ── Start ────────────────────────────────────────────────────────
