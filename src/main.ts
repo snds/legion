@@ -30,6 +30,7 @@ import {
   createHeliopause,
 } from './render/particles';
 import { createCatalogStars } from './render/star-field';
+import { createCatalogSystems, type CatalogSystemsHandle } from './render/catalog-systems';
 import { bakeGalaxyBackdrop } from './render/galaxy-backdrop';
 import { createAsteroidBelt } from './render/asteroid-belt';
 import {
@@ -628,6 +629,7 @@ interface WorldExtras {
   sectorFill: SectorFill | null;
   galaxyBuildout: GalaxyBuildout | null;
   physGalaxy: PhysicalGalaxySystem | null;
+  catalogSystems: CatalogSystemsHandle;
 }
 
 function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol', renderer: import('three').WebGLRenderer): WorldExtras {
@@ -783,6 +785,14 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol', renderer: impo
   // "15"-unit threshold would yield ZERO edges (closest pair is ~352 WU apart).
   buildStarGraph(systemEids);
 
+  // ── Catalog systems — the full real 25-pc neighbourhood ──
+  // Every HYG star (~3k) at its TRUE 3D position in the regional frame,
+  // filling the space between the curated markers. Loads async; the group
+  // rides the regional layer's tier visibility.
+  const catalogSystems = createCatalogSystems();
+  layers.regional.add(catalogSystems.group);
+  (globalThis as Record<string, unknown>).__catalogSystems = catalogSystems;
+
   // ── Background ──
   // (Legacy createMilkyWay band deleted: the system-tier Milky Way is now the
   // positionally-coherent baked cubemap of the real galaxy model — main boot.)
@@ -897,7 +907,7 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol', renderer: impo
   const sectorOrb = createSectorOrb(19.1 * LY_TO_WU);
   sceneRoot.add(sectorOrb);
 
-  return { eclipticGrid, oortCloud, galaxyArms: galaxyGroup, sectorOrb, bobEids, protoSector, sectorMgr, regionMgr, sectorFill, galaxyBuildout, physGalaxy };
+  return { eclipticGrid, oortCloud, galaxyArms: galaxyGroup, sectorOrb, bobEids, protoSector, sectorMgr, regionMgr, sectorFill, galaxyBuildout, physGalaxy, catalogSystems };
 }
 
 // ── Start ────────────────────────────────────────────────────────
