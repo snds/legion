@@ -975,8 +975,13 @@ export function createGalaxy(): Group {
   }
 
   // ── 11. Alien Civilizations ─────────────────────────────────────
+  // Territory "zones" (wireframe influence spheres + dashed rings + labels) are
+  // OFF pending a redesign — they read as debug wireframe orbs at the arm tier.
+  // Flip SHOW_ALIEN_CIV_ZONES back on (or replace this block) when re-addressing.
+  const SHOW_ALIEN_CIV_ZONES = false;
 
   ALIEN_CIVS.forEach(ac => {
+    if (!SHOW_ALIEN_CIV_ZONES) return;
     const pos = new Vector3(
       SOL_GAL_POS.x + ac.localX * lyToWu,
       ac.localY * lyToWu,
