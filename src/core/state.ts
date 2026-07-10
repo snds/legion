@@ -11,6 +11,7 @@
 
 import { Events } from './events';
 import { gameTimeToEt } from './time';
+import { AU_TO_WU, WU_PER_PC, AU_PER_PC } from './metrics';
 
 // ── Zoom Step Definitions ────────────────────────────────────────
 
@@ -172,6 +173,33 @@ export function getCamDist(z: number): number {
   const GAL_FAR = 3.6e7;  // z = 1.0      (full Milky Way disc framed from outside)
   const tg = (z - T_HELIO) / (1.0 - T_HELIO);
   return GAL_NEAR * Math.pow(GAL_FAR / GAL_NEAR, tg);
+}
+
+// ── Physical view distance (scale-unification U1) ────────────────
+// ONE continuous physical distance (parsecs) for the whole zoom range —
+// the single honest ruler that replaces the per-tier readout switch. The
+// render camDist above still uses the legacy per-tier WU scales (the system
+// tier is compressed 1 AU = 10 WU until U2 sites it at true scale); this
+// function reinterprets camDist through each tier's TRUE metric and, across
+// the heliopause→neighbourhood void, sweeps continuously instead of
+// teleporting (the 279 AU → 9.5 ly jump). Below the void it reads the
+// system frame (÷ AU_TO_WU → AU → pc); above it the unified frame
+// (÷ WU_PER_PC → pc). The empty gap between the heliopause (~0.0014 pc) and
+// the nearest stars (~1.3 pc) is real space the zoom crosses fast — the
+// readout now shows that traversal instead of a discontinuity.
+const VOID_Z = 0.08; // zoom budget the physical readout spends crossing the void
+export function physicalDistancePc(z: number): number {
+  const sysPc = (cz: number): number => getCamDist(cz) / AU_TO_WU / AU_PER_PC;
+  const uniPc = (cz: number): number => getCamDist(cz) / WU_PER_PC;
+  if (z <= T_HELIO) return sysPc(z);
+  if (z >= T_HELIO + VOID_Z) return uniPc(z);
+  // Log-space sweep across the void so the physical distance is continuous
+  // and monotonic through the empty gap.
+  const t = (z - T_HELIO) / VOID_Z;
+  const s = t * t * (3 - 2 * t); // smoothstep
+  const a = Math.log(sysPc(T_HELIO));
+  const b = Math.log(uniPc(T_HELIO + VOID_Z));
+  return Math.exp(a + (b - a) * s);
 }
 
 // ── State Shape ──────────────────────────────────────────────────
