@@ -1,7 +1,9 @@
 // ═══════════════════════════════════════════════════════════════════
-// SETTINGS PANEL — Config & Keyboard Reference
-// Matches the monolithic SettingsPanel: font selector, keyboard
-// shortcut reference, and theme reset. Anchored to bottom.
+// SETTINGS PANEL — Config, tabbed: DISPLAY · KEYBOARD · CREDITS
+// Grouped into tabs so the panel doesn't scroll forever. The typeface
+// selector is HIDDEN for now (SHOW_TYPEFACE) but kept wired. DISPLAY
+// carries a dev-only "Save as default" that promotes the current visual
+// settings to the committed src/config/visual-defaults.json.
 // ═══════════════════════════════════════════════════════════════════
 
 import { PanelManager } from '../panel-manager';
@@ -9,6 +11,9 @@ import { registerPanel } from '../dock';
 import { Theme, FONTS } from '../theme';
 import { VP, type VisualParams } from '../../render/visual-params';
 import { DATA_SOURCES, PERMISSION_LABEL } from '../../data/data-sources';
+
+// Typeface controls are parked, not removed — flip to re-show the selector.
+const SHOW_TYPEFACE = false;
 
 // ── Visual-effect sliders (UI 0–100% → VP value 0..max; 0 = off) ──
 interface FxDef { id: string; label: string; key: keyof VisualParams; max: number; }
@@ -44,33 +49,37 @@ const SHORTCUTS: [string, string][] = [
   ['Esc',        'Deselect'],
 ];
 
-// ── Render ───────────────────────────────────────────────────────
+// ── Tabs ─────────────────────────────────────────────────────────
 
-function render(area: HTMLElement): void {
-  let h = `<div class="panel-header">`
-    + `<div class="panel-title">CONFIG</div>`
-    + `<button class="panel-close">✕</button>`
-    + `</div>`;
+type TabId = 'display' | 'keyboard' | 'credits';
+const TABS: [TabId, string][] = [
+  ['display',  'DISPLAY'],
+  ['keyboard', 'KEYBOARD'],
+  ['credits',  'CREDITS'],
+];
+let activeTab: TabId = 'display'; // sticky within the session
 
-  h += `<div class="panel-body">`;
+// ── Tab bodies ───────────────────────────────────────────────────
 
-  // ── Font Selector ──
-  h += `<div class="settings-group-title">TYPEFACE</div>`;
-  h += `<div class="settings-row"><select id="s-font" class="settings-select">`;
-  FONTS.forEach(f => {
-    const sel = f === Theme.getFont() ? ' selected' : '';
-    h += `<option value="${f}"${sel} style="font-family:'${f}'">${f}</option>`;
-  });
-  h += `</select></div>`;
+function renderDisplayTab(): string {
+  let h = '';
 
-  // ── Font Preview ──
-  h += `<div class="settings-preview" id="s-preview">`
-    + `<div class="settings-preview-title">PREVIEW</div>`
-    + `<div class="settings-preview-body">The quick brown fox jumps over the lazy dog. 0123456789</div>`
-    + `</div>`;
+  if (SHOW_TYPEFACE) {
+    h += `<div class="settings-group-title">TYPEFACE</div>`;
+    h += `<div class="settings-row"><select id="s-font" class="settings-select">`;
+    FONTS.forEach(f => {
+      const sel = f === Theme.getFont() ? ' selected' : '';
+      h += `<option value="${f}"${sel} style="font-family:'${f}'">${f}</option>`;
+    });
+    h += `</select></div>`;
+    h += `<div class="settings-preview" id="s-preview">`
+      + `<div class="settings-preview-title">PREVIEW</div>`
+      + `<div class="settings-preview-body">The quick brown fox jumps over the lazy dog. 0123456789</div>`
+      + `</div>`;
+  }
 
   // ── Visual Inflation ──
-  h += `<div class="settings-group-title" style="margin-top:16px">VISUAL INFLATION</div>`;
+  h += `<div class="settings-group-title"${SHOW_TYPEFACE ? ' style="margin-top:16px"' : ''}>VISUAL INFLATION</div>`;
   h += `<div class="settings-row" style="display:flex;align-items:center;gap:8px">`;
   h += `<span style="font-size:11px;opacity:0.6">1×</span>`;
   h += `<input type="range" id="s-scale" class="settings-range" min="1" max="2" step="0.05" value="${VP.get('visualInflation')}">`;
@@ -99,16 +108,30 @@ function render(area: HTMLElement): void {
     + `</div>`;
   h += `<div style="font-size:10px;opacity:0.4;margin-top:2px">Drag a slider to 0 to disable it. Backdrop = the Milky Way sky glow.</div>`;
 
-  // ── Keyboard Reference ──
-  h += `<div class="settings-group-title" style="margin-top:16px">KEYBOARD</div>`;
+  // ── Persistence ──
+  // Save-as-default only exists where the dev write-back endpoint does; the
+  // production build keeps localStorage persistence for the allowlisted keys.
+  if (import.meta.env.DEV) {
+    h += `<button class="settings-reset" id="s-save-default" style="margin-top:14px">SAVE AS DEFAULT</button>`;
+    h += `<div style="font-size:10px;opacity:0.4;margin-top:2px">Writes src/config/visual-defaults.json — persists across restarts, browsers and deploys (commit it to keep it).</div>`;
+  }
+  h += `<button class="settings-reset" id="s-reset" style="margin-top:8px">RESET TO DEFAULTS</button>`;
+
+  return h;
+}
+
+function renderKeyboardTab(): string {
+  let h = `<div class="settings-group-title">KEYBOARD</div>`;
   SHORTCUTS.forEach(([key, desc]) => {
     h += `<div class="key-row"><kbd>${key}</kbd><span class="key-desc">${desc}</span></div>`;
   });
+  return h;
+}
 
-  // ── Credits · Data Sources ──
+function renderCreditsTab(): string {
   // Rendered straight from the DATA_SOURCES registry (src/data/data-sources.ts) —
   // several licenses REQUIRE this attribution to be visible in-app.
-  h += `<div class="settings-group-title" style="margin-top:16px">CREDITS · DATA SOURCES</div>`;
+  let h = `<div class="settings-group-title">CREDITS · DATA SOURCES</div>`;
   DATA_SOURCES.forEach(s => {
     const badge = s.shipped ? PERMISSION_LABEL[s.permission] : 'NOT SHIPPED';
     const badgeColor = s.permission === 'unverified' || s.permission === 'non-commercial'
@@ -116,7 +139,6 @@ function render(area: HTMLElement): void {
     const title = s.url
       ? `<a href="${s.url}" target="_blank" rel="noopener" style="color:inherit">${s.name}</a>`
       : s.name;
-    // NOT .settings-row (flex) — each credit entry stacks its own lines.
     h += `<div style="margin-top:8px">`
       + `<div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px">`
       + `<span style="font-size:11px">${title}</span>`
@@ -126,10 +148,27 @@ function render(area: HTMLElement): void {
       + `<div style="font-size:10px;opacity:0.4;margin-top:1px">${s.creditLine}</div>`
       + `</div>`;
   });
+  return h;
+}
 
-  // ── Reset ──
-  h += `<button class="settings-reset" id="s-reset" style="margin-top:12px">RESET THEME</button>`;
+// ── Render ───────────────────────────────────────────────────────
 
+function render(area: HTMLElement): void {
+  let h = `<div class="panel-header">`
+    + `<div class="panel-title">CONFIG</div>`
+    + `<button class="panel-close">✕</button>`
+    + `</div>`;
+
+  h += `<div class="settings-tabs">`;
+  TABS.forEach(([id, label]) => {
+    h += `<button class="settings-tab${id === activeTab ? ' active' : ''}" data-tab="${id}">${label}</button>`;
+  });
+  h += `</div>`;
+
+  h += `<div class="panel-body">`;
+  if (activeTab === 'display') h += renderDisplayTab();
+  else if (activeTab === 'keyboard') h += renderKeyboardTab();
+  else h += renderCreditsTab();
   h += `</div>`; // panel-body
 
   area.innerHTML = h;
@@ -138,6 +177,15 @@ function render(area: HTMLElement): void {
 
   const closeBtn = area.querySelector<HTMLElement>('.panel-close');
   if (closeBtn) closeBtn.onclick = () => PanelManager.close();
+
+  area.querySelectorAll<HTMLButtonElement>('.settings-tab').forEach(tab => {
+    tab.onclick = () => {
+      activeTab = tab.dataset.tab as TabId;
+      render(area);
+    };
+  });
+
+  if (activeTab !== 'display') return; // remaining wiring is DISPLAY-only
 
   const fontSelect = area.querySelector<HTMLSelectElement>('#s-font');
   if (fontSelect) {
@@ -173,11 +221,22 @@ function render(area: HTMLElement): void {
   const photoSky = area.querySelector<HTMLInputElement>('#s-photosky');
   if (photoSky) photoSky.onchange = () => VP.set('photographicSky', photoSky.checked);
 
+  const saveDefaultBtn = area.querySelector<HTMLButtonElement>('#s-save-default');
+  if (saveDefaultBtn) {
+    saveDefaultBtn.onclick = () => {
+      void VP.saveAsDefaults().then((where) => {
+        saveDefaultBtn.textContent = where === 'committed' ? 'SAVED ✓' : 'SAVE FAILED (dev server?)';
+        setTimeout(() => { saveDefaultBtn.textContent = 'SAVE AS DEFAULT'; }, 1400);
+      });
+    };
+  }
+
   const resetBtn = area.querySelector<HTMLElement>('#s-reset');
   if (resetBtn) {
     resetBtn.onclick = () => {
       Theme.reset();
-      // Re-render to sync select state
+      VP.reset(); // back to the saved baseline (code defaults + committed overlay)
+      // Re-render to sync control state
       render(area);
     };
   }

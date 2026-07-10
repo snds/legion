@@ -9,6 +9,9 @@
 // shader/material system once the aesthetic is finalized.
 // ═══════════════════════════════════════════════════════════════════
 
+import savedVisualDefaults from '../config/visual-defaults.json';
+import { saveDevDefaults } from '../core/dev-defaults';
+
 export interface VisualParams {
   // ── Lighting ──
   starLightIntensity: number;
@@ -231,7 +234,11 @@ class VisualParamsStore {
   private listeners: Listener[] = [];
 
   constructor() {
-    this.data = { ...DEFAULTS };
+    // Precedence: code DEFAULTS → committed saved defaults (src/config/
+    // visual-defaults.json, written by "Save as default" via the dev
+    // endpoint — survives restarts/browsers/deploys) → per-browser
+    // localStorage tweaks (PERSIST_KEYS only).
+    this.data = { ...DEFAULTS, ...(savedVisualDefaults as Partial<VisualParams>) };
     // Restore persisted user graphics settings over the defaults.
     try {
       const raw = typeof localStorage !== 'undefined' && localStorage.getItem(STORAGE_KEY);
@@ -275,10 +282,29 @@ class VisualParamsStore {
   }
 
   reset(): void {
+    // Reset lands on the SAVED baseline (code defaults + the committed
+    // visual-defaults.json overlay), not the raw code floor — "default"
+    // means whatever was last promoted via saveAsDefaults().
+    const baseline = { ...DEFAULTS, ...(savedVisualDefaults as Partial<VisualParams>) };
     const keys = Object.keys(DEFAULTS) as (keyof VisualParams)[];
     for (const k of keys) {
-      this.set(k, DEFAULTS[k]);
+      this.set(k, baseline[k]);
     }
+  }
+
+  /** Promote the CURRENT store state to the committed default: the dev server
+   *  writes src/config/visual-defaults.json, which merges over DEFAULTS on
+   *  every boot (any browser, any machine, every deploy). Only meaningfully
+   *  different values are written, so code-default changes keep taking effect
+   *  for untouched params. Resolves 'committed' on success, 'local' in prod
+   *  or if the endpoint is unreachable. */
+  async saveAsDefaults(): Promise<'committed' | 'local'> {
+    const diff: Partial<VisualParams> = {};
+    const keys = Object.keys(DEFAULTS) as (keyof VisualParams)[];
+    for (const k of keys) {
+      if (this.data[k] !== DEFAULTS[k]) (diff[k] as unknown) = this.data[k];
+    }
+    return saveDevDefaults('visual', diff);
   }
 
   exportJSON(): string {

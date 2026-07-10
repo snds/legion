@@ -152,7 +152,7 @@ function buildPanel(controls: GalaxyControls): HTMLElement {
   });
   refreshCollapseIcon();
 
-  // ── footer: Re-seed · Save (interim) · Revert (canonical) · Copy JSON (promote) ──
+  // ── footer: Re-seed · Save (committed default via dev endpoint) · Revert · Copy JSON ──
   const btn = (text: string, onClick: () => void): HTMLButtonElement => {
     const b = document.createElement('button');
     b.textContent = text;
@@ -168,7 +168,10 @@ function buildPanel(controls: GalaxyControls): HTMLElement {
 
   const footer1 = document.createElement('div');
   footer1.style.cssText = 'margin-top:11px;border-top:1px solid #2a3340;padding-top:8px;display:flex;gap:5px';
-  const saveBtn = btn('Save', () => { controls.save(); flash(saveBtn, 'Saved ✓'); });
+  const saveBtn = btn('Save', () => {
+    void controls.save().then((where) =>
+      flash(saveBtn, where === 'committed' ? 'Committed ✓' : 'Saved (browser only)'));
+  });
   const revertBtn = btn('Revert', () => {
     controls.revert();
     for (const r of refreshers) r(); // re-sync inputs to the reverted (canonical) values
@@ -192,7 +195,7 @@ function buildPanel(controls: GalaxyControls): HTMLElement {
 
   const help = document.createElement('div');
   help.style.cssText = 'margin-top:7px;opacity:0.5;font-size:10px;line-height:1.4';
-  help.textContent = 'Save → this browser · Revert → canonical · Copy JSON → paste into SAVED_GALAXY_DEFAULTS to ship';
+  help.textContent = 'Save → committed default (galaxy-defaults.json; every browser/deploy) · Revert → committed look · Copy JSON → inspect/share';
   panel.appendChild(help);
 
   return panel;
