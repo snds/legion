@@ -119,6 +119,10 @@ function createProceduralRingTexture(): Texture {
 /** Stored reference to the active sun system for per-frame updates */
 let activeSunSystem: SunSystem | null = null;
 
+/** Sun systems by star group — lets a disposed star release its cubemap
+ *  pipeline and stop the per-frame update (system-loader dispose path). */
+const sunSystemByStar = new Map<Group, SunSystem>();
+
 export function createStarMesh(color: number, radius: number, name = 'ε ERIDANI', spectralInfo = 'K2V · HOME'): Group {
   const group = new Group();
   group.name = 'star';
@@ -130,6 +134,7 @@ export function createStarMesh(color: number, radius: number, name = 'ε ERIDANI
   // Procedural sun shader system (surface + glow + corona rays)
   const sunSys = createSunSystem(radius);
   activeSunSystem = sunSys;
+  sunSystemByStar.set(group, sunSys);
   group.add(sunSys.group);
 
   // Star icon — visible at heliopause+ when mesh too small to see
@@ -153,6 +158,17 @@ export function updateSunSystem(renderer: WebGLRenderer, dt: number): void {
   activeSunSystem?.update(renderer, dt);
 }
 
+/** Unregister a star group created by createStarMesh: dispose its sun-shader
+ *  system (cubemap RT, geometries, materials, VP subscription) and stop the
+ *  per-frame update if it was the active sun (system-loader dispose path). */
+export function unregisterStarMesh(group: Group): void {
+  const sunSys = sunSystemByStar.get(group);
+  if (!sunSys) return;
+  sunSystemByStar.delete(group);
+  sunSys.dispose();
+  if (activeSunSystem === sunSys) activeSunSystem = null;
+}
+
 // ── Planet ───────────────────────────────────────────────────────
 
 /** Tracked planet materials for per-frame sun direction updates */
@@ -172,6 +188,15 @@ interface PlanetMaterialEntry {
   ringNormal: Vector3 | null;
 }
 const trackedPlanets: PlanetMaterialEntry[] = [];
+
+/** Unregister a planet/moon group from the per-frame shader registry
+ *  (updatePlanetShaders + VP sync) so a disposed system stops animating dead
+ *  materials. The caller disposes the geometries/materials themselves. */
+export function unregisterPlanetMesh(group: Group): void {
+  for (let i = trackedPlanets.length - 1; i >= 0; i--) {
+    if (trackedPlanets[i].group === group) trackedPlanets.splice(i, 1);
+  }
+}
 
 // Planetshine tuning. strength = clamp(GAIN · (parentRadius/dist)², MAX). Both
 // radius and distance scale with the visual scale, so the ratio is scale-free.
@@ -480,6 +505,7 @@ export function updatePlanetShaders(
 ): void {
   const sunDir = new Vector3();
   const _planetWorld = new Vector3(); // planet world centre (frame-broker lockstep, 2b)
+  const _scanWorld = new Vector3();   // focus-scan scratch (world frame)
 
   // Planetshine sources — moons receive a diffuse bounce from their nearest planet.
   const planetEntries = trackedPlanets.filter((e) => e.group.userData?.type === 'planet');
@@ -493,8 +519,11 @@ export function updatePlanetShaders(
   if (focusTarget && cameraPosition && isCloseZoom) {
     let bestDistSq = Infinity;
     for (const entry of trackedPlanets) {
-      const p = entry.group.position;
-      const dSq = (p.x - focusTarget.x) ** 2 + (p.y - focusTarget.y) ** 2 + (p.z - focusTarget.z) ** 2;
+      // WORLD position: focusTarget/camera are world-frame and the local tier
+      // renders at the active-system anchor (system-loader). Identity when the
+      // home system is active (local tier at the origin).
+      entry.group.getWorldPosition(_scanWorld);
+      const dSq = (_scanWorld.x - focusTarget.x) ** 2 + (_scanWorld.y - focusTarget.y) ** 2 + (_scanWorld.z - focusTarget.z) ** 2;
       if (dSq < bestDistSq) {
         bestDistSq = dSq;
         focusedEntry = entry;
@@ -584,10 +613,12 @@ export function updatePlanetShaders(
     // At surface/system zoom, planets other than the focused one can orbit
     // through the camera frustum, causing a distracting colored flash.
     // Fade them based on their angular size (how much of the viewport they fill).
+    // Distances use the WORLD centre — camera is world-frame and the local tier
+    // renders at the active-system anchor (identity for the home system).
     if (cameraPosition) {
-      const dx = cameraPosition.x - pos.x;
-      const dy = cameraPosition.y - pos.y;
-      const dz = cameraPosition.z - pos.z;
+      const dx = cameraPosition.x - _planetWorld.x;
+      const dy = cameraPosition.y - _planetWorld.y;
+      const dz = cameraPosition.z - _planetWorld.z;
       const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
       const scaledRadius = entry.planetRadius * entry.group.scale.x;
 
@@ -1071,5 +1102,18 @@ export function setOrbitHighlight(bodyName: string | null): void {
 export function updateOrbitLineResolution(w: number, h: number): void {
   for (const mat of trackedOrbitMaterials) {
     mat.resolution.set(w, h);
+  }
+}
+
+/** Unregister an orbit line from the resize + hover-highlight registries
+ *  (system-loader dispose path). The caller disposes geometry/material. */
+export function unregisterOrbitLine(line: Line2): void {
+  const mat = line.material as LineMaterial;
+  const idx = trackedOrbitMaterials.indexOf(mat);
+  if (idx >= 0) trackedOrbitMaterials.splice(idx, 1);
+  const bodyName = (line.userData as { name?: string }).name;
+  if (bodyName && orbitLineByBody.get(bodyName) === mat) {
+    orbitLineByBody.delete(bodyName);
+    if (highlightedOrbit === bodyName) highlightedOrbit = null;
   }
 }

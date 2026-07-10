@@ -373,7 +373,9 @@ let heliopauseMesh: Group | null = null;
 function updateHeliopauseGate(): void {
   if (!targets) return;
   const local = targets.layers.local;
-  if (!heliopauseMesh) {
+  // Re-resolve when detached — a system-focus swap (system-loader.ts) disposes
+  // the old shell and instantiates a fresh one under the same name.
+  if (!heliopauseMesh || heliopauseMesh.parent !== local) {
     heliopauseMesh = local.getObjectByName('heliopause') as Group | null;
     if (!heliopauseMesh) return;
   }

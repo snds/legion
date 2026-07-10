@@ -22,6 +22,9 @@ export interface SunSystem {
   group: Group;
   /** Call each frame with renderer + dt to update animated cubemap and uniforms */
   update: (renderer: WebGLRenderer, dt: number) => void;
+  /** Release GPU resources (cubemap RT, geometries, materials) + the VP
+   *  subscription — the system-loader dispose path on a system swap. */
+  dispose: () => void;
 }
 
 export function createSunSystem(radius: number): SunSystem {
@@ -250,8 +253,9 @@ export function createSunSystem(radius: number): SunSystem {
   group.add(coronalGroup);
 
   // ── VP Sync ──────────────────────────────────────────────────
+  // Unsubscribed in dispose() so a swapped-out sun stops receiving edits.
 
-  VP.subscribe((key) => {
+  const unsubscribeVP = VP.subscribe((key) => {
     switch (key) {
       // Surface
       case 'sunFresnelPower': surfaceMat.uniforms.uFresnelPower.value = VP.get(key); break;
@@ -308,7 +312,22 @@ export function createSunSystem(radius: number): SunSystem {
     cubeCam.update(renderer, cubeScene);
   }
 
-  return { group, update };
+  function dispose(): void {
+    unsubscribeVP();
+    cubeRT.dispose();
+    perlinBox.geometry.dispose();
+    perlinMat.dispose();
+    surfaceMesh.geometry.dispose();
+    surfaceMat.dispose();
+    glowMesh.geometry.dispose();
+    glowMat.dispose();
+    rayGeo.dispose();
+    rayMat.dispose();
+    for (const loop of coronalGroup.children) (loop as Line).geometry.dispose();
+    loopMat.dispose();
+  }
+
+  return { group, update, dispose };
 }
 
 // ── Utility ──────────────────────────────────────────────────────

@@ -103,6 +103,13 @@ interface DomainStatus {
   fleetLabel: string;
 }
 
+// Active-system label (top-right fleet status at local tiers) — updated by
+// the system-focus manager when the local tier swaps (system-loader.ts).
+let activeSystemLabel = 'ε ERI SYSTEM';
+export function setActiveSystemName(label: string): void {
+  activeSystemLabel = label;
+}
+
 function getDomainStatus(domain: DomainName): DomainStatus {
   // Placeholder counts — will be replaced by ECS queries
   const totalBobs = 4;
@@ -121,7 +128,7 @@ function getDomainStatus(domain: DomainName): DomainStatus {
     case 'low-orbit':
     case 'surface':
     default:
-      return { bobLabel: `BOBS: ${localBobs}`, fleetLabel: 'ε ERI SYSTEM' };
+      return { bobLabel: `BOBS: ${localBobs}`, fleetLabel: activeSystemLabel };
   }
 }
 
