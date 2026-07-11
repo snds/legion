@@ -94,6 +94,7 @@ import { requestPersistence, startAutosave } from './persistence/save-manager';
 import { STAR_SYSTEMS } from './data/star-catalog';
 import { COSMIC_OBJECTS } from './data/cosmic-objects';
 import { LY_TO_WU, KPC_TO_WU, SOL_GAL_PC, SYSTEM_TIER_SCALE } from './core/metrics';
+import { PlanetGlobes, showcaseSystem } from './render/planet';
 import { PlanetState, Identity, EntityType, BobState, Personality, StarSystem } from './core/components';
 
 // ── HMR State ──
@@ -466,6 +467,16 @@ async function boot(): Promise<void> {
   let simStep = 0;           // monotonic fixed-step index (command tick / determinism)
   let gpuStats: { update: () => void } | null = null;
 
+  // Procedural planet globes (docs/procedural-worlds-plan.md P1/P2). Renders a
+  // GENERATED system's planets as cube-sphere globes in the system tier. Mounted
+  // into layers.local (true scale + floating origin inherited); gated behind
+  // ?planetGlobes so the curated Sol view is untouched by default. The showcase
+  // system covers every preset + a ringed gas giant for the browser check.
+  const planetGlobes = new PlanetGlobes();
+  if (new URLSearchParams(location.search).has('planetGlobes')) {
+    planetGlobes.mount(showcaseSystem(), layers.local);
+  }
+
   // One deterministic simulation tick.
   function stepSim(dt: number): void {
     const tc = Game.getTimeSpeed().tc;
@@ -693,6 +704,18 @@ async function boot(): Promise<void> {
     // Default to origin (star) when no entity is selected.
     const focusTarget = Game.data.camFocusTarget ?? { x: 0, y: 0, z: 0 };
     updatePlanetShaders(Game.data.gameTime, shaderTime, camera.position, focusTarget, Game.data.zoomDomain);
+
+    // 9b-bis. Procedural planet globes (P1/P2). The star sits at the local-tier
+    // root, so it IS each planet's sun position. Refresh world matrices first so
+    // LOD reads this frame's floating-origin placement, not last frame's.
+    if (planetGlobes.count > 0) {
+      camera.updateMatrixWorld();
+      layers.local.updateWorldMatrix(true, true);
+      planetGlobes.update({
+        camera, sunWorldPos: _localRoot, dt: frameTime,
+        fovYRad: (camera.fov * Math.PI) / 180, viewportH: window.innerHeight,
+      });
+    }
 
     // 9c. Lens flare update (star position → screen space)
     // Star world position = the local-tier root (the sun sits at the local-tier
