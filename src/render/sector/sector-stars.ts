@@ -24,7 +24,7 @@ import {
 } from 'three';
 import { KPC_TO_WU, WU_PER_PC } from '../../core/metrics';
 import { armPattern, COL_HII, sampleGalaxy } from '../galaxy-density';
-import { galacticStarsVertexShader, galacticStarsFragmentShader } from '../shaders/galactic-stars';
+import { sectorStarsVertexShader, galacticStarsFragmentShader } from '../shaders/galactic-stars';
 import { sampleArmStar, sampleRealisticStar } from '../stellar-population';
 import { mulberry32, seedFrom } from '../../data/system-gen';
 import { DEFAULT_SECTOR_EDGE_PC, type Sector } from './sector';
@@ -380,7 +380,7 @@ export function buildSectorStarField(sector: Sector): SectorStarField {
   geo.setAttribute('aSize', new Float32BufferAttribute(data.sizes, 1));
   geo.setAttribute('aCrest', new Float32BufferAttribute(data.crests, 1));
   const material = new ShaderMaterial({
-    vertexShader: galacticStarsVertexShader,
+    vertexShader: sectorStarsVertexShader,
     fragmentShader: galacticStarsFragmentShader,
     uniforms: {
       uSizeScale: { value: SECTOR_STAR_SIZE_SCALE },

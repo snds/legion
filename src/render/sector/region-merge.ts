@@ -13,7 +13,7 @@ import {
   AdditiveBlending, BufferGeometry, Float32BufferAttribute, Points, ShaderMaterial, Vector3,
 } from 'three';
 import { WU_PER_PC } from '../../core/metrics';
-import { galacticStarsVertexShader, galacticStarsFragmentShader } from '../shaders/galactic-stars';
+import { sectorStarsVertexShader, galacticStarsFragmentShader } from '../shaders/galactic-stars';
 import { cellKey, DEFAULT_SECTOR_EDGE_PC, HOME_GAL_PC } from './sector';
 import { regionCenterPc, type RegionCell } from './region';
 import type { PopulatedCell } from './galaxy-enumerate';
@@ -86,7 +86,7 @@ export function buildRegionStarField(
   geo.setAttribute('aCrest', new Float32BufferAttribute(crests, 1));
 
   const material = new ShaderMaterial({
-    vertexShader: galacticStarsVertexShader,
+    vertexShader: sectorStarsVertexShader,
     fragmentShader: galacticStarsFragmentShader,
     uniforms: {
       uSizeScale: { value: SECTOR_STAR_SIZE_SCALE },

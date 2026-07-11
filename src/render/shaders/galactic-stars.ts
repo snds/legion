@@ -94,6 +94,47 @@ export const galacticStarsVertexShader = /* glsl */ `
   }
 `;
 
+// POSITION-BASED variant for the streamed sector / region-merge star fields. Those live in the
+// UNIFIED metric (1pc=1000WU) and are re-rooted by the floating origin via their GROUP transform, so
+// they must render from the `position` attribute through modelViewMatrix — NOT the aOrbit galactic-
+// motion path above (which reconstructs an ABSOLUTE galactocentric position in the galaxy-native ×1e6
+// frame, for the disc's differential rotation). Same size / streak / depth-LOD / arm-debug logic; only
+// the vertex position source differs. (Without this, sector/region stars — which set `position` but
+// never `aOrbit` — collapsed to orbitPos=(0,0,0), i.e. every star at its sector's origin.)
+export const sectorStarsVertexShader = /* glsl */ `
+  attribute vec3 color;
+  attribute float aSize;
+  attribute float aCrest;
+  varying vec3 vColor;
+  varying vec3 vStreak;
+  uniform float uSizeScale;
+  uniform float uPixelRatio;
+  uniform float uArmDebug;
+  uniform vec3 uCamVelocity;
+  uniform float uStreakStrength;
+  uniform float uMaxStretch;
+  uniform float uDepthLODRef;
+
+  void main() {
+    vec3 armCol = mix(vec3(0.9, 0.25, 0.18), vec3(0.30, 0.85, 1.0), aCrest);
+    vColor = mix(color, armCol, uArmDebug);
+    // Unified-frame position, re-rooted via the group's modelMatrix (floating origin).
+    vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+
+    vec3 viewVel = (modelViewMatrix * vec4(uCamVelocity, 0.0)).xyz;
+    float depth = max(-mvPosition.z, 0.001);
+    vec2 screenVel = -viewVel.xy / depth;
+    float speed = length(screenVel);
+    float stretch = clamp(speed * 0.0008 * uStreakStrength, 0.0, uMaxStretch);
+    vec2 dir = speed > 0.001 ? screenVel / speed : vec2(1.0, 0.0);
+    vStreak = vec3(dir, stretch);
+
+    float lodSize = uDepthLODRef > 0.0 ? clamp(uDepthLODRef / depth, 0.2, 1.0) : 1.0;
+    gl_PointSize = aSize * uSizeScale * uPixelRatio * (1.0 + stretch) * lodSize;
+    gl_Position = projectionMatrix * mvPosition;
+  }
+`;
+
 export const galacticStarsFragmentShader = /* glsl */ `
   varying vec3 vColor;
   varying vec3 vStreak;
