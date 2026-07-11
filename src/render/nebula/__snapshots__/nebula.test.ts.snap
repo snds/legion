@@ -1,0 +1,106 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`nebula noise — deterministic value-noise + fBm (TS↔GLSL mirror) > matches the recorded field sample table (update deliberately, in both mirrors) 1`] = `
+[
+  {
+    "fbm": 0,
+    "valueNoise": 0,
+    "warped": 0.241813,
+  },
+  {
+    "fbm": 0.650513,
+    "valueNoise": 0.750453,
+    "warped": 0.772106,
+  },
+  {
+    "fbm": 0.508379,
+    "valueNoise": 0.522437,
+    "warped": 0.541905,
+  },
+  {
+    "fbm": 0.430866,
+    "valueNoise": 0.493918,
+    "warped": 0.453322,
+  },
+]
+`;
+
+exports[`nebula shell specs — deterministic + graduated structure > matches the recorded shell-spec table 1`] = `
+[
+  {
+    "colorT": 0,
+    "detail": 4,
+    "freq": 1.6,
+    "opacity": 0.96,
+    "radiusWU": 14280.000000000002,
+    "seed": [
+      45.09891425259411,
+      4.970701946876943,
+      55.05849469918758,
+    ],
+    "t": 0,
+    "warp": 0.4,
+    "warpAmp": 0.14,
+  },
+  {
+    "colorT": 0.25,
+    "detail": 4,
+    "freq": 2.1500000000000004,
+    "opacity": 0.6279897923821385,
+    "radiusWU": 21210,
+    "seed": [
+      18.13428921159357,
+      91.58960885833949,
+      67.03561109025031,
+    ],
+    "t": 0.25,
+    "warp": 0.625,
+    "warpAmp": 0.21500000000000002,
+  },
+  {
+    "colorT": 0.5,
+    "detail": 5,
+    "freq": 2.7,
+    "opacity": 0.3568892799239012,
+    "radiusWU": 28139.999999999996,
+    "seed": [
+      7.5114499079063535,
+      62.33696360141039,
+      88.17387993913144,
+    ],
+    "t": 0.5,
+    "warp": 0.8500000000000001,
+    "warpAmp": 0.29000000000000004,
+  },
+  {
+    "colorT": 0.75,
+    "detail": 5,
+    "freq": 3.25,
+    "opacity": 0.15793693837081396,
+    "radiusWU": 35070,
+    "seed": [
+      60.49444016534835,
+      21.879110718145967,
+      50.50779217854142,
+    ],
+    "t": 0.75,
+    "warp": 1.0750000000000002,
+    "warpAmp": 0.365,
+  },
+  {
+    "colorT": 1,
+    "detail": 5,
+    "freq": 3.8000000000000003,
+    "opacity": 0.06,
+    "radiusWU": 42000,
+    "seed": [
+      19.918104726821184,
+      26.500946888700128,
+      27.89137999061495,
+    ],
+    "t": 1,
+    "warp": 1.3,
+    "warpAmp": 0.44,
+  },
+]
+`;
