@@ -39,6 +39,7 @@ import {
   getActiveSystemHandle, getActiveAnchor, loadableSystemId,
   type LocalSystemHandle, type LoadableSystemId,
 } from './render/system-loader';
+import { updateSystemStar } from './render/star';
 import { CameraController } from './core/camera';
 import { InputManager } from './core/input';
 import { Game } from './core/state';
@@ -685,8 +686,14 @@ async function boot(): Promise<void> {
     SelectionPanels.drawConnection(camera);
     if (!Game.data.paused) SelectionPanels.tickQueue(frameTime);
 
-    // 9. Sun shader update (animated cubemap + uniforms)
-    updateSunSystem(renderCtx.renderer, frameTime);
+    // 9. Star shader update — procedural star (S1–S2) rendered from the active
+    // system's physical record (src/render/star). While it is driving the
+    // active star it REPLACES the legacy sun mesh (hides the sun-system
+    // subgroup); the legacy updater runs only as a fallback when no procedural
+    // star is installed (e.g. no local system).
+    if (!updateSystemStar(getActiveSystemHandle()?.groups, frameTime, camera, Game.data.camDist)) {
+      updateSunSystem(renderCtx.renderer, frameTime);
+    }
 
     // 9b. Planet shader update (sun direction, rotation, storms, non-focused planet culling)
     // Always pass a focus target so angular culling knows which planet to keep visible.
