@@ -44,7 +44,7 @@ import {
 import { updateSystemStar } from './render/star';
 import { CameraController } from './core/camera';
 import { InputManager } from './core/input';
-import { Game } from './core/state';
+import { Game, getCamDist } from './core/state';
 import { Events } from './core/events';
 import { world, createSystemEntity } from './core/world';
 import { runSystems, type FrameContext } from './core/systems';
@@ -98,6 +98,8 @@ import { STAR_SYSTEMS } from './data/star-catalog';
 import { COSMIC_OBJECTS } from './data/cosmic-objects';
 import { LY_TO_WU, KPC_TO_WU, SOL_GAL_PC, SYSTEM_TIER_SCALE } from './core/metrics';
 import { PlanetGlobes, showcaseSystem } from './render/planet';
+import { activeDemoId, demoById, HERO_BLACKHOLE_ABS } from './render/demos';
+import { initDemoMenu } from './ui/demo-menu';
 import { PlanetState, Identity, EntityType, BobState, Personality, StarSystem } from './core/components';
 
 // ── HMR State ──
@@ -287,6 +289,10 @@ async function boot(): Promise<void> {
   // ?proto-buildout (no physical galaxy) → the panel/button simply don't mount.
   initGalaxyLabPanel(worldExtras.physGalaxy?.controls ?? null);
 
+  // Review-builds selector — the "🚩 REVIEW BUILDS" dropdown (bottom-left) that
+  // jumps the camera to each shipped subsystem via ?demo=<id> (src/ui/demo-menu.ts).
+  initDemoMenu();
+
   // Sector tour (Inc 6) — flag-gated node-to-node fly-through. __sectorTour.start() flies
   // the camera between the sector's systems in nearest-neighbour order (looping), so you
   // can watch the cloud thin/thicken as you travel. Targets are the systems' render-frame
@@ -381,7 +387,7 @@ async function boot(): Promise<void> {
   // src/render/blackhole/ + docs/black-hole-simulation-research.md.
   const blackHole = createBlackHole({
     rsWorld: 12,
-    absPos: new Vector3(46_000, 9_000, -32_000),
+    absPos: HERO_BLACKHOLE_ABS.clone(), // shared with the ?demo=blackhole destination (render/demos.ts)
     background: galaxyBackdrop,
     diskOuter: 12,
     diskTempK: 13_000,
@@ -453,6 +459,34 @@ async function boot(): Promise<void> {
     }
   });
 
+  // ── 8e. Review-builds demo director (?demo=<id>) ──
+  // Overrides the default home-planet focus when a demo flag is present: flies
+  // the camera to the subsystem's destination so each shipped build can be
+  // evaluated directly. Planet globes only exist when mounted at init, so
+  // ?demo=planet mounts them (see the PlanetGlobes block below). Destinations
+  // (tier + absolute focus) live in the registry: src/render/demos.ts.
+  const demo = demoById(activeDemoId());
+  if (demo) {
+    camCtrl.trackObject(null); // release the home-planet lock — the demo drives focus
+    // flyTo() is wall-clock timed (≤5 s real, ease-in-out Bezier) — unlike the
+    // per-frame focus/zoom lerps, it arrives regardless of frame-rate, so a
+    // heavy destination (the black hole's full-res geodesic march) can't stall
+    // the approach. It lands at targetCamDist and sets zoomLevel = targetZoomLevel.
+    // flyTo treats its arg as a RESIDUAL render-frame point (adds R internally),
+    // so convert the absolute destination by subtracting the current rebase.
+    const rebase = Broker.getSceneRebase(new Vector3());
+    camCtrl.flyTo(
+      new Vector3(demo.focusAbs.x - rebase.x, demo.focusAbs.y - rebase.y, demo.focusAbs.z - rebase.z),
+      { targetZoomLevel: demo.targetZoom, targetCamDist: getCamDist(demo.targetZoom) },
+    );
+    Events.emit('ui:notification', {
+      title: `DEMO — ${demo.label.toUpperCase()}`,
+      desc: demo.blurb,
+      color: '#6aa3ff',
+      duration: 7000,
+    });
+  }
+
   // ── 9. Star Graph ──
   const systemEids: number[] = [];
   // Collect all system entity IDs from the ECS
@@ -496,7 +530,7 @@ async function boot(): Promise<void> {
   // ?planetGlobes so the curated Sol view is untouched by default. The showcase
   // system covers every preset + a ringed gas giant for the browser check.
   const planetGlobes = new PlanetGlobes();
-  if (new URLSearchParams(location.search).has('planetGlobes')) {
+  if (new URLSearchParams(location.search).has('planetGlobes') || activeDemoId() === 'planet') {
     planetGlobes.mount(showcaseSystem(), layers.local);
   }
 
