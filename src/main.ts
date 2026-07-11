@@ -23,6 +23,7 @@ import { asset } from './core/assets';
 
 import { createRenderer, type RendererContext } from './render/renderer';
 import { createScene, registerRenderObject, type SceneContext } from './render/scene';
+import { createBlackHole } from './render/blackhole';
 import { setMaxAnisotropy } from './render/icons';
 import { setBakeRenderer } from './render/texture-baker';
 import { VP } from './render/visual-params';
@@ -367,6 +368,26 @@ async function boot(): Promise<void> {
   // sector tier (zero per-frame cost). Safe now: the volume marches the
   // CI-proven band-not-fog model (galaxy-density.test.ts).
   const galaxyBackdrop = bakeGalaxyBackdrop(renderCtx.renderer, scene, worldExtras.galaxyArms);
+
+  // ── Black-hole set-piece (stellar-phenomena P6) ──────────────────────────
+  // A physically-correct Schwarzschild geodesic renderer (real null-geodesic ray
+  // tracing — horizon, photon ring, lensing, Novikov–Thorne disk with Doppler
+  // beaming) placed as a rare galactic-tier hero object. Deterministic
+  // galactocentric position; rides the floating origin via Broker.getResidual and
+  // LODs to a clean point of light far out. Absolute scene-WU = (galPc −
+  // HOME_GAL_PC)·WU_PER_PC, home at origin — so this sits ≈57 pc from home, just
+  // off the disc plane. Lenses the baked Milky-Way cubemap. See
+  // src/render/blackhole/ + docs/black-hole-simulation-research.md.
+  const blackHole = createBlackHole({
+    rsWorld: 12,
+    absPos: new Vector3(46_000, 9_000, -32_000),
+    background: galaxyBackdrop,
+    diskOuter: 12,
+    diskTempK: 13_000,
+    diskBrightness: 1.2,
+    diskNormal: new Vector3(0.3, 1, 0.15).normalize(),
+  });
+  scene.add(blackHole.group);
   // Backdrop display level: the bake composites the volume AND the baked star
   // particles (whose brightness uEmissionScale does not govern), so the
   // night-sky level is set here, once, display-side. Target: band core reads
@@ -744,6 +765,12 @@ async function boot(): Promise<void> {
     // ~6000 WU/s — invisible during normal orbiting/zooming; ramps in
     // only during high-speed translation (flight-path traversals).
     updateStarStreaks(camCtrl.velocity);
+
+    // 9g. Black-hole set-piece — trace the geodesic into its half-res target and
+    // LOD by distance. Runs after the broker/camera update (so its residual is
+    // current) and before the post chain (which composites the billboard). Rides
+    // the galactic tier's floating origin like the streamed sectors.
+    blackHole.update(renderCtx.renderer, camera, renderCtx.renderer.domElement.height);
 
     // 10. Render (post-processing pipeline) — bounded shader clock
     postCtx.render(shaderTime);
