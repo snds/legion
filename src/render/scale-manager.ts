@@ -63,20 +63,18 @@ export function getEffectiveScale(): number {
 // `getTierRoot(tier) = tierOrigin − R`; consumers that need the global shift
 // read `getSceneRebase() = R`.
 //
-// PHASE 2b POLICY = IDENTITY. `R ≡ (0,0,0)` and FLOATING_ORIGIN_ACTIVE = false,
-// so every value the broker emits is byte-identical to the pre-broker code
-// (getTierRoot('galactic') === the old hand-computed getGalaxyOffset() = −HOME_POS).
-// The broker is the transform PATH; 2b ships the machinery and proves no visual
-// change. Phase 2c flips the policy (R := the camera's float64 authoritative
-// position) so the galactic tier can hold real galPos (home ≈ 8.3e6 WU) without
-// float32 jitter — a one-line change here plus the GAL_SYSTEMS→galPos data swap.
+// POLICY = ACTIVE (Phase 2c-0b, shipped). `R` := the camera's float64 world
+// position each frame, so the galactic tier holds real galPos (home ≈ 8.3e6 WU)
+// and the GPU only ever sees small residuals around the camera — no float32
+// jitter. (History: 2b shipped this machinery under an R≡0 identity policy to
+// prove zero visual change; 2c flipped FLOATING_ORIGIN_ACTIVE to true.)
 //
-// FRAME-ORDERING CONTRACT (pinned now so 2c inherits a coherent single-R frame):
-// once `beginFrame()` is wired into the loop (Phase 2b-2), it MUST run once per
-// frame immediately AFTER the camera update and BEFORE any world-space consumer
-// (tier group positions, disc-volume uniforms, planet-shader uniforms, camera
-// velocity) reads getSceneRebase()/getTierRoot(). Under the 2b identity policy
-// ordering is irrelevant (R is constant), but the contract is fixed up front.
+// FRAME-ORDERING CONTRACT: `beginFrame()` MUST run once per frame immediately
+// AFTER the camera update and BEFORE any world-space consumer (tier group
+// positions, disc-volume uniforms, planet-shader uniforms, camera velocity)
+// reads getSceneRebase()/getTierRoot() — otherwise consumers mix two different
+// R values within a frame and reintroduce jitter. It is pinned right after
+// camCtrl.update in the main loop.
 // ═══════════════════════════════════════════════════════════════════
 
 /** Phase 2c-0b: ACTIVE. R = the camera's float64 world position each frame
