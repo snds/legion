@@ -20,6 +20,16 @@ describe('Sector streaming — residency block', () => {
     expect(cells.map(cellKey)).toContain(cellKey(cell)); // includes the camera cell itself
   });
 
+  it('radius parameter widens the block: radius 2 → 5×5×1 = 25 cells (the manager default)', () => {
+    const cell = { i: 33, j: -1, k: -1 };
+    const cells = residentCells(cell, 2);
+    expect(cells.length).toBe(25);
+    expect(cells.every((c) => c.j === -1)).toBe(true); // still one vertical layer
+    expect(new Set(cells.map((c) => c.i)).size).toBe(5); // i ∈ {31..35}
+    expect(new Set(cells.map((c) => c.k)).size).toBe(5); // k ∈ {-3..1}
+    expect(cells.map(cellKey)).toContain(cellKey(cell));
+  });
+
   it('crossing one cell churns exactly 3 out / 3 in (6 stay)', () => {
     const a = residentCells({ i: 33, j: -1, k: -1 }).map(cellKey);
     const b = residentCells({ i: 34, j: -1, k: -1 }).map(cellKey); // camera moved +1 in i

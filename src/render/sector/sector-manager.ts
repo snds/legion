@@ -41,6 +41,12 @@ const MAX_LOADS_PER_FRAME = 2;
 // These are the tuning knobs — raise to keep stars fuller/brighter longer.
 const SECTOR_STAR_LOD_REF = 600;
 const SECTOR_STAR_FADE_REF = 1500;
+// Residency half-extent in cells (disc plane). 1 = 3×3×1 (9 cells, ±375pc); 2 =
+// 5×5×1 (25 cells, ±625pc). Phase 5a: widened so the streamed particles reach
+// further toward the galaxy volume (the ≤25pc catalogue → sector fill → volume
+// dive), instead of ending in an empty band at ±375pc. The one knob to grow
+// coverage — cost is ~(2r+1)² sector generations (amortised) + their star draws.
+const SECTOR_RESIDENCY_RADIUS = 2;
 
 export interface ResidentSector {
   readonly cell: Cell;
@@ -60,11 +66,12 @@ export interface SectorManager {
   starCount: number;
 }
 
-/** The 3×3×1 cells around `cell` in the disc plane (i,k ±1; j fixed). The 9 desired residents. */
-export function residentCells(cell: Cell): Cell[] {
+/** The (2·radius+1)²×1 cells around `cell` in the disc plane (i,k ±radius; j fixed).
+ *  radius=1 → the 3×3×1 block (9 cells); the manager uses SECTOR_RESIDENCY_RADIUS. */
+export function residentCells(cell: Cell, radius = 1): Cell[] {
   const out: Cell[] = [];
-  for (let di = -1; di <= 1; di++) {
-    for (let dk = -1; dk <= 1; dk++) {
+  for (let di = -radius; di <= radius; di++) {
+    for (let dk = -radius; dk <= radius; dk++) {
       out.push({ i: cell.i + di, j: cell.j, k: cell.k + dk });
     }
   }
@@ -116,7 +123,7 @@ export function updateSectorManager(
   // 1. Residency diff. Unload residents no longer desired (safe to delete during Map
   //    iteration — ES6 iterators skip removed entries). Then load missing cells: the camera
   //    cell FIRST (so its cloud can attach), capped per frame to amortise the generation hitch.
-  let desired = residentCells(cell);
+  let desired = residentCells(cell, SECTOR_RESIDENCY_RADIUS);
   if (residentRegionKeys) {
     desired = desired.filter((c) =>
       cellKey(c) === camKey ||
