@@ -328,15 +328,19 @@ export function updateVisibility(camera?: Camera): void {
   // now-clean black frame.)
   const helioR = HELIOPAUSE_RADIUS_WU * SYSTEM_TIER_SCALE;
   const surveyFloor = 0.05 + 0.10 * smooth01(camDist, helioR * 0.4, helioR * 1.5);
-  targets?.catalogSystems?.setOpacity(0.9 * Math.max(surveyFloor, swap * localEase) * galaxyDissolve);
+  // CATALOG-EXTERIOR FALLOFF: an AGGRESSIVE fade keyed to the 25-pc catalogue
+  // boundary (~2.5e4 WU). As the camera crosses the exterior of the survey ball
+  // (2.5e4→9e4 WU, ~80→290 ly) this collapses toward a 0.08 floor and multiplies
+  // BOTH size and brightness — so the neighbourhood stops reading as a distinct
+  // denser sphere the moment you leave it, instead of lingering out to ~1000 ly.
+  // Below the boundary it's ~1 (the close 25-pc nav chart is untouched); past it
+  // the star-shells carry the survey visual, so the catalogue can all but vanish.
+  const catExtFade = 1 - 0.92 * smooth01(camDist, 2.5e4, 9e4);
+  targets?.catalogSystems?.setOpacity(0.9 * Math.max(surveyFloor, swap * localEase) * galaxyDissolve * catExtFade);
   targets?.catalogSystems?.setGalacticOpacity(0.9 * smooth01(camDist, 2e6, 8e6));
-  // ZOOM SIZE LOD: the regional dots are a fixed 1.3–6.5 px, so once the camera
-  // is well past the 25-pc ball the whole catalogue crams into a few px and reads
-  // as one oversized dense clump. Shrink the dots across the same pull-back the
-  // localEase dims them over (3e4→3e5 WU, ~100→1000 ly) down to a 0.3 floor, so
-  // the ball dissolves into a fine survey dusting instead. Full size up close
-  // (nav targets in the 25-pc chart are untouched).
-  targets?.catalogSystems?.setSizeScale(1 - 0.7 * smooth01(camDist, 3e4, 3e5));
+  // Shrink the fixed-size dots on the same aggressive exterior falloff, so the
+  // ball dissolves into a fine 1-px dusting the instant the camera exits it.
+  targets?.catalogSystems?.setSizeScale(catExtFade);
 
   // Progressive star shells: each annulus fades in at its scale and out past
   // it — the "spheres of stars" ladder from the survey sphere to the disc.
