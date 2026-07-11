@@ -3,5 +3,6 @@
   "chromaticAberration": 0,
   "filmGrainIntensity": 0,
   "backdropIntensity": 0.56,
-  "_savedAt": 1783697271000
+  "visualInflation": 1,
+  "_savedAt": 1783737807856
 }
