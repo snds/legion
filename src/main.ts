@@ -18,7 +18,7 @@
 // ═══════════════════════════════════════════════════════════════════
 
 import './styles.css';
-import { Vector3, Vector2, Euler, TextureLoader, EquirectangularReflectionMapping, SRGBColorSpace } from 'three';
+import { Vector3, Euler, TextureLoader, EquirectangularReflectionMapping, SRGBColorSpace } from 'three';
 import { asset } from './core/assets';
 
 import { createRenderer, type RendererContext } from './render/renderer';
@@ -121,32 +121,6 @@ const _hmr: HmrState = ((globalThis as Record<string, unknown>).__legion_hmr as 
 // pre-generates the residency so it is ready when they appear. Below this the
 // streaming is skipped and the sector group hidden — the system tier pays nothing.
 const SECTOR_STREAM_MIN_CAMDIST = 30;
-
-// Phase 5a — LIVE-GALAXY ALPHA MASK. The streamed sector/region stars are sampled per-fragment
-// against the disc's own gas-blur buffer (screen space), so they survive only where the galaxy is
-// actually bright: this both FORMS them into the spiral structure and dissolves the residency
-// square into the nebula. Fed the SAME offscreen buffer the post chain composites (physGalaxy's
-// renderGasBlur), so the mask tracks the galaxy's animation/drift for free. Strength rides the disc
-// crossfade (0 below galaxy scale → stars unmasked), gain is the HDR carve depth. Applied AFTER the
-// gas render, since the managers update earlier in the frame (before the buffer exists this frame).
-const _maskRes = new Vector2();
-function applyStreamedStarMask(
-  sectorMgr: SectorManager | null, regionMgr: RegionManager | null,
-  tex: import('three').Texture | null, strength: number, gain: number,
-  renderer: import('three').WebGLRenderer,
-): void {
-  renderer.getDrawingBufferSize(_maskRes);
-  const set = (m: import('three').ShaderMaterial): void => {
-    const u = m.uniforms;
-    if (!u.uGalaxyMask) return;
-    u.uGalaxyMask.value = tex;
-    u.uMaskStrength.value = strength;
-    u.uMaskGain.value = gain;
-    u.uResolution.value.copy(_maskRes);
-  };
-  if (sectorMgr) for (const rs of sectorMgr.residents.values()) set(rs.stars.material);
-  if (regionMgr) for (const f of regionMgr.fields.values()) if (f) set(f.material);
-}
 
 // ── Bootstrap ────────────────────────────────────────────────────
 
@@ -599,7 +573,10 @@ async function boot(): Promise<void> {
       // Phase 5a: stream only at the neighbourhood tier and out — the sector
       // stars sit ≥25pc away (far = camDist·100 must reach them), so below this
       // the work is skipped and the group hidden, keeping the system tier free.
-      const streamOn = Game.data.camDist > SECTOR_STREAM_MIN_CAMDIST;
+      // The per-sector/region star GENERATOR grid is retired to a toggle (it read
+      // as a hard square; star-shells carry the visual). When off, skip all
+      // generation entirely — no residency, no draws, no cost.
+      const streamOn = VP.get('sectorStarsEnabled') && Game.data.camDist > SECTOR_STREAM_MIN_CAMDIST;
       worldExtras.sectorMgr.group.visible = streamOn;
       if (worldExtras.regionMgr) worldExtras.regionMgr.group.visible = streamOn;
       if (streamOn) {
@@ -638,15 +615,8 @@ async function boot(): Promise<void> {
         );
         const gb = worldExtras.physGalaxy.renderGasBlur(renderCtx.renderer, scene, camera);
         postCtx.setGasBlur(gb?.texture ?? null, gb?.gain ?? 1);
-        // Form the streamed stars against the live disc: strength ramps with the crossfade so they
-        // are unmasked below galaxy scale and fully galaxy-shaped once the disc is present.
-        applyStreamedStarMask(
-          worldExtras.sectorMgr, worldExtras.regionMgr, gb?.texture ?? null,
-          VP.get('sectorFormMask') * discXf, VP.get('sectorFormGain'), renderCtx.renderer,
-        );
       } else {
         postCtx.setGasBlur(null, 1);
-        applyStreamedStarMask(worldExtras.sectorMgr, worldExtras.regionMgr, null, 0, 1, renderCtx.renderer);
       }
     }
 
