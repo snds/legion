@@ -3,9 +3,14 @@
 // ═══════════════════════════════════════════════════════════════════
 
 import { describe, expect, it } from 'vitest';
-import { parseSpectral, generateSystem, type PlanetKind } from './system-gen';
+import {
+  parseSpectral, generateSystem, deriveStellarPhysical, derivePlanetPhysical,
+  bvToTempK, letterFromTemp, type PlanetKind, type PlanetVisualType, type SpectralLetter,
+} from './system-gen';
 
 const GIANTS: PlanetKind[] = ['gas-giant', 'ice-giant', 'neptune'];
+const LETTERS: SpectralLetter[] = ['O', 'B', 'A', 'F', 'G', 'K', 'M'];
+const PLANET_TYPES: PlanetVisualType[] = ['rocky', 'gas', 'ice', 'ocean', 'lava', 'desert'];
 
 describe('parseSpectral', () => {
   it('reads class / subtype / luminosity class', () => {
@@ -67,6 +72,120 @@ describe('generateSystem — Kepler occurrence trends (aggregate)', () => {
   it('hot/short-lived O/B and remnants are planet-sparse', () => {
     expect(survey('O5V').meanPlanets).toBeLessThan(survey('K2V').meanPlanets);
     expect(survey('DA', 200).meanPlanets).toBeLessThan(1);
+  });
+});
+
+describe('star physical record — fields exist + are physical', () => {
+  it('every generated star carries the full physical record', () => {
+    const s = generateSystem('Gl 411', 'M2V').star;
+    expect(LETTERS).toContain(s.spectralType);
+    expect(s.massSolar).toBeGreaterThan(0);
+    expect(s.radiusSolar).toBeGreaterThan(0);
+    expect(s.luminositySolar).toBeGreaterThan(0);
+    expect(s.tempK).toBeGreaterThan(0);
+    expect(s.ageGyr).toBeGreaterThanOrEqual(0);
+    expect(s.activity).toBeGreaterThanOrEqual(0);
+    expect(s.activity).toBeLessThanOrEqual(1);
+  });
+  it('spectralType matches the parsed class for main-sequence stars', () => {
+    expect(generateSystem('a', 'G2V').star.spectralType).toBe('G');
+    expect(generateSystem('b', 'M5V').star.spectralType).toBe('M');
+    expect(generateSystem('c', 'O5V').star.spectralType).toBe('O');
+  });
+  it('hotter classes are more massive, larger, brighter, hotter', () => {
+    const o = generateSystem('o', 'O5V').star;
+    const m = generateSystem('m', 'M5V').star;
+    expect(o.massSolar).toBeGreaterThan(m.massSolar);
+    expect(o.radiusSolar).toBeGreaterThan(m.radiusSolar);
+    expect(o.luminositySolar).toBeGreaterThan(m.luminositySolar);
+    expect(o.tempK).toBeGreaterThan(m.tempK);
+  });
+  it('age is bounded by the class main-sequence lifetime (O stars are young)', () => {
+    for (let i = 0; i < 50; i++) {
+      expect(generateSystem(`hot-${i}`, 'O5V').star.ageGyr).toBeLessThan(1);
+      expect(generateSystem(`cool-${i}`, 'M5V').star.ageGyr).toBeLessThanOrEqual(13.5);
+    }
+  });
+  it('cool convective dwarfs can be far more active than early types', () => {
+    // Aggregate: the M-dwarf activity ceiling dwarfs the A/O ceiling regardless of age.
+    let mMax = 0, aMax = 0;
+    for (let i = 0; i < 100; i++) {
+      mMax = Math.max(mMax, generateSystem(`m-${i}`, 'M3V').star.activity);
+      aMax = Math.max(aMax, generateSystem(`a-${i}`, 'A0V').star.activity);
+    }
+    expect(mMax).toBeGreaterThan(aMax);
+  });
+  it('a real B−V colour drives temperature over the model (no overwrite)', () => {
+    const modelled = generateSystem('x', 'G2V').star.tempK;
+    const observed = generateSystem('x', 'G2V', { bv: 0.65 }).star.tempK;
+    expect(observed).toBe(Math.round(bvToTempK(0.65)));
+    expect(observed).not.toBe(modelled);
+  });
+  it('bvToTempK / letterFromTemp are self-consistent for a Sun-like colour', () => {
+    const t = bvToTempK(0.65); // the Sun's B−V
+    expect(t).toBeGreaterThan(5300);
+    expect(t).toBeLessThan(6000);
+    expect(letterFromTemp(t)).toBe('G');
+  });
+});
+
+describe('star physical record — determinism', () => {
+  it('same seed → identical physical record', () => {
+    const a = deriveStellarPhysical(parseSpectral('K2V'), 'HD 22049|K2V');
+    const b = deriveStellarPhysical(parseSpectral('K2V'), 'HD 22049|K2V');
+    expect(b).toEqual(a);
+  });
+  it('same B−V → identical temperature', () => {
+    const a = generateSystem('HD 1', 'K2V', { bv: 0.9 }).star;
+    const b = generateSystem('HD 1', 'K2V', { bv: 0.9 }).star;
+    expect(a.tempK).toBe(b.tempK);
+  });
+});
+
+describe('planet physical record — fields exist + derive from mass/radius/insolation', () => {
+  it('every generated planet carries the full physical record', () => {
+    const sys = generateSystem('K2V-host', 'K2V');
+    // Use a seed guaranteed to yield planets.
+    const withPlanets = [sys, generateSystem('G2V-host', 'G2V'), generateSystem('M4V-host', 'M4V')]
+      .find((s) => s.planets.length) ?? sys;
+    for (const p of withPlanets.planets) {
+      expect(PLANET_TYPES).toContain(p.type);
+      expect(p.massEarth).toBeGreaterThan(0);
+      expect(p.radiusEarth).toBeGreaterThan(0);
+      expect(p.insolation).toBeGreaterThan(0);
+      expect(typeof p.isGasGiant).toBe('boolean');
+      expect(typeof p.hasRings).toBe('boolean');
+      expect(Number.isInteger(p.seed)).toBe(true);
+    }
+  });
+  it('a giant kind is a gas/ice giant; a rocky kind is not', () => {
+    const gas = derivePlanetPhysical('gas-giant', 5, 1, false, 'seed', 0);
+    expect(gas.isGasGiant).toBe(true);
+    expect(gas.type).toBe('gas');
+    const rock = derivePlanetPhysical('rocky', 1, 1, true, 'seed', 0);
+    expect(rock.isGasGiant).toBe(false);
+    expect(rock.radiusEarth).toBeLessThan(1.5);
+  });
+  it('type follows insolation: scorched → lava, habitable-zone → ocean, cold → rocky', () => {
+    expect(derivePlanetPhysical('rocky', 0.2, 1, false, 's', 0).type).toBe('lava');  // insolation 25
+    expect(derivePlanetPhysical('rocky', 1, 1, true, 's', 0).type).toBe('ocean');    // Earth-like, in HZ
+    expect(derivePlanetPhysical('rocky', 5, 1, false, 's', 0).type).toBe('rocky');   // insolation 0.04
+  });
+  it('insolation is L / au² (Earth = 1)', () => {
+    expect(derivePlanetPhysical('rocky', 1, 1, true, 's', 0).insolation).toBeCloseTo(1, 5);
+    expect(derivePlanetPhysical('rocky', 2, 1, false, 's', 0).insolation).toBeCloseTo(0.25, 5);
+  });
+  it('real archive radius/mass are authoritative; only the missing side is modelled', () => {
+    const p = derivePlanetPhysical('super-earth', 1, 1, true, 's', 0, { rade: 1.6, masse: 5.0 });
+    expect(p.radiusEarth).toBe(1.6);
+    expect(p.massEarth).toBe(5.0);
+  });
+  it('per-body seed is stable and per-index distinct', () => {
+    const a0 = derivePlanetPhysical('rocky', 1, 1, false, 'host', 0);
+    const b0 = derivePlanetPhysical('rocky', 1, 1, false, 'host', 0);
+    const a1 = derivePlanetPhysical('rocky', 1, 1, false, 'host', 1);
+    expect(a0).toEqual(b0);
+    expect(a0.seed).not.toBe(a1.seed);
   });
 });
 
