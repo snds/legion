@@ -24,6 +24,7 @@ const FX: FxDef[] = [
   { id: 's-vig',    label: 'Vignette',             key: 'vignetteIntensity',   max: 1.0 },
   { id: 's-back',   label: 'Milky Way Backdrop',   key: 'backdropIntensity',   max: 2.0 },
   { id: 's-form',   label: 'Sector Star Form',     key: 'sectorFormMask',      max: 1.0 },
+  { id: 's-formg',  label: 'Sector Form Depth',    key: 'sectorFormGain',      max: 16.0 },
 ];
 
 // ── Keyboard Shortcuts ───────────────────────────────────────────

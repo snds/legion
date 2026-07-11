@@ -20,7 +20,7 @@
 // ═══════════════════════════════════════════════════════════════════
 
 import {
-  AdditiveBlending, BufferGeometry, Float32BufferAttribute, Points, ShaderMaterial, Vector3,
+  AdditiveBlending, BufferGeometry, Float32BufferAttribute, Points, ShaderMaterial, Vector2, Vector3,
 } from 'three';
 import { KPC_TO_WU, WU_PER_PC } from '../../core/metrics';
 import { armPattern, COL_HII, sampleGalaxy } from '../galaxy-density';
@@ -391,7 +391,10 @@ export function buildSectorStarField(sector: Sector): SectorStarField {
       uDensityDim: { value: sectorDensityDim(data.emissionMean) }, // tame additive overdraw in dense sectors
       uArmDebug: armDebugUniform, // shared — setArmDebug() recolours every field by arm phase
       uDepthLODRef: { value: 0.0 }, // near-camera streaming keeps constant point size
-      uFormMask: { value: 0.0 }, // galactic-form mask (driven per-frame from VP.sectorFormMask)
+      uGalaxyMask: { value: null }, // live disc buffer, set after the gas render (galaxy tier only)
+      uMaskStrength: { value: 0.0 }, // VP.sectorFormMask × disc crossfade
+      uMaskGain: { value: 6.0 }, // HDR carve depth (VP.sectorFormGain)
+      uResolution: { value: new Vector2(1, 1) },
     },
     transparent: true,
     depthWrite: false,

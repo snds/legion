@@ -12,7 +12,6 @@
 // ═══════════════════════════════════════════════════════════════════
 
 import { Group, Vector3 } from 'three';
-import { VP } from '../visual-params';
 import {
   cellCenterPc, cellKey, createSector, DEFAULT_SECTOR_EDGE_PC, hystereticCell,
   updateSectorFrame, type Cell, type Sector,
@@ -152,14 +151,12 @@ export function updateSectorManager(
   //    pull-back and hands the far side off to the galaxy volume.
   const sizeLOD = Math.min(1, Math.max(0.4, SECTOR_STAR_LOD_REF / camDist));
   const fadeLOD = Math.min(1, Math.max(0.04, SECTOR_STAR_FADE_REF / camDist));
-  const formMask = VP.get('sectorFormMask'); // exploration: carve the fill into the spiral-arm form
   let stars = 0;
   for (const rs of mgr.residents.values()) {
     updateSectorFrame(rs.sector);
     const u = rs.stars.material.uniforms;
     u.uSizeScale.value = SECTOR_STAR_SIZE_SCALE * sizeLOD;
     u.uDensityDim.value = sectorDensityDim(rs.stars.data.emissionMean) * fadeLOD;
-    u.uFormMask.value = formMask;
     stars += rs.stars.data.count;
   }
   mgr.starCount = stars;
