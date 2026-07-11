@@ -12,10 +12,10 @@
 // ═══════════════════════════════════════════════════════════════════
 
 import { Vector3 } from 'three';
-import { DEFAULT_SECTOR_EDGE_PC, type Cell } from './sector';
+import { cellKey, DEFAULT_SECTOR_EDGE_PC, type Cell } from './sector';
 import {
-  classifyArmPhase, classifyDensity, regionForGalPc, regionKey,
-  type ArmPhase, type DensityClass,
+  classifyArmPhase, classifyDensity, regionForGalPc, regionKey, REGION_EDGE_PC,
+  type ArmPhase, type DensityClass, type RegionCell,
 } from './region';
 import { armPhaseAt, emissionAtGalPc, PC_TO_NATIVE, REF_EMISSION } from './sector-stars';
 
@@ -97,4 +97,44 @@ export function enumerateGalaxy(
     }
   }
   return { cells, byRegion, layerHistogram };
+}
+
+/** Enumerate the populated cells of ONE 1 kpc region (its sub×sub×sub = 4³ cells), cheaply — for the
+ *  streamed mid-field region-merge fill (region-manager), which only needs the ~9 regions around the
+ *  camera, not the whole galaxy. `exclude` drops cells already drawn full-res by the near sector
+ *  manager (the disc-plane residency), so the two layers don't double up. Pure + deterministic. */
+export function enumerateRegionCells(
+  region: RegionCell, opts: { threshold?: number; exclude?: Set<string> } = {},
+): PopulatedCell[] {
+  const threshold = opts.threshold ?? DEFAULT_GALAXY_THRESHOLD;
+  const edge = DEFAULT_SECTOR_EDGE_PC;
+  const sub = Math.round(REGION_EDGE_PC / edge); // 4 sectors per region per axis
+  const rk = regionKey(region);
+  const i0 = region.i * sub, j0 = region.j * sub, k0 = region.k * sub;
+  const out: PopulatedCell[] = [];
+  for (let di = 0; di < sub; di++) {
+    const i = i0 + di;
+    const cx = (i + 0.5) * edge;
+    for (let dk = 0; dk < sub; dk++) {
+      const k = k0 + dk;
+      const cz = (k + 0.5) * edge;
+      const R = Math.hypot(cx, cz);
+      if (R > GALAXY_R_MAX_PC) continue;
+      const rNative = R * PC_TO_NATIVE;
+      const armPhase = classifyArmPhase(armPhaseAt(cx, cz).armRidge, rNative);
+      for (let dj = 0; dj < sub; dj++) {
+        const j = j0 + dj;
+        const cell: Cell = { i, j, k };
+        if (opts.exclude && opts.exclude.has(cellKey(cell))) continue;
+        const cy = (j + 0.5) * edge;
+        const emission = emissionAtGalPc(cx, cy, cz);
+        if (emission / REF_EMISSION < threshold) continue;
+        out.push({
+          cell, centerPc: new Vector3(cx, cy, cz), emission, armPhase,
+          densityClass: classifyDensity(emission / REF_EMISSION), regionKey: rk,
+        });
+      }
+    }
+  }
+  return out;
 }

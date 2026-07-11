@@ -575,13 +575,14 @@ async function boot(): Promise<void> {
       // the work is skipped and the group hidden, keeping the system tier free.
       const streamOn = Game.data.camDist > SECTOR_STREAM_MIN_CAMDIST;
       worldExtras.sectorMgr.group.visible = streamOn;
+      if (worldExtras.regionMgr) worldExtras.regionMgr.group.visible = streamOn;
       if (streamOn) {
         // Stream sectors around the camera's FOCUS cell (camFocusTarget is absolute scene-WU).
         const f = Game.data.camFocusTarget;
         _focusWU.set(f?.x ?? 0, f?.y ?? 0, f?.z ?? 0);
         const focusGalPc = absWUToGalPc(_focusWU, _focusGalPc);
         if (worldExtras.regionMgr) {
-          // Region/LOD layer drives the sector manager (gated to resident regions). Inc 2: no-op trim.
+          // Region manager drives the near sector streaming AND renders the merged mid-field fill.
           updateRegionManager(worldExtras.regionMgr, worldExtras.sectorMgr, focusGalPc, Game.data.camDist);
         } else {
           updateSectorManager(worldExtras.sectorMgr, focusGalPc, Game.data.camDist);
@@ -895,7 +896,6 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol', renderer: impo
   // flag creates one; ?proto-regions also creates the region manager.
   const params = new URLSearchParams(location.search);
   const fillOn = params.has('proto-fill');
-  const regionsOn = params.has('proto-regions') || fillOn; // fill rides the region+sector managers
   // Phase 5a: the streamed sector particles are now the DEFAULT neighbourhood
   // fill (they carry the dive from the ≤25pc catalogue out toward the galaxy
   // volume, replacing the legacy star-shells). Always created; the game loop
@@ -905,11 +905,14 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol', renderer: impo
     (globalThis as Record<string, unknown>).__sectorMgr = sectorMgr;
     (globalThis as Record<string, unknown>).__armDebug = (on = true) => setArmDebug(Boolean(on));
   }
-  const regionMgr = regionsOn ? createRegionManager() : null;
-  if (regionMgr) {
+  // Phase 5a: the region manager is now the DEFAULT mid-field fill — it drives the near sector
+  // streaming AND renders one merged Points of coarse procedural stars per resident 1 kpc region
+  // (de-duped against the near sectors), bridging the ≤25pc catalogue → near sectors → mid-field →
+  // galaxy volume dive. Gated to the neighbourhood tier by the game loop (same as the sector stream).
+  const regionMgr = createRegionManager(sceneRoot);
+  {
     (globalThis as Record<string, unknown>).__regionMgr = regionMgr;
     (globalThis as Record<string, unknown>).__regionTelemetry = () => regionTelemetry(regionMgr);
-    console.info('[region-lod] region layer on — __regionMgr.residents, __regionTelemetry() for arm/density/budgets');
   }
 
   // Galaxy-FILL stress pass (?proto-fill) — pre-generates a corridor of sectors from home to the

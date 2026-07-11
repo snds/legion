@@ -2,8 +2,9 @@
 // disc deterministically, reaches the diffused rim, and thins on all axes (the key visual claim).
 
 import { describe, it, expect, vi } from 'vitest';
-import { cellKey } from './sector';
-import { enumerateGalaxy } from './galaxy-enumerate';
+import { cellKey, HOME_GAL_PC } from './sector';
+import { regionForGalPc, regionKey } from './region';
+import { enumerateGalaxy, enumerateRegionCells } from './galaxy-enumerate';
 
 // One full enumeration shared across the assertions (it walks ~100k cells — the dominant cost).
 const g = enumerateGalaxy();
@@ -64,5 +65,36 @@ describe('Galaxy enumeration — thinning on all axes', () => {
     const innerArea = Math.PI * 6000 ** 2;
     const outerArea = Math.PI * (14000 ** 2 - 10000 ** 2);
     expect(inner / innerArea).toBeGreaterThan(outer / outerArea);
+  });
+});
+
+describe('enumerateRegionCells — single-region fill (Phase 5a mid-field)', () => {
+  const homeRegion = regionForGalPc(HOME_GAL_PC);
+
+  it("populates home's region and tags every cell with that region's key", () => {
+    const cells = enumerateRegionCells(homeRegion);
+    expect(cells.length).toBeGreaterThan(0); // the solar circle is populated
+    const rk = regionKey(homeRegion);
+    expect(cells.every((c) => c.regionKey === rk)).toBe(true);
+    // matches the whole-galaxy pass for the same region (same cells selected)
+    const fromGalaxy = enumerateGalaxy().byRegion.get(rk) ?? [];
+    expect(new Set(cells.map((c) => cellKey(c.cell)))).toEqual(new Set(fromGalaxy.map((c) => cellKey(c.cell))));
+  });
+
+  it('the exclude set drops those cells (de-dup vs the near sector residency)', () => {
+    const all = enumerateRegionCells(homeRegion);
+    const drop = new Set(all.slice(0, 3).map((c) => cellKey(c.cell)));
+    const kept = enumerateRegionCells(homeRegion, { exclude: drop });
+    expect(kept.length).toBe(all.length - drop.size);
+    expect(kept.some((c) => drop.has(cellKey(c.cell)))).toBe(false);
+  });
+
+  it('is deterministic (no Math.random)', () => {
+    const spy = vi.spyOn(Math, 'random');
+    const a = enumerateRegionCells(homeRegion).map((c) => cellKey(c.cell));
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+    const b = enumerateRegionCells(homeRegion).map((c) => cellKey(c.cell));
+    expect(a).toEqual(b);
   });
 });
