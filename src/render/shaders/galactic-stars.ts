@@ -107,6 +107,7 @@ export const sectorStarsVertexShader = /* glsl */ `
   attribute float aCrest;
   varying vec3 vColor;
   varying vec3 vStreak;
+  varying float vCrest; // arm crestiness (0 gap … 1 crest) → fragment "galactic form" mask
   uniform float uSizeScale;
   uniform float uPixelRatio;
   uniform float uArmDebug;
@@ -116,6 +117,7 @@ export const sectorStarsVertexShader = /* glsl */ `
   uniform float uDepthLODRef;
 
   void main() {
+    vCrest = aCrest;
     vec3 armCol = mix(vec3(0.9, 0.25, 0.18), vec3(0.30, 0.85, 1.0), aCrest);
     vColor = mix(color, armCol, uArmDebug);
     // Unified-frame position, re-rooted via the group's modelMatrix (floating origin).
@@ -165,6 +167,37 @@ export const galacticStarsFragmentShader = /* glsl */ `
     float core = pow(1.0 - d, 1.6);
     float halo = 0.06 * (1.0 - d);
     float intensity = (core + halo) * (1.0 - stretch * 0.5) * uDensityDim;
+
+    gl_FragColor = vec4(vColor, intensity);
+  }
+`;
+
+// Sector/region fragment with the GALACTIC-FORM MASK (Phase 5a exploration). The streamed stars are
+// density-sampled, so at the galaxy tier they pile into an even fill with weak spiral contrast. Dim the
+// inter-arm/gap stars (low crest) and keep the arm-crest stars, so the field resolves into the spiral
+// form. uFormMask (0 = raw uniform field … 1 = fully carved) is the live A/B knob; a 0.15 floor keeps a
+// faint inter-arm dusting. This is the analytic-form proxy for the eventual live-galaxy screen-space mask.
+export const sectorStarsFragmentShader = /* glsl */ `
+  varying vec3 vColor;
+  varying vec3 vStreak;
+  varying float vCrest;
+  uniform float uDensityDim;
+  uniform float uFormMask;
+
+  void main() {
+    vec2 p = gl_PointCoord - 0.5;
+    vec2 dir = vStreak.xy;
+    vec2 perp = vec2(-dir.y, dir.x);
+    vec2 q = vec2(dot(p, dir), dot(p, perp));
+    float stretch = vStreak.z;
+    float d = length(vec2(q.x, q.y * (1.0 + stretch))) * 2.0;
+    if (d > 1.0) discard;
+
+    float core = pow(1.0 - d, 1.6);
+    float halo = 0.06 * (1.0 - d);
+    // Spiral-form mask: gap→0.15, crest→1.0, lerped by uFormMask (0 leaves the raw field untouched).
+    float form = mix(1.0, mix(0.15, 1.0, smoothstep(0.05, 0.8, vCrest)), uFormMask);
+    float intensity = (core + halo) * (1.0 - stretch * 0.5) * uDensityDim * form;
 
     gl_FragColor = vec4(vColor, intensity);
   }

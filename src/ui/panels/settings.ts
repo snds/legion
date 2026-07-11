@@ -23,6 +23,7 @@ const FX: FxDef[] = [
   { id: 's-bloom',  label: 'Bloom',                key: 'bloomStrength',       max: 0.30 },
   { id: 's-vig',    label: 'Vignette',             key: 'vignetteIntensity',   max: 1.0 },
   { id: 's-back',   label: 'Milky Way Backdrop',   key: 'backdropIntensity',   max: 2.0 },
+  { id: 's-form',   label: 'Sector Star Form',     key: 'sectorFormMask',      max: 1.0 },
 ];
 
 // ── Keyboard Shortcuts ───────────────────────────────────────────
