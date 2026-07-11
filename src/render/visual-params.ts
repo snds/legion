@@ -32,6 +32,7 @@ export interface VisualParams {
   backdropIntensity: number;    // Milky Way cube backdrop multiplier; 0 = off
   photographicSky: boolean;     // true = NASA photo Milky Way; false = analytic bake
   starShellsEnabled: boolean;   // legacy progressive star-shells (25pc→2.6kpc); false = catalog+sector particles → volume carry the dive
+  sectorFormMask: number;       // 0 = raw uniform sector/region star fill … 1 = carved to the spiral-arm form (exploration knob)
 
   // ── Sun ──
   sunPerlinRes: number;
@@ -135,6 +136,7 @@ const DEFAULTS: VisualParams = {
   backdropIntensity: 1.0,
   photographicSky: true,
   starShellsEnabled: false, // default OFF — the catalog + streamed sector particles carry the neighbourhood→galaxy dive into the volume; toggle on in Settings to compare
+  sectorFormMask: 0.7, // carve the streamed sector/region stars into the spiral-arm form (exploration; Settings slider)
 
 
   // Sun
@@ -228,7 +230,7 @@ type Listener = (key: keyof VisualParams, value: number | string | boolean) => v
 const PERSIST_KEYS: (keyof VisualParams)[] = [
   'chromaticAberration', 'filmGrainIntensity', 'backdropIntensity',
   'bloomStrength', 'vignetteIntensity', 'smaaEnabled', 'visualInflation',
-  'photographicSky', 'starShellsEnabled',
+  'photographicSky', 'starShellsEnabled', 'sectorFormMask',
 ];
 const STORAGE_KEY = 'legion-graphics-settings';
 

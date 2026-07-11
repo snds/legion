@@ -13,7 +13,7 @@ import {
   AdditiveBlending, BufferGeometry, Float32BufferAttribute, Points, ShaderMaterial, Vector3,
 } from 'three';
 import { WU_PER_PC } from '../../core/metrics';
-import { sectorStarsVertexShader, galacticStarsFragmentShader } from '../shaders/galactic-stars';
+import { sectorStarsVertexShader, sectorStarsFragmentShader } from '../shaders/galactic-stars';
 import { cellKey, DEFAULT_SECTOR_EDGE_PC, HOME_GAL_PC } from './sector';
 import { regionCenterPc, type RegionCell } from './region';
 import type { PopulatedCell } from './galaxy-enumerate';
@@ -87,7 +87,7 @@ export function buildRegionStarField(
 
   const material = new ShaderMaterial({
     vertexShader: sectorStarsVertexShader,
-    fragmentShader: galacticStarsFragmentShader,
+    fragmentShader: sectorStarsFragmentShader,
     uniforms: {
       uSizeScale: { value: SECTOR_STAR_SIZE_SCALE },
       uPixelRatio: { value: typeof window !== 'undefined' ? Math.min(window.devicePixelRatio, 2) : 1 },
@@ -97,6 +97,7 @@ export function buildRegionStarField(
       uDensityDim: { value: 1.0 }, // per-cell overdraw dim is baked into colour (continuous, no banding)
       uArmDebug: armDebugUniform, // shared — __armDebug recolours the whole galaxy
       uDepthLODRef: { value: 80_000 }, // continuous per-vertex distance LOD — no per-region size shells
+      uFormMask: { value: 0.0 }, // galactic-form mask (driven per-frame from VP.sectorFormMask)
     },
     transparent: true,
     depthWrite: false,

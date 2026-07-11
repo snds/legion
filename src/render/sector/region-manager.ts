@@ -15,6 +15,7 @@
 // ═══════════════════════════════════════════════════════════════════
 
 import { Group, Vector3 } from 'three';
+import { VP } from '../visual-params';
 import { Broker } from '../scale-manager';
 import { armPattern } from '../galaxy-density';
 import {
@@ -156,8 +157,11 @@ export function updateRegionManager(
     rmgr.group.add(field.points);
     rmgr.fields.set(key, field);
   }
+  const formMask = VP.get('sectorFormMask'); // exploration: carve the region fill into the spiral-arm form
   for (const f of rmgr.fields.values()) {
-    if (f) f.points.position.copy(Broker.getResidual(f.regionCenterAbsWU, _res));
+    if (!f) continue;
+    f.points.position.copy(Broker.getResidual(f.regionCenterAbsWU, _res));
+    f.material.uniforms.uFormMask.value = formMask;
   }
 }
 

@@ -24,7 +24,7 @@ import {
 } from 'three';
 import { KPC_TO_WU, WU_PER_PC } from '../../core/metrics';
 import { armPattern, COL_HII, sampleGalaxy } from '../galaxy-density';
-import { sectorStarsVertexShader, galacticStarsFragmentShader } from '../shaders/galactic-stars';
+import { sectorStarsVertexShader, sectorStarsFragmentShader } from '../shaders/galactic-stars';
 import { sampleArmStar, sampleRealisticStar } from '../stellar-population';
 import { mulberry32, seedFrom } from '../../data/system-gen';
 import { DEFAULT_SECTOR_EDGE_PC, type Sector } from './sector';
@@ -381,7 +381,7 @@ export function buildSectorStarField(sector: Sector): SectorStarField {
   geo.setAttribute('aCrest', new Float32BufferAttribute(data.crests, 1));
   const material = new ShaderMaterial({
     vertexShader: sectorStarsVertexShader,
-    fragmentShader: galacticStarsFragmentShader,
+    fragmentShader: sectorStarsFragmentShader,
     uniforms: {
       uSizeScale: { value: SECTOR_STAR_SIZE_SCALE },
       uPixelRatio: { value: typeof window !== 'undefined' ? Math.min(window.devicePixelRatio, 2) : 1 },
@@ -391,6 +391,7 @@ export function buildSectorStarField(sector: Sector): SectorStarField {
       uDensityDim: { value: sectorDensityDim(data.emissionMean) }, // tame additive overdraw in dense sectors
       uArmDebug: armDebugUniform, // shared — setArmDebug() recolours every field by arm phase
       uDepthLODRef: { value: 0.0 }, // near-camera streaming keeps constant point size
+      uFormMask: { value: 0.0 }, // galactic-form mask (driven per-frame from VP.sectorFormMask)
     },
     transparent: true,
     depthWrite: false,
