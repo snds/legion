@@ -116,6 +116,7 @@ export class BlackHole {
   private readonly _up = new Vector3();
   private readonly _camUp = new Vector3();
   private readonly _basis = new Matrix4();
+  private readonly _prevClear = new Color();
 
   constructor(opts: BlackHoleOptions) {
     this.absPos = opts.absPos.clone();
@@ -195,6 +196,11 @@ export class BlackHole {
    * `viewportHeight` is the drawing-buffer height in px (for LOD sizing).
    */
   update(renderer: WebGLRenderer, camera: PerspectiveCamera, viewportHeight: number): void {
+    // Guard against a bogus 0/negative height (some headless canvases report
+    // domElement.height === 0) — otherwise the footprint collapses and the hole
+    // silently never leaves point-sprite LOD.
+    const viewH = viewportHeight > 0 ? viewportHeight : 1080;
+
     // Deterministic placement rebased through the floating origin this frame.
     Broker.getResidual(this.absPos, this._bhScene);
     this.group.position.copy(this._bhScene);
@@ -206,14 +212,14 @@ export class BlackHole {
     const rBoundWorld = R_BOUND * this.rsWorld;
     // Projected footprint of the bounding sphere (diameter) in px.
     const footprintPx = (2 * rBoundWorld / dist)
-      / (2 * Math.tan(MathUtils.degToRad(camera.fov) * 0.5)) * viewportHeight;
+      / (2 * Math.tan(MathUtils.degToRad(camera.fov) * 0.5)) * viewH;
 
     // ── Far LOD: clean point of light ──────────────────────────────
     if (footprintPx < this.pointLodPx) {
       this.billboard.visible = false;
       this.sprite.visible = true;
       // Keep the point ~pointLodPx wide so it reads as a star, never vanishing.
-      const s = this.worldSizeForPx(Math.max(this.pointLodPx, 3), dist, camera, viewportHeight);
+      const s = this.worldSizeForPx(Math.max(this.pointLodPx, 3), dist, camera, viewH);
       this.sprite.scale.setScalar(s);
       return;
     }
@@ -252,17 +258,19 @@ export class BlackHole {
       this.billboardMat.needsUpdate = true;
     }
 
-    // Render the geodesic pass into the half-res target.
+    // Render the geodesic pass into the half-res target. Save/restore the full
+    // renderer clear state so this leaves no side effects on the main pipeline.
     const prevTarget = renderer.getRenderTarget();
     const prevAutoClear = renderer.autoClear;
     const prevAlpha = renderer.getClearAlpha();
+    renderer.getClearColor(this._prevClear);
     renderer.setRenderTarget(this.rt);
     renderer.setClearColor(0x000000, 0);
     renderer.clear(true, false, false);
     this.quad.render(renderer);
     renderer.setRenderTarget(prevTarget);
     renderer.autoClear = prevAutoClear;
-    renderer.setClearAlpha(prevAlpha);
+    renderer.setClearColor(this._prevClear, prevAlpha);
   }
 
   dispose(): void {
