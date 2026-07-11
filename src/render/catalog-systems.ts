@@ -35,6 +35,9 @@ const vertexShader = /* glsl */ `
   attribute float aAbsMag; // absolute magnitude M
   attribute float aBV;
   uniform float uPixelRatio;
+  uniform float uSizeScale; // zoom LOD: shrinks the fixed-size dots as the camera pulls back
+                            // past the 25-pc survey ball, so the whole catalogue stops reading
+                            // as one oversized dense ball and recedes into a fine survey dusting.
   varying vec3 vColor;
   varying float vBright;
   ${BV_COLOR_GLSL}
@@ -44,7 +47,7 @@ const vertexShader = /* glsl */ `
     // brighter dot. Floors keep the faintest red dwarfs visible as nav targets.
     float dM = 4.83 - aAbsMag;
     vBright = clamp(0.42 + dM * 0.11, 0.28, 1.35);
-    gl_PointSize = clamp(2.6 + dM * 0.45, 1.3, 6.5) * uPixelRatio;
+    gl_PointSize = clamp(2.6 + dM * 0.45, 1.3, 6.5) * uPixelRatio * uSizeScale;
     gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
   }
 `;
@@ -105,6 +108,10 @@ export interface CatalogSystemsHandle {
   /** Per-frame presence (visibility.ts zoom-seam crossfade): drives the
    *  regional chart's uOpacity. No-op until the async catalogue load lands. */
   setOpacity(v: number): void;
+  /** Per-frame zoom LOD (visibility.ts): shrinks the regional chart's fixed-size
+   *  dots as the camera pulls back past the survey ball, so the 25-pc catalogue
+   *  stops reading as one oversized dense ball. No-op until the load lands. */
+  setSizeScale(v: number): void;
   /** Per-frame presence of the galactic-frame representation. */
   setGalacticOpacity(v: number): void;
 }
@@ -166,6 +173,10 @@ export function createCatalogSystems(): CatalogSystemsHandle {
       // raycast pick — invisible points must not steal clicks.
       handle.points.visible = v > 0.005;
     },
+    setSizeScale(v: number): void {
+      if (!handle.points) return;
+      (handle.points.material as ShaderMaterial).uniforms.uSizeScale.value = v;
+    },
     setGalacticOpacity(v: number): void {
       if (!handle.galacticPoints) return;
       const mat = handle.galacticPoints.material as ShaderMaterial;
@@ -210,6 +221,7 @@ export function createCatalogSystems(): CatalogSystemsHandle {
         // layer in when the async load lands, instead of a full-strength pop.
         uOpacity: { value: 0 },
         uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
+        uSizeScale: { value: 1 }, // driven per-frame by the zoom LOD (setSizeScale)
       },
       transparent: true, depthWrite: false, blending: AdditiveBlending,
     });
