@@ -10,7 +10,7 @@
 // ═══════════════════════════════════════════════════════════════════
 
 import {
-  AdditiveBlending, BufferGeometry, Float32BufferAttribute, Points, ShaderMaterial, Vector3,
+  AdditiveBlending, BufferGeometry, Float32BufferAttribute, Points, ShaderMaterial, Vector2, Vector3,
 } from 'three';
 import { WU_PER_PC } from '../../core/metrics';
 import { sectorStarsVertexShader, sectorStarsFragmentShader } from '../shaders/galactic-stars';
@@ -97,7 +97,10 @@ export function buildRegionStarField(
       uDensityDim: { value: 1.0 }, // per-cell overdraw dim is baked into colour (continuous, no banding)
       uArmDebug: armDebugUniform, // shared — __armDebug recolours the whole galaxy
       uDepthLODRef: { value: 80_000 }, // continuous per-vertex distance LOD — no per-region size shells
-      uFormMask: { value: 0.0 }, // galactic-form mask (driven per-frame from VP.sectorFormMask)
+      uGalaxyMask: { value: null }, // live disc buffer, set after the gas render (galaxy tier only)
+      uMaskStrength: { value: 0.0 }, // VP.sectorFormMask × disc crossfade
+      uMaskGain: { value: 6.0 }, // HDR carve depth (VP.sectorFormGain)
+      uResolution: { value: new Vector2(1, 1) },
     },
     transparent: true,
     depthWrite: false,
