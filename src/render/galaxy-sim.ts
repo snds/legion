@@ -91,6 +91,10 @@ export interface GalaxyPreset {
   gasBlurScale?: number;
   gasBlurRadius?: number;
   gasGain?: number;
+  gasFilaments?: boolean;
+  gasWarpAmt?: number;
+  gasWarpFreq?: number;
+  gasGlow?: number;
   prominentEnabled?: boolean;
   prominentCount?: number;
   prominentSize?: number;
@@ -164,6 +168,11 @@ export function createPhysicalGalaxy(opts: { renderer?: WebGLRenderer } = {}): P
   let gasBlurScale = 0.5;    // RT resolution vs. framebuffer (lower ⇒ softer + cheaper)
   let gasBlurRadius = 3.0;   // gaussian tap spread (texels at full res; scaled by 1/scale)
   let gasGain = 1.2;         // composite exposure into the value-preserving tone-map
+  // Filament/emission pass (renderGasBlur, after the blur) — domain-warp + power-curve core glow on the shell.
+  let gasFilaments = true;   // off ⇒ return the plain gaussian-blurred gas (no warp/glow)
+  let gasWarpAmt = 0.012;    // domain-warp strength (UV fraction) → filament displacement
+  let gasWarpFreq = 3.0;     // fBm frequency of the warp field (higher ⇒ finer filaments)
+  let gasGlow = 0.9;         // additive power-curve core-glow strength
   // Prominent-stars knobs (an independent big/bright standout layer, composited OVER the gas).
   let prominentEnabled = true; // on/off
   let prominentCount = 4000;   // how many standout stars
@@ -186,6 +195,10 @@ export function createPhysicalGalaxy(opts: { renderer?: WebGLRenderer } = {}): P
     if (typeof p.gasBlurScale === 'number') gasBlurScale = p.gasBlurScale;
     if (typeof p.gasBlurRadius === 'number') gasBlurRadius = p.gasBlurRadius;
     if (typeof p.gasGain === 'number') gasGain = p.gasGain;
+    if (typeof p.gasFilaments === 'boolean') gasFilaments = p.gasFilaments;
+    if (typeof p.gasWarpAmt === 'number') gasWarpAmt = p.gasWarpAmt;
+    if (typeof p.gasWarpFreq === 'number') gasWarpFreq = p.gasWarpFreq;
+    if (typeof p.gasGlow === 'number') gasGlow = p.gasGlow;
     if (typeof p.prominentEnabled === 'boolean') prominentEnabled = p.prominentEnabled;
     if (typeof p.prominentCount === 'number') prominentCount = p.prominentCount;
     if (typeof p.prominentSize === 'number') prominentSize = p.prominentSize;
@@ -282,6 +295,39 @@ export function createPhysicalGalaxy(opts: { renderer?: WebGLRenderer } = {}): P
   });
   const blurScene = new Scene();
   { const q = new Mesh(fsGeo, blurMat); q.frustumCulled = false; blurScene.add(q); }
+  // ── FILAMENT/EMISSION pass (nebula-simulation-research §7 — WS-4 recipe) ────────────────────────────────────
+  // A final fullscreen treatment ON the blurred gas shell: domain-warp the sample coords with value-noise fBm so
+  // the smooth gaussian rolloff breaks into filaments (kills the concentric banding of a pure blur), then ADD a
+  // power-curve core glow (escalating exponent → layered emission that swells the cores while barely touching the
+  // faint arms). Reinhard-normalised before pow() so it stays HDR-safe on the additive gas cores that sum past 1.
+  const emitMat = new ShaderMaterial({
+    uniforms: {
+      uTex: { value: null }, uWarp: { value: gasWarpAmt }, uFreq: { value: gasWarpFreq },
+      uGlow: { value: gasGlow }, uPow: { value: 3.0 },
+    },
+    vertexShader: fsVert,
+    fragmentShader: `
+      uniform sampler2D uTex; uniform float uWarp; uniform float uFreq; uniform float uGlow; uniform float uPow;
+      varying vec2 vUv;
+      float h21(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123); }
+      float vnoise(vec2 p){
+        vec2 i = floor(p), f = fract(p); vec2 u = f * f * (3.0 - 2.0 * f);
+        return mix(mix(h21(i), h21(i + vec2(1.0, 0.0)), u.x),
+                   mix(h21(i + vec2(0.0, 1.0)), h21(i + vec2(1.0, 1.0)), u.x), u.y);
+      }
+      float fbm(vec2 p){ float s = 0.0, a = 0.5; for (int k = 0; k < 4; k++){ s += a * vnoise(p); p = p * 2.0 + 17.0; a *= 0.5; } return s; }
+      void main(){
+        vec2 warp = vec2(fbm(vUv * uFreq), fbm(vUv * uFreq + 5.2)) - 0.5; // centred domain-warp field
+        vec4 c = texture2D(uTex, vUv + warp * uWarp);
+        float lum = max(max(c.r, c.g), c.b);
+        float d = lum / (1.0 + lum);          // Reinhard → [0,1): pow() can't blow up the HDR cores
+        float core = pow(d, uPow);            // sharp, core-weighted emission term
+        gl_FragColor = vec4(c.rgb * (1.0 + uGlow * core), c.a); // layered glow ADDED (cores gain most)
+      }`,
+    depthTest: false, depthWrite: false,
+  });
+  const emitScene = new Scene();
+  { const q = new Mesh(fsGeo, emitMat); q.frustumCulled = false; emitScene.add(q); }
   let gasRT: WebGLRenderTarget | null = null, blurRT: WebGLRenderTarget | null = null;
   const ensureRTs = (w: number, h: number): void => {
     if (gasRT && gasRT.width === w && gasRT.height === h) return;
@@ -324,6 +370,16 @@ export function createPhysicalGalaxy(opts: { renderer?: WebGLRenderer } = {}): P
       blurMat.uniforms.uTex!.value = blurRT!.texture; blurMat.uniforms.uDir!.value.set(0, 1);
       renderer.setRenderTarget(gasRT!); renderer.render(blurScene, fsCam);
     }
+    // 3) filament/emission pass: domain-warp + power-curve core glow, gasRT → blurRT (the returned texture).
+    let outTex = gasRT!.texture;
+    if (gasFilaments) {
+      emitMat.uniforms.uTex!.value = gasRT!.texture;
+      emitMat.uniforms.uWarp!.value = gasWarpAmt;
+      emitMat.uniforms.uFreq!.value = gasWarpFreq;
+      emitMat.uniforms.uGlow!.value = gasGlow;
+      renderer.setRenderTarget(blurRT!); renderer.render(emitScene, fsCam);
+      outTex = blurRT!.texture;
+    }
     // restore renderer + camera + scene state for the main composer pass.
     camera.layers.mask = prevLayers;
     scene.background = prevBg;
@@ -332,7 +388,7 @@ export function createPhysicalGalaxy(opts: { renderer?: WebGLRenderer } = {}): P
     renderer.autoClear = prevAutoClear;
     // The blur composite bypasses the gas material's uniforms, so the zoom-seam
     // presence multiplies the composite gain here instead.
-    return { texture: gasRT!.texture, gain: gasGain * presence };
+    return { texture: outTex, gain: gasGain * presence };
   };
 
 
@@ -464,6 +520,12 @@ export function createPhysicalGalaxy(opts: { renderer?: WebGLRenderer } = {}): P
         { label: 'blur res', min: 0.25, max: 1, step: 0.05, get: () => gasBlurScale, set: (v: number) => { gasBlurScale = v; }, live: () => {} },
         { label: 'blur radius', min: 0.5, max: 5, step: 0.25, get: () => gasBlurRadius, set: (v: number) => { gasBlurRadius = v; }, live: () => {} },
         { label: 'gas gain', min: 0.5, max: 3, step: 0.05, get: () => gasGain, set: (v: number) => { gasGain = v; }, live: () => {} },
+        // Filament/emission pass on the blurred shell (domain-warp + power-curve core glow) — all live (uniforms
+        // are read fresh from these vars each renderGasBlur call; requires gas blur ON, since it runs on the RT).
+        { kind: 'toggle', label: 'filaments', get: () => gasFilaments, set: (v: boolean) => { gasFilaments = v; }, live: () => {} },
+        { label: 'warp amt', min: 0, max: 0.05, step: 0.002, get: () => gasWarpAmt, set: (v: number) => { gasWarpAmt = v; }, live: () => {} },
+        { label: 'warp freq', min: 1, max: 8, step: 0.5, get: () => gasWarpFreq, set: (v: number) => { gasWarpFreq = v; }, live: () => {} },
+        { label: 'core glow', min: 0, max: 3, step: 0.05, get: () => gasGlow, set: (v: number) => { gasGlow = v; }, live: () => {} },
       ] },
       { title: 'Prominent Stars', key: 'prominent', ctrls: [
         { kind: 'toggle', label: 'prominent on', get: () => prominentEnabled, set: (v: boolean) => { prominentEnabled = v; },
@@ -491,6 +553,7 @@ export function createPhysicalGalaxy(opts: { renderer?: WebGLRenderer } = {}): P
     cfg: { ...cfg }, dust: { ...dustCfg },
     gasIntensity, dustOpacity, gasPuffKpc, gasCore,
     gasBlurEnabled, gasBlurScale, gasBlurRadius, gasGain,
+    gasFilaments, gasWarpAmt, gasWarpFreq, gasGlow,
     prominentEnabled, prominentCount, prominentSize, prominentBright, prominentVariance,
     cloudEnabled, starsEnabled, dustEnabled,
     seed,
@@ -510,6 +573,7 @@ export function createPhysicalGalaxy(opts: { renderer?: WebGLRenderer } = {}): P
     seed = 4;
     gasIntensity = 2.0; dustOpacity = 1.0; gasPuffKpc = 1.15; gasCore = 1.0; warp = 0; warpOffsetMyr = 0;
     gasBlurEnabled = true; gasBlurScale = 0.5; gasBlurRadius = 3.0; gasGain = 1.2;
+    gasFilaments = true; gasWarpAmt = 0.012; gasWarpFreq = 3.0; gasGlow = 0.9;
     prominentEnabled = true; prominentCount = 4000; prominentSize = 6.0; prominentBright = 3.0; prominentVariance = 0.7;
     cloudEnabled = true; starsEnabled = true; dustEnabled = true;
     applyPreset(SAVED_GALAXY_DEFAULTS); // land on the canonical committed look, not the raw code floor
@@ -546,7 +610,7 @@ export function createPhysicalGalaxy(opts: { renderer?: WebGLRenderer } = {}): P
       root.remove(current.prominent); current.prominent.geometry.dispose(); current.prominentMat.dispose();
     }
     gasRT?.dispose(); blurRT?.dispose();
-    blurMat.dispose(); fsGeo.dispose();
+    blurMat.dispose(); emitMat.dispose(); fsGeo.dispose();
     root.remove(refMesh); refMesh.geometry.dispose(); refMat.dispose(); refTex.dispose(); // reference-overlay dev tool
   };
 

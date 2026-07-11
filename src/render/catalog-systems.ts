@@ -24,12 +24,49 @@ import { loadStarSystems, type CatalogStar } from '../data/star-systems';
 import { CURATED_SYSTEMS, HOME_SYSTEM } from '../data/curated-systems';
 import { WU_PER_PC, KPC_TO_WU, SOL_GAL_PC } from '../core/metrics';
 import { driftedRegionalScenePos, driftGalPc, DRIFT_MIN_STEP_MYR } from '../core/galactic-drift';
+import { seedFrom, mulberry32 } from '../data/system-gen';
+import { DEFAULT_PHYSICAL_CONFIG } from './galaxy-physical';
 import { BV_COLOR_GLSL } from './star-field';
 
 // Galaxy-group native frame: 1 pc = KPC_TO_WU/1000 WU (children of the galaxy
 // group are authored in this frame and ride its ×GALAXY_MODEL_SCALE lift —
 // same convention as the curated gal_system markers).
 const PC_TO_NATIVE = KPC_TO_WU / 1000;
+
+// ── AESTHETIC spiral-arm layout for the galactic-frame highlight layer ──
+// The galactic-frame representation is a purely DECORATIVE mirror of the survey
+// (its raycast/selection metadata lives only on the regional `points`), so the
+// 25-pc neighbourhood's real galactocentric cluster — an invisible pin-prick at
+// galaxy framing — is redistributed across the whole disc as a logarithmic
+// spiral so the "surveyed" highlights actually read among the procedural arms.
+// Recipe: Solaris-Explorer, nebula-simulation-research §7. Because this MOVES the
+// particles off their true galactocentric spots it is guarded by a flag; OFF ⇒
+// the layer sits at real coordinates (the original behaviour) and drifts. The
+// regional chart (real positions, navigation + picking) is never touched.
+const GALACTIC_SPIRAL_LAYOUT = true;
+const SPIRAL_ARMS = DEFAULT_PHYSICAL_CONFIG.armCount;    // match the procedural disc (m arms)
+const SPIRAL_RMAX_KPC = DEFAULT_PHYSICAL_CONFIG.rMax_kpc; // fill the bright disc
+const SPIRAL_WIND = 3.0;    // W — logarithmic winding turns (θ gains W·π across the disc)
+const SPIRAL_FUZZ = 0.32;   // per-particle angular jitter (rad) → arm fuzz
+
+/** Deterministic per-star position for the galactic-frame spiral, in native-333
+ *  galactocentric WU (the same frame the real gpos used). Aesthetic only — see
+ *  GALACTIC_SPIRAL_LAYOUT. Seeded by the star's catalogue designation so a given
+ *  star always lands in the same spot regardless of load order. */
+function spiralGalacticPos(star: CatalogStar, i: number, out: { x: number; y: number; z: number }): void {
+  const rng = mulberry32(seedFrom(star.desig || star.name || `catalog-${i}`));
+  const rKpc = Math.pow(rng(), 1.5) * SPIRAL_RMAX_KPC;                 // core-density bias
+  const rN = rKpc * KPC_TO_WU;                                         // kpc → native-333 WU
+  const rFrac = rKpc / SPIRAL_RMAX_KPC;
+  const jitter = (rng() - 0.5) * SPIRAL_FUZZ;                          // arm fuzz
+  const theta = (i % SPIRAL_ARMS) * ((2 * Math.PI) / SPIRAL_ARMS)      // arm assignment
+    + rFrac * SPIRAL_WIND * Math.PI                                    // logarithmic winding
+    + jitter;
+  const yN = (rng() - 0.5) * rN * 0.2 * (1 - rFrac * 0.6);             // disc thins outward
+  out.x = rN * Math.cos(theta);   // galactic plane = XZ (Y = NGP), matching the galaxy frame
+  out.y = yN;
+  out.z = rN * Math.sin(theta);
+}
 
 const vertexShader = /* glsl */ `
   attribute float aAbsMag; // absolute magnitude M
@@ -142,7 +179,12 @@ export function createCatalogSystems(): CatalogSystemsHandle {
       if (!handle.points || Math.abs(tMyr - lastDriftMyr) < DRIFT_MIN_STEP_MYR) return;
       lastDriftMyr = tMyr;
       const attr = handle.points.geometry.getAttribute('position') as BufferAttribute;
-      const gattr = handle.galacticPoints?.geometry.getAttribute('position') as BufferAttribute | undefined;
+      // The spiral layout is a fixed decorative arrangement, not a set of real
+      // orbits — leave it untouched by drift (only real galactocentric positions
+      // are re-derived here).
+      const gattr = GALACTIC_SPIRAL_LAYOUT
+        ? undefined
+        : handle.galacticPoints?.geometry.getAttribute('position') as BufferAttribute | undefined;
       const base = handle.basePc;
       for (let i = 0; i < handle.stars.length; i++) {
         pcScratch.x = base[i * 3]; pcScratch.y = base[i * 3 + 1]; pcScratch.z = base[i * 3 + 2];
@@ -234,11 +276,20 @@ export function createCatalogSystems(): CatalogSystemsHandle {
     group.add(points);
 
     // ── Galactic-frame representation (same stars, disc-embedded) ──
+    // Either a decorative disc-spanning spiral (GALACTIC_SPIRAL_LAYOUT) or the
+    // real galactocentric cluster (native-333 = heliocentric pc + Sol's galactic
+    // offset, ×PC_TO_NATIVE).
     const gpos = new Float32Array(n * 3);
+    const sp = { x: 0, y: 0, z: 0 };
     for (let i = 0; i < n; i++) {
-      gpos[i * 3]     = (SOL_GAL_PC.x + basePc[i * 3])     * PC_TO_NATIVE;
-      gpos[i * 3 + 1] = (SOL_GAL_PC.y + basePc[i * 3 + 1]) * PC_TO_NATIVE;
-      gpos[i * 3 + 2] = (SOL_GAL_PC.z + basePc[i * 3 + 2]) * PC_TO_NATIVE;
+      if (GALACTIC_SPIRAL_LAYOUT) {
+        spiralGalacticPos(stars[i], i, sp);
+        gpos[i * 3] = sp.x; gpos[i * 3 + 1] = sp.y; gpos[i * 3 + 2] = sp.z;
+      } else {
+        gpos[i * 3]     = (SOL_GAL_PC.x + basePc[i * 3])     * PC_TO_NATIVE;
+        gpos[i * 3 + 1] = (SOL_GAL_PC.y + basePc[i * 3 + 1]) * PC_TO_NATIVE;
+        gpos[i * 3 + 2] = (SOL_GAL_PC.z + basePc[i * 3 + 2]) * PC_TO_NATIVE;
+      }
     }
     const ggeo = new BufferGeometry();
     ggeo.setAttribute('position', new BufferAttribute(gpos, 3));
