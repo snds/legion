@@ -29,6 +29,7 @@ import { VP } from './render/visual-params';
 import { createCatalogStars } from './render/star-field';
 import { createCatalogSystems, type CatalogSystemsHandle } from './render/catalog-systems';
 import { createStarShells, type StarShellsHandle } from './render/star-shells';
+import { createTestNebula, type TestNebulaHandle } from './render/nebula';
 import { bakeGalaxyBackdrop } from './render/galaxy-backdrop';
 import {
   createSystemMarker, createCosmicMarker, createMarkerStem, updateSunSystem,
@@ -620,6 +621,11 @@ async function boot(): Promise<void> {
       }
     }
 
+    // Test nebula (stellar-phenomena P1): re-root to the floating origin + zoom-LOD
+    // gate (getGalaxyCrossfade), advancing its drift. Runs after Broker.beginFrame,
+    // like the disc + sector re-roots; self-hides when not near galaxy scale.
+    worldExtras.testNebula.update(Game.data.camDist, frameTime);
+
     // 6b. Galactic drift — systems orbit Sgr A* (core/galactic-drift). Epoch
     // positions are re-derived from the sim clock; gated to DRIFT_MIN_STEP_MYR
     // (100 game-years) so this is a no-op at normal time compression. Circular
@@ -768,6 +774,8 @@ interface WorldExtras {
   physGalaxy: PhysicalGalaxySystem | null;
   catalogSystems: CatalogSystemsHandle;
   starShells: StarShellsHandle;
+  /** Stellar-phenomena P1: the hand-authored Orion test nebula (galaxy tier). */
+  testNebula: TestNebulaHandle;
   /** Curated-system entity ids, index-aligned with CURATED_SYSTEMS (drift). */
   systemEids: number[];
 }
@@ -962,6 +970,12 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol', renderer: impo
     console.info('[galaxy] physical galaxy = default disc (canonical preset + localStorage override; tune via LAB)');
   }
 
+  // ── Test nebula (stellar-phenomena P1) — one hand-authored Orion (M42) at its
+  // real galPos, riding the galactic tier's floating origin + zoom LOD. Reusable
+  // primitive (src/render/nebula); P2 swaps this for data-driven catalog objects.
+  const testNebula = createTestNebula();
+  sceneRoot.add(testNebula.group);
+
   // ── Sector orb (Homeworld-style sensor bubble, visible at sector tier) ──
   // Sits at the home origin in scene space; visibility system shows/hides
   // it per zoom domain.
@@ -973,7 +987,7 @@ function populateWorld(ctx: SceneContext, systemId: 'ee' | 'sol', renderer: impo
   const sectorOrb = createSectorOrb(19.1 * LY_TO_WU);
   sceneRoot.add(sectorOrb);
 
-  return { eclipticGrid, oortCloud, galaxyArms: galaxyGroup, sectorOrb, activeSystem, protoSector, sectorMgr, regionMgr, sectorFill, galaxyBuildout, physGalaxy, catalogSystems, starShells, systemEids };
+  return { eclipticGrid, oortCloud, galaxyArms: galaxyGroup, sectorOrb, activeSystem, protoSector, sectorMgr, regionMgr, sectorFill, galaxyBuildout, physGalaxy, catalogSystems, starShells, testNebula, systemEids };
 }
 
 // ── Start ────────────────────────────────────────────────────────
