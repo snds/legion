@@ -107,7 +107,6 @@ export const sectorStarsVertexShader = /* glsl */ `
   attribute float aCrest;
   varying vec3 vColor;
   varying vec3 vStreak;
-  varying float vCrest; // arm crestiness (0 gap … 1 crest) → fragment "galactic form" mask
   uniform float uSizeScale;
   uniform float uPixelRatio;
   uniform float uArmDebug;
@@ -117,7 +116,6 @@ export const sectorStarsVertexShader = /* glsl */ `
   uniform float uDepthLODRef;
 
   void main() {
-    vCrest = aCrest;
     vec3 armCol = mix(vec3(0.9, 0.25, 0.18), vec3(0.30, 0.85, 1.0), aCrest);
     vColor = mix(color, armCol, uArmDebug);
     // Unified-frame position, re-rooted via the group's modelMatrix (floating origin).
@@ -172,23 +170,13 @@ export const galacticStarsFragmentShader = /* glsl */ `
   }
 `;
 
-// Sector/region fragment with the LIVE-GALAXY SCREEN-SPACE MASK (Phase 5a). The density-sampled fill
-// reads as an even square block (the residency) at the galaxy tier and ignores the disc structure.
-// So MASK each star by the live galaxy render (uGalaxyMask — the disc's gas/emission buffer, same camera
-// ⇒ screen-aligned ⇒ dynamic with the disc's drift for free): a star survives where the galaxy is bright
-// (arms, disc) and fades where it's dark (dust lanes, inter-arm, the void outside the disc), so the field
-// both takes the galactic FORM and dissolves the square edge into the nebula. uMaskStrength (0 = raw fill
-// … 1 = fully galaxy-masked) ramps up only where the disc is shown; uMaskGain tunes the HDR carve depth.
-// vCrest is still available (arm-debug), just not the mask source now.
+// Sector/region fragment — position-based streaked-star sprite (Phase 5a). Plain density-sampled fill:
+// no form mask (the screen-space gas mask was retired after live QA showed it cannot dissolve the
+// residency's SPATIAL edge — a brightness mask keyed on galaxy content dims the whole block equally).
 export const sectorStarsFragmentShader = /* glsl */ `
   varying vec3 vColor;
   varying vec3 vStreak;
-  varying float vCrest;
   uniform float uDensityDim;
-  uniform sampler2D uGalaxyMask;
-  uniform float uMaskStrength;
-  uniform float uMaskGain;
-  uniform vec2 uResolution;
 
   void main() {
     vec2 p = gl_PointCoord - 0.5;
@@ -202,16 +190,6 @@ export const sectorStarsFragmentShader = /* glsl */ `
     float core = pow(1.0 - d, 1.6);
     float halo = 0.06 * (1.0 - d);
     float intensity = (core + halo) * (1.0 - stretch * 0.5) * uDensityDim;
-
-    // Live-galaxy mask: sample the disc buffer at this fragment's SCREEN position (same camera as the
-    // stars ⇒ aligned). galaxy brightness → 0..1 via a saturating exp(gain). At uMaskStrength=0 stars are
-    // untouched; at 1 they are fully carved to the galaxy's bright regions.
-    if (uMaskStrength > 0.0) {
-      vec3 g = texture2D(uGalaxyMask, gl_FragCoord.xy / uResolution).rgb;
-      float b = max(max(g.r, g.g), g.b);
-      float mask = 1.0 - exp(-b * uMaskGain);
-      intensity *= mix(1.0, mask, uMaskStrength);
-    }
 
     gl_FragColor = vec4(vColor, intensity);
   }

@@ -23,8 +23,6 @@ const FX: FxDef[] = [
   { id: 's-bloom',  label: 'Bloom',                key: 'bloomStrength',       max: 0.30 },
   { id: 's-vig',    label: 'Vignette',             key: 'vignetteIntensity',   max: 1.0 },
   { id: 's-back',   label: 'Milky Way Backdrop',   key: 'backdropIntensity',   max: 2.0 },
-  { id: 's-form',   label: 'Sector Star Form',     key: 'sectorFormMask',      max: 1.0 },
-  { id: 's-formg',  label: 'Sector Form Depth',    key: 'sectorFormGain',      max: 16.0 },
 ];
 
 // ── Keyboard Shortcuts ───────────────────────────────────────────
@@ -109,8 +107,12 @@ function renderDisplayTab(): string {
     + `<input type="checkbox" id="s-photosky"${VP.get('photographicSky') ? ' checked' : ''}>`
     + `</div>`;
   h += `<div class="settings-row" style="display:flex;align-items:center;justify-content:space-between;margin-top:6px">`
-    + `<span style="font-size:10px;opacity:0.65">Legacy star shells</span>`
+    + `<span style="font-size:10px;opacity:0.65">Star shells</span>`
     + `<input type="checkbox" id="s-starshells"${VP.get('starShellsEnabled') ? ' checked' : ''}>`
+    + `</div>`;
+  h += `<div class="settings-row" style="display:flex;align-items:center;justify-content:space-between;margin-top:6px">`
+    + `<span style="font-size:10px;opacity:0.65">Sector star grid (experimental)</span>`
+    + `<input type="checkbox" id="s-sectorstars"${VP.get('sectorStarsEnabled') ? ' checked' : ''}>`
     + `</div>`;
   h += `<div style="font-size:10px;opacity:0.4;margin-top:2px">Drag a slider to 0 to disable it. Backdrop = the Milky Way sky glow.</div>`;
 
@@ -228,6 +230,8 @@ function render(area: HTMLElement): void {
   if (photoSky) photoSky.onchange = () => VP.set('photographicSky', photoSky.checked);
   const starShells = area.querySelector<HTMLInputElement>('#s-starshells');
   if (starShells) starShells.onchange = () => VP.set('starShellsEnabled', starShells.checked);
+  const sectorStars = area.querySelector<HTMLInputElement>('#s-sectorstars');
+  if (sectorStars) sectorStars.onchange = () => VP.set('sectorStarsEnabled', sectorStars.checked);
 
   const saveDefaultBtn = area.querySelector<HTMLButtonElement>('#s-save-default');
   if (saveDefaultBtn) {

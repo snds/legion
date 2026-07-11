@@ -31,9 +31,8 @@ export interface VisualParams {
   filmGrainIntensity: number;   // 0 = off
   backdropIntensity: number;    // Milky Way cube backdrop multiplier; 0 = off
   photographicSky: boolean;     // true = NASA photo Milky Way; false = analytic bake
-  starShellsEnabled: boolean;   // legacy progressive star-shells (25pc→2.6kpc); false = catalog+sector particles → volume carry the dive
-  sectorFormMask: number;       // 0 = raw uniform sector/region star fill … 1 = carved to the spiral-arm form (exploration knob)
-  sectorFormGain: number;       // HDR carve depth of the live-galaxy alpha mask (higher = sharper form, dimmer fringes)
+  starShellsEnabled: boolean;   // progressive star-shells (25pc→2.6kpc) — the neighbourhood→galaxy visual
+  sectorStarsEnabled: boolean;  // per-sector/region streamed star-generator grid (retired to a toggle; false = off, star-shells carry it)
 
   // ── Sun ──
   sunPerlinRes: number;
@@ -136,9 +135,8 @@ const DEFAULTS: VisualParams = {
   filmGrainIntensity: 0.035,
   backdropIntensity: 1.0,
   photographicSky: true,
-  starShellsEnabled: false, // default OFF — the catalog + streamed sector particles carry the neighbourhood→galaxy dive into the volume; toggle on in Settings to compare
-  sectorFormMask: 0.7, // carve the streamed sector/region stars into the spiral-arm form (exploration; Settings slider)
-  sectorFormGain: 6.0, // HDR carve depth of the live-galaxy mask — mask = 1 − exp(−brightness · gain) (Settings slider)
+  starShellsEnabled: true, // default ON — progressive star-shells carry the neighbourhood→galaxy dive (the sector generator grid read as a hard square and was retired)
+  sectorStarsEnabled: false, // default OFF — the streamed per-sector/region star generators are retired to a Settings toggle for comparison
 
 
   // Sun
@@ -232,7 +230,7 @@ type Listener = (key: keyof VisualParams, value: number | string | boolean) => v
 const PERSIST_KEYS: (keyof VisualParams)[] = [
   'chromaticAberration', 'filmGrainIntensity', 'backdropIntensity',
   'bloomStrength', 'vignetteIntensity', 'smaaEnabled', 'visualInflation',
-  'photographicSky', 'starShellsEnabled', 'sectorFormMask', 'sectorFormGain',
+  'photographicSky', 'starShellsEnabled', 'sectorStarsEnabled',
 ];
 const STORAGE_KEY = 'legion-graphics-settings';
 
