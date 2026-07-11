@@ -1,10 +1,24 @@
 # Scale Unification — migration plan of record
 
-**Status:** Active migration. Replaces Legion's three mutually-inconsistent compressed scales
-(1 AU = 10 WU, 1 ly = 220 WU, 1 kpc = 333 WU — ~10⁶× inconsistent) with one unified metric +
-float64 authoritative coordinates + a per-frame floating origin. Target architecture is
+**Status:** Core migration COMPLETE (reconciled 2026-07-11). Replaced Legion's three
+mutually-inconsistent compressed scales (1 AU = 10 WU, 1 ly = 220 WU, 1 kpc = 333 WU — ~10⁶×
+inconsistent) with one unified metric (**1 pc = 1000 WU everywhere**) + float64 authoritative
+coordinates + a per-frame floating origin. Target architecture is
 `space-engine-techniques-for-legion.md` §§2.1–2.2, 3.1–3.4 (the project's own verified research);
 this doc is the concrete migration + the product decisions Sean signed off (2026-06-14).
+
+**Where it stands (2026-07-11):**
+- ✅ **Phases 0, 1, 2a, 2b, 2c, 3 shipped.** The visible seam is dead — the neighbourhood sits at
+  true scale as a speck in the Orion Spur, reached by continuous dive-in. The floating origin is
+  live (`FLOATING_ORIGIN_ACTIVE = true`), the ×220 regional frame is retired, and the whole
+  system→galaxy dive is one continuous physical-distance readout (U-series, on top of the numbered
+  phases). Phase 5a (streamed sector particles) shipped then was retired to a default-off toggle —
+  **star-shells** carry the neighbourhood→galaxy visual, with an aggressive zoom-exterior LOD on the
+  25 pc catalogue.
+- ⏳ **Remaining:** **Phase 4** (depth partitioning; drop `logarithmicDepthBuffer`) — not started.
+  **Phase 5 beyond 5a** — the near-particle → volumetric-cloud luminance handoff, ±20–25% per-sector
+  density, and sectors as navigable traversal overlays. Plus a parked item: the alien-civ territory
+  "zones" (`SHOW_ALIEN_CIV_ZONES = false` in `galaxy.ts`, to re-address).
 
 ## The metric
 
@@ -67,17 +81,21 @@ far-field representation, not a compromise.
 **Convergence — each phase's contribution to true scale:**
 - **0–1** ✅ single source of scale + neighbourhood pinned to real *relative* geometry (still ×220).
 - **2a** ✅ body visual inflation (orthogonal to positions).
-- **2b** (now) floating origin + frame broker — the precision substrate; a single continuous metric at
-  galactic distances (home ≈ 8.3e6 WU) is impossible in float32 without it. Behaviorally neutral.
-- **2c** **collapse the regional neighbourhood tier INTO the unified galactic frame** at real galPos —
-  *this is where the seam dies* (the headline, not the landmark-list merge). The neighbourhood becomes
-  a speck in the spur; the disc model is scaled/placed by the broker to read at true proportions (its
-  internal 333-WU/kpc calibration stays frozen — no HOME_POS re-derive).
-- **3** re-derive every camDist/zoom/LOD threshold for the unified magnitudes so the dive-in zoom is
-  continuous and tiers fire at the right distances.
-- **4** depth partitioning so the vastly wider depth range renders without z-fighting.
-- **5** sector tiling + procedural fill: near = true particles, far = volumetric cloud, deterministic
-  on revisit; ±20–25% per-sector density around the local mid-range.
+- **2b** ✅ floating origin + frame broker — the precision substrate; a single continuous metric at
+  galactic distances (home ≈ 8.3e6 WU) is impossible in float32 without it. `FLOATING_ORIGIN_ACTIVE =
+  true` (`scale-manager.ts`); activated in #68.
+- **2c** ✅ **collapsed the regional neighbourhood tier INTO the unified galactic frame** at real galPos
+  — *this is where the seam died* (#67–#71; the legacy ×220 regional frame is retired). The
+  neighbourhood is now a speck in the spur; the disc model is scaled/placed by the broker to read at
+  true proportions (internal 333-WU/kpc calibration frozen — no HOME_POS re-derive).
+- **3** ✅ re-derived every camDist/zoom/LOD threshold for the unified magnitudes — shipped as the
+  **U-series** (U1 one continuous physical-distance readout; U2 whole system at true scale in the
+  unified frame; U3 adaptive FOV over log(camDist) + mesh↔icon LOD). Dive-in zoom is continuous.
+- **4** ⏳ depth partitioning so the vastly wider depth range renders without z-fighting. **Not started**
+  — `logarithmicDepthBuffer: true` is still set (`renderer.ts`).
+- **5** ◑ sector tiling + procedural fill: near = true particles, far = volumetric cloud, deterministic
+  on revisit; ±20–25% per-sector density around the local mid-range. **5a shipped** (streamed sector/
+  region particles); the near-particle → volumetric-cloud luminance handoff is the remaining ambition.
 
 ## Phases (each independently shippable + verifiable)
 
@@ -85,13 +103,13 @@ far-field representation, not a compromise.
 |---|---|---|---|
 | 0 | ✅ **shipped** (PR #61) — Collapse all scale constants into `src/core/metrics.ts` (derives the *current* values — byte-identical) | very low | none |
 | 1 | ✅ **shipped** — float64 `galPos` store (`src/data/curated-systems.ts`, `SOL_GAL_PC`); curated systems re-pinned to **real heliocentric pc** from the 25-pc HYG catalogue; **regional tier** placed from real geometry; star-graph link range migrated to WU (`NAV_LINK_WU`). Galactic tier (`GAL_SYSTEMS`/`HOME_POS`) merge **deferred to Phase 2** (moving frozen `HOME_POS` shifts the whole galaxy frame). | medium | yes (decision 1) |
-| 2 | Frame broker + floating origin + galactic merge — **decomposed** (see below) into 2a/2b/2c after the architecture sweep | high | per sub-slice |
-| 2a | ✅ **shipped** — visual-inflation re-model (decision 2): `getEffectiveScale` inverted to **1:1 close → ~1.25× outer-system/Oort**, configurable max + ramp window (`visualInflation` VP key, settings UI), dead `isInSolarSystem` removed | low | yes (scale UI) |
-| 2b | Frame broker + per-frame floating origin, **behaviorally neutral** (R≡0 identity policy — camera NOT moved). Sliced after a 3-design + adversarial-vet workflow into **2b-0..2b-4**: **2b-0/1/2 ✅ shipped** — `sceneRoot` container (all tiers + loose objects re-parented), dormant `Broker` (`getTierRoot`/`getSceneRebase`/`beginFrame`, `FLOATING_ORIGIN_ACTIVE=false`), `getGalaxyOffset` delegates to `Broker.getTierRoot('galactic')` (=−HOME_POS, byte-identical); 0-ULP bare-graph neutrality test; **2b-2** = `updateGalaxyFrame()` refreshes the galaxy group position + disc-volume AABB/origin uniforms per frame from the broker (`beginFrame` pinned right after `camCtrl.update`), idempotent under R≡0 (live-verified: group + uniforms = exactly −HOME_POS ± box). **Next**: 2b-3 camera velocity + focus/track reads onto the f64 anchor (+ `uPlanetCenter` lockstep, per adversary); 2b-4 land neutrality gate in CI. Density model stays frozen in its 333-WU/kpc frame. | high | none (jitter gone) |
-| 2c | **Collapse the regional neighbourhood tier INTO the unified galactic frame** (THE visible-seam fix): regional markers + `GAL_SYSTEMS` placed from `CURATED_SYSTEMS` at real `galPos()` in ONE frame through the broker; the disc model is scaled/placed to read at true proportions (its internal 333-WU/kpc calibration stays frozen — no `HOME_POS` re-derive, which would break the CI snapshot/GLSL/RIFT_CLOUDS); `getGalaxyOffset`'s 3 consumers move to the broker atomically. Not just the landmark-list merge. | high | **neighbourhood sits true-scale in the spur** |
-| 3 | Re-derive `getCamDist` from real extents; tiers → labels | medium | zoom feel |
-| 4 | Depth partitioning; drop `logarithmicDepthBuffer` | med-high | perf |
-| 5 | Sector tiling + procedural fill keyed off the float64 frame (decision 3) | medium | new far systems |
+| 2 | Frame broker + floating origin + galactic merge — **decomposed** into 2a/2b/2c | high | per sub-slice |
+| 2a | ✅ **shipped** (#63) — visual-inflation re-model (decision 2): `getEffectiveScale` inverted to **1:1 close → ~1.25× outer-system/Oort**, configurable max + ramp window (`visualInflation` VP key, settings UI), dead `isInSolarSystem` removed | low | yes (scale UI) |
+| 2b | ✅ **shipped** (#64–#66, #68) — frame broker + per-frame floating origin, `sceneRoot` container, `Broker` (`getTierRoot`/`getSceneRebase`/`beginFrame`), galaxy frame + disc-volume uniforms per frame, camera velocity + planet uniforms on the f64 anchor. `FLOATING_ORIGIN_ACTIVE = true` (activated #68). Density model frozen in its 333-WU/kpc frame. | high | none (jitter gone) |
+| 2c | ✅ **shipped** (#67–#71) — **collapsed the regional neighbourhood tier INTO the unified galactic frame** (THE visible-seam fix): per-frame local + regional re-rooting via broker (#67), floating origin activated (#68), `uModelScale` plumbing (#69), unified galaxy rescale + working dive-in (#70), real curated markers + **retired the legacy ×220 regional frame** (#71). Disc model's internal 333-WU/kpc calibration stays frozen. | high | **neighbourhood sits true-scale in the spur** |
+| 3 | ✅ **shipped as the U-series** — U1 one continuous physical-distance readout (kills the AU→ly jump); U2 whole system at true scale in the unified frame (+ blockers: floating-origin oscillation, true-scale overexposure, re-keyed system-tier thresholds, belt lighting); U3 adaptive FOV over log(camDist) + restored mesh↔icon LOD at true scale | medium | zoom feel |
+| 4 | ⏳ **not started** — depth partitioning; drop `logarithmicDepthBuffer` (still `true` in `renderer.ts`) | med-high | perf |
+| 5 | ◑ **5a shipped** — streamed sector/region particles keyed off the float64 frame (decision 3); retired to a default-off toggle after live QA (read as a hard square), **star-shells** now carry the neighbourhood→galaxy visual, catalog gets an aggressive zoom-exterior LOD. **Remaining:** near-particle → volumetric-cloud luminance handoff; ±20–25% per-sector density; sectors as navigable traversal overlays | medium | new far systems |
 
 ## Key risks (carried per phase)
 
