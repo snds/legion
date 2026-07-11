@@ -70,7 +70,7 @@ Two movements, in order:
 | P3 | **Archetype library + fit.** Formalize the phenomenon types + parameter schema; fit parameter distributions from the canonical atlas (the templates the generator samples). | med | none (data model) |
 | P4 | **Procedural generator.** `(sector, index)`-seeded phenomena for uncharted sectors, gated by galactic environment (arm phase / density / radius). Deterministic on revisit. | high | populated far galaxy |
 | P5 | **Sector integration + LOD.** Wire phenomena into sector/region streaming residency; near = detailed shells, far = impostor/volume hand-off; budget-capped per sector. | med-high | phenomena stream in on the dive |
-| P6 | **Discrete set-pieces** (parallel track). Black hole (Kerr/Schwarzschild geodesic shader), magnetar (hot sphere + animated dipole + bursts), binary (Roche lobes + L1 stream + accretion disk). Placed as rare canonical + procedural objects. | med | exotic hero objects |
+| P6 | **Discrete set-pieces** (parallel track). **Black hole with CORRECT GR math** — real null-geodesic ray tracing (Schwarzschild Binet ODE; Kerr only if spin matters), true horizon (2GM/c²), photon ring (3√3 M), lensing, and a Novikov-Thorne disk with Doppler beaming (I∝g³) + gravitational redshift — **not** a screen-space fake. Port oseiskar's math (MIT); optionally table-ify (ebruneton). See [`black-hole-simulation-research.md`](black-hole-simulation-research.md). Magnetar (hot sphere + animated dipole + activity bursts), binary (analytic Roche lobes + L1 stream + emissive accretion disk + hot spot). Placed as rare canonical + procedural objects. | med-high | exotic hero objects |
 
 ## Determinism & integration (load-bearing)
 
