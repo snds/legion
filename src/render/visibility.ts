@@ -92,7 +92,7 @@ interface VisibilityTargets {
   /** Catalog star layer (catalog-systems.ts) — per-frame presence of both
    *  frames: the regional chart (setOpacity) and the galactic-frame highlight
    *  particles embedded in the disc (setGalacticOpacity). */
-  catalogSystems: { setOpacity(v: number): void; setGalacticOpacity(v: number): void } | null;
+  catalogSystems: { setOpacity(v: number): void; setGalacticOpacity(v: number): void; setSizeScale(v: number): void } | null;
   /** Progressive LOD star shells (star-shells.ts) — own their per-shell
    *  crossfade bands; visibility just feeds them camDist. */
   starShells: { updatePresence(camDist: number): void } | null;
@@ -254,7 +254,7 @@ export function initVisibility(
   oortCloud: Group | null,
   galaxyArms: Group | null,
   sectorOrb: Group | null = null,
-  catalogSystems: { setOpacity(v: number): void; setGalacticOpacity(v: number): void } | null = null,
+  catalogSystems: { setOpacity(v: number): void; setGalacticOpacity(v: number): void; setSizeScale(v: number): void } | null = null,
   starShells: { updatePresence(camDist: number): void } | null = null,
 ): void {
   targets = { layers, eclipticGrid, oortCloud, galaxyArms, sectorOrb, catalogSystems, starShells };
@@ -330,6 +330,13 @@ export function updateVisibility(camera?: Camera): void {
   const surveyFloor = 0.05 + 0.10 * smooth01(camDist, helioR * 0.4, helioR * 1.5);
   targets?.catalogSystems?.setOpacity(0.9 * Math.max(surveyFloor, swap * localEase) * galaxyDissolve);
   targets?.catalogSystems?.setGalacticOpacity(0.9 * smooth01(camDist, 2e6, 8e6));
+  // ZOOM SIZE LOD: the regional dots are a fixed 1.3–6.5 px, so once the camera
+  // is well past the 25-pc ball the whole catalogue crams into a few px and reads
+  // as one oversized dense clump. Shrink the dots across the same pull-back the
+  // localEase dims them over (3e4→3e5 WU, ~100→1000 ly) down to a 0.3 floor, so
+  // the ball dissolves into a fine survey dusting instead. Full size up close
+  // (nav targets in the 25-pc chart are untouched).
+  targets?.catalogSystems?.setSizeScale(1 - 0.7 * smooth01(camDist, 3e4, 3e5));
 
   // Progressive star shells: each annulus fades in at its scale and out past
   // it — the "spheres of stars" ladder from the survey sphere to the disc.
