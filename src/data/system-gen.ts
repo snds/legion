@@ -17,21 +17,51 @@
 
 export type StellarClass = 'O' | 'B' | 'A' | 'F' | 'G' | 'K' | 'M' | 'D' | '?';
 
+/** The seven main-sequence letters — the render-facing spectral type
+ *  (procedural-star-research.md §2). Remnants (D) / unknown (?) are mapped to
+ *  the nearest letter by temperature so a renderer always has one of these. */
+export type SpectralLetter = 'O' | 'B' | 'A' | 'F' | 'G' | 'K' | 'M';
+
 export interface StellarParams {
   cls: StellarClass;   // O B A F G K M, or D = white dwarf
   subtype: number;     // 0–9 within the class (0 = hottest)
   lumClass: string;    // 'V' main sequence, 'III' giant, 'I' supergiant, 'D' dwarf remnant…
-  teffK: number;       // effective temperature, kelvin
-  lumSun: number;      // luminosity, solar units (rough, for the habitable zone)
-  colorHex: number;    // representative star colour
+  teffK: number;       // COARSE class effective temperature (drives the HZ default); see `tempK` for the render value
+  lumSun: number;      // COARSE class luminosity, solar units — retained for HZ/snow-line determinism
+  colorHex: number;    // representative star colour (real class colour; preserved for catalogue stars)
+
+  // ── Physical record (Step 0 — procedural-worlds data prep) ─────────────────
+  // Deterministically derived from the system seed (an independent RNG stream,
+  // so planet/belt layout is byte-unchanged). The star renderer
+  // (feat/worlds-star) reads THESE; see procedural-star-research.md §2/§5.
+  spectralType: SpectralLetter; // O/B/A/F/G/K/M — the real class for catalogue stars, else mapped by temperature
+  massSolar: number;            // M☉ — primary physical quantity (from the §2 class mass band + seed jitter)
+  radiusSolar: number;          // R☉ — §2 class radius band, else M^0.8
+  luminositySolar: number;      // L☉ — main-sequence L ≈ M^3.5 (evolved stars keep the class anchor)
+  tempK: number;                // effective temperature K — from B−V where the catalogue has it, else L = 4πR²σT⁴
+  ageGyr: number;               // system age, bounded by the class main-sequence lifetime (hot stars are young)
+  activity: number;             // ∈[0,1] magnetic activity from type+age — the granulation/spot/flare driver
 }
 
 export type PlanetKind = 'rocky' | 'super-earth' | 'neptune' | 'ice-giant' | 'gas-giant' | 'dwarf';
+
+/** Render-facing planet archetype (procedural-planet-research.md §3 presets):
+ *  the six surface/atmosphere looks the planet renderer selects between. */
+export type PlanetVisualType = 'rocky' | 'gas' | 'ice' | 'ocean' | 'lava' | 'desert';
 
 export interface GenPlanet {
   kind: PlanetKind;
   au: number;          // semi-major axis, AU
   inHZ: boolean;       // within the (rough) habitable zone
+
+  // ── Physical record (Step 0) — the planet renderer (feat/worlds-planet) reads THESE. ──
+  type: PlanetVisualType; // rendering preset — from mass/radius/insolation
+  massEarth: number;      // M⊕ — real value where the archive has it, else from `kind`
+  radiusEarth: number;    // R⊕ — real value where the archive has it, else from `kind`
+  insolation: number;     // stellar flux vs Earth (L☉ / au²) — 1.0 = Earth
+  isGasGiant: boolean;    // giant (gas or ice) — rendered as a banded globe, never a surface
+  hasRings: boolean;      // deterministic; common for giants, rare for terrestrials
+  seed: number;           // stable per-body seed for the renderer's procedural surface generation
 }
 
 /** A generated asteroid/debris belt. Placement is CONSTRAINED (formation
@@ -91,6 +121,170 @@ const MEAN_PLANETS: Record<Exclude<StellarClass, '?'>, number> =
 const GIANT_FRAC: Record<Exclude<StellarClass, '?'>, number> =
   { O: 0.30, B: 0.30, A: 0.28, F: 0.24, G: 0.18, K: 0.12, M: 0.05, D: 0.10 };
 
+// ── Physical derivation tables (procedural-star-research.md §2) ──
+// Main-sequence mass/radius spans per class, [hot-end, cool-end] in solar units,
+// interpolated across the subtype (0 hottest → 9 coolest). Coarse — enough for a
+// physically-consistent (M, R, L, T) tuple, not astrophysics.
+const MASS_RANGE: Record<SpectralLetter, readonly [number, number]> = {
+  O: [60, 16], B: [16, 2.1], A: [2.1, 1.4], F: [1.4, 1.04], G: [1.04, 0.8], K: [0.8, 0.45], M: [0.45, 0.08],
+};
+const RADIUS_RANGE: Record<SpectralLetter, readonly [number, number]> = {
+  O: [12, 6.6], B: [6.6, 1.8], A: [1.8, 1.4], F: [1.4, 1.15], G: [1.15, 0.96], K: [0.96, 0.7], M: [0.7, 0.1],
+};
+// Magnetic-activity ceiling by class (procedural-star-research.md §3): cool
+// convective dwarfs (M/K) can be intensely active; early types lack a convective
+// envelope and are quiet. Modulated DOWN by age below.
+const ACTIVITY_CEIL: Record<SpectralLetter, number> = {
+  O: 0.05, B: 0.05, A: 0.10, F: 0.35, G: 0.55, K: 0.80, M: 1.00,
+};
+const SUN_TEFF_K = 5772; // solar effective temperature — the Stefan–Boltzmann anchor
+
+/** Nearest main-sequence letter for a temperature (procedural-star-research.md §2
+ *  bands). Used to give remnants / unknown types a render-facing spectralType. */
+export function letterFromTemp(tempK: number): SpectralLetter {
+  if (tempK >= 33000) return 'O';
+  if (tempK >= 10000) return 'B';
+  if (tempK >= 7300) return 'A';
+  if (tempK >= 6000) return 'F';
+  if (tempK >= 5300) return 'G';
+  if (tempK >= 3900) return 'K';
+  return 'M';
+}
+
+/** B−V colour index → effective temperature (Ballesteros 2012). The eye-accurate
+ *  temperature for a REAL catalogued star, so we never overwrite observed colour
+ *  with a modelled one. Clamped to the fit's valid B−V span. */
+export function bvToTempK(bv: number): number {
+  const b = Math.max(-0.4, Math.min(2.0, bv));
+  return 4600 * (1 / (0.92 * b + 1.7) + 1 / (0.92 * b + 0.62));
+}
+
+/**
+ * Fill a coarse StellarParams with its deterministic PHYSICAL record (mass,
+ * radius, luminosity, temperature, age, activity). Uses its OWN seeded RNG
+ * stream (seedKey|starphys) so planet/belt generation is byte-unchanged.
+ *
+ * Chain (research §5): mass from the class band → L ≈ M^3.5 (main sequence) →
+ * R from the class band (≈ M^0.8) → T from L = 4πR²σT⁴, i.e. solar-normalised
+ * T = T☉·(L/R²)^¼. When `bv` is supplied (a real catalogue colour) T comes from
+ * B−V instead — observed colour wins over the model.
+ */
+export function deriveStellarPhysical(base: StellarParams, seedKey: string, bv?: number): StellarParams {
+  const rng = mulberry32(seedFrom(seedKey + '|starphys'));
+  const remnant = base.cls === 'D';
+  const letter: SpectralLetter =
+    base.cls === 'D' || base.cls === '?' ? letterFromTemp(base.teffK) : base.cls;
+  const frac = Math.min(1, Math.max(0, base.subtype / 9)); // 0 hottest → 1 coolest
+
+  const [mHot, mCool] = MASS_RANGE[letter];
+  let massSolar = (mHot + (mCool - mHot) * frac) * (0.9 + rng() * 0.2); // ±10% seed jitter
+  const [rHot, rCool] = RADIUS_RANGE[letter];
+  let radiusSolar = (rHot + (rCool - rHot) * frac) * (0.9 + rng() * 0.2);
+  if (remnant) {
+    // White-dwarf remnant: sub-solar mass packed into an Earth-sized sphere.
+    massSolar = 0.5 + rng() * 0.4;
+    radiusSolar = 0.008 + rng() * 0.006;
+  }
+
+  // Main-sequence luminosity from the mass–luminosity relation; evolved stars
+  // (giants/supergiants) keep the coarse class anchor (its giant boost).
+  const evolved = /I/.test(base.lumClass); // 'I' supergiant or 'III' giant
+  const luminositySolar = remnant
+    ? base.lumSun
+    : evolved
+      ? base.lumSun
+      : +Math.pow(massSolar, 3.5).toPrecision(3);
+
+  const tempK = Math.round(
+    bv != null
+      ? bvToTempK(bv)
+      : SUN_TEFF_K * Math.pow(Math.max(luminositySolar, 1e-6) / Math.max(radiusSolar * radiusSolar, 1e-6), 0.25),
+  );
+
+  // Age bounded by the main-sequence lifetime (∝ M^-2.5), capped at the age of
+  // the universe — so an O star is necessarily young, an M dwarf can be ancient.
+  const msLifetimeGyr = Math.min(13.5, 10 * Math.pow(massSolar, -2.5));
+  const ageGyr = +(rng() * msLifetimeGyr).toPrecision(3);
+
+  // Activity decays fast over the first Gyrs (magnetic braking), floored so old
+  // stars aren't perfectly inert; ceiling set by convective class.
+  const youth = 0.15 + 0.85 * Math.exp(-ageGyr / 3);
+  const activity = +Math.max(0, Math.min(1, ACTIVITY_CEIL[letter] * youth)).toPrecision(3);
+
+  return {
+    ...base,
+    spectralType: letter,
+    massSolar: +massSolar.toPrecision(3),
+    radiusSolar: +radiusSolar.toPrecision(3),
+    luminositySolar,
+    tempK,
+    ageGyr,
+    activity,
+  };
+}
+
+// ── Planet physical derivation ──
+// Radius span [min,max] in Earth radii + a mass–radius exponent per kind
+// (M⊕ ≈ R⊕^exp, anchored so Earth = 1,1): terrestrials pack rocky density
+// (~R^3.7), volatile Neptunes/giants are puffier (~R^2.1–2.4).
+const PLANET_SIZE: Record<PlanetKind, { r: readonly [number, number]; mExp: number }> = {
+  dwarf:         { r: [0.1, 0.5], mExp: 3.7 },
+  rocky:         { r: [0.5, 1.5], mExp: 3.7 },
+  'super-earth': { r: [1.5, 2.5], mExp: 3.7 },
+  neptune:       { r: [2.5, 6],   mExp: 2.1 },
+  'ice-giant':   { r: [3.5, 7],   mExp: 2.1 },
+  'gas-giant':   { r: [8, 15],    mExp: 2.4 },
+};
+const GIANT_RADIUS_EARTH = 3.5; // ≥ this ⇒ a giant (Neptune ≈ 3.9 R⊕)
+
+/**
+ * Fill a planet's deterministic PHYSICAL record. Uses its own per-body seeded
+ * RNG (seedKey|planet|index) — independent of the system's planet-layout stream.
+ * REAL archive values (`real.rade`/`real.masse`) are authoritative and only the
+ * missing side is derived; a fully-generated planet gets both from `kind`.
+ * `type` follows from mass/radius/insolation (research §3 presets).
+ */
+export function derivePlanetPhysical(
+  kind: PlanetKind, au: number, luminositySolar: number, inHZ: boolean,
+  seedKey: string, index: number,
+  real?: { rade: number | null; masse: number | null },
+): Pick<GenPlanet, 'type' | 'massEarth' | 'radiusEarth' | 'insolation' | 'isGasGiant' | 'hasRings' | 'seed'> {
+  const seed = seedFrom(`${seedKey}|planet|${index}`);
+  const rng = mulberry32(seed);
+  const band = PLANET_SIZE[kind];
+
+  let radiusEarth = real?.rade ?? null;
+  let massEarth = real?.masse ?? null;
+  if (radiusEarth == null && massEarth == null) {
+    radiusEarth = band.r[0] + rng() * (band.r[1] - band.r[0]);
+    massEarth = Math.pow(radiusEarth, band.mExp);
+  } else if (radiusEarth == null) {
+    radiusEarth = Math.pow(massEarth as number, 1 / band.mExp);
+  } else if (massEarth == null) {
+    massEarth = Math.pow(radiusEarth, band.mExp);
+  }
+
+  const insolation = +(luminositySolar / Math.max(au * au, 1e-6)).toPrecision(3);
+  const giant = radiusEarth >= GIANT_RADIUS_EARTH;
+  const type: PlanetVisualType = giant
+    ? (radiusEarth >= 8 ? 'gas' : 'ice')       // Jupiter-class vs Neptune-class
+    : insolation >= 4 ? 'lava'                  // scorched inner rock
+      : inHZ ? 'ocean'                          // temperate + habitable-zone
+        : insolation >= 0.9 ? 'desert'          // warm but dry
+          : 'rocky';                            // cold / outer terrestrial
+  const hasRings = rng() < (giant ? 0.55 : 0.04);
+
+  return {
+    type,
+    massEarth: +(massEarth as number).toPrecision(3),
+    radiusEarth: +radiusEarth.toPrecision(3),
+    insolation,
+    isGasGiant: giant,
+    hasRings,
+    seed,
+  };
+}
+
 /** Parse a catalogued spectral type ("M5Ve", "G2V", "K1III", "DA", "sdM4") into
  *  coarse stellar parameters. Unknown/blank → a sensible K-dwarf default. */
 export function parseSpectral(spect: string): StellarParams {
@@ -105,12 +299,18 @@ export function parseSpectral(spect: string): StellarParams {
   const teffK = Math.round(base.teff * (1 - (subtype / 9) * 0.18));
   // Giants/supergiants are far more luminous than the main-sequence anchor.
   const lumMul = lumClass.includes('I') ? 60 : lumClass === 'III' ? 12 : lumClass === 'D' ? 0.001 : 1;
-  return {
+  // Coarse classification, then the deterministic physical record. The seed is
+  // the spectral string alone here (a stable standalone default); the system
+  // generators re-derive with the per-star identity so same-type stars vary.
+  const coarse: StellarParams = {
     cls: lumClass === 'D' ? 'D' : cls,
     subtype, lumClass, teffK,
     lumSun: +(base.lum * lumMul).toPrecision(3),
     colorHex: base.rgb,
+    // physical fields filled by deriveStellarPhysical below
+    spectralType: 'G', massSolar: 0, radiusSolar: 0, luminositySolar: 0, tempK: 0, ageGyr: 0, activity: 0,
   };
+  return deriveStellarPhysical(coarse, s || spect);
 }
 
 /** Classify a planet by measured radius (Earth radii) — the standard exoplanet
@@ -128,10 +328,14 @@ export function classifyByRadius(rade: number | null, masse: number | null): Pla
 }
 
 /** Deterministically generate a system for a star, keyed by a stable id
- *  (its name/designation) + its spectral type. */
-export function generateSystem(idKey: string, spect: string): GenSystem {
-  const star = parseSpectral(spect);
-  const rng = mulberry32(seedFrom(idKey + '|' + spect));
+ *  (its name/designation) + its spectral type. `opts.bv` (a catalogue B−V
+ *  colour, where known) drives the star's temperature from observed colour. */
+export function generateSystem(idKey: string, spect: string, opts: { bv?: number } = {}): GenSystem {
+  const seedKey = idKey + '|' + spect;
+  // Re-derive the star's physical record against the per-star identity (parseSpectral
+  // only had the spectral string), so two same-type stars get distinct age/mass/activity.
+  const star = deriveStellarPhysical(parseSpectral(spect), seedKey, opts.bv);
+  const rng = mulberry32(seedFrom(seedKey));
   const k = (star.cls === 'D' ? 'D' : star.cls) as Exclude<StellarClass, '?'>;
 
   // Habitable zone centre ≈ √(L/L☉) AU (equilibrium-temperature scaling).
@@ -153,7 +357,11 @@ export function generateSystem(idKey: string, spect: string): GenSystem {
       kind = au > hzAu * 3 ? 'dwarf' : r < 0.5 ? 'rocky' : r < 0.85 ? 'super-earth' : 'neptune';
     }
     const inHZ = au >= hzAu * 0.75 && au <= hzAu * 1.5 && (kind === 'rocky' || kind === 'super-earth');
-    planets.push({ kind, au: +au.toPrecision(3), inHZ });
+    const auR = +au.toPrecision(3);
+    planets.push({
+      kind, au: auR, inHZ,
+      ...derivePlanetPhysical(kind, auR, star.luminositySolar, inHZ, seedKey, i),
+    });
     // Next orbit: a randomised Titius–Bode-like spacing (1.4–2.1×) — WIDENED
     // when the step crosses the snow line: a giant forming at the ice line
     // suppresses accretion inside its orbit, leaving the Mars→Jupiter-style

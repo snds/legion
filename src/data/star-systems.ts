@@ -18,8 +18,8 @@
 
 import { asset } from '../core/assets';
 import {
-  generateSystem, parseSpectral, classifyByRadius, genBelts, snowLineAu,
-  seedFrom, mulberry32, type GenSystem,
+  generateSystem, parseSpectral, deriveStellarPhysical, derivePlanetPhysical,
+  classifyByRadius, genBelts, snowLineAu, seedFrom, mulberry32, type GenSystem,
 } from './system-gen';
 import { realPlanetsFor } from './exoplanets';
 
@@ -75,24 +75,31 @@ export interface ResolvedSystem extends GenSystem {
 export function resolveSystem(star: CatalogStar): ResolvedSystem {
   const real = realPlanetsFor(star.name, star.desig);
   const usable = real?.filter((p) => p.smax != null);
+  const idKey = star.name || star.desig;
   if (usable && usable.length) {
-    const sp = parseSpectral(star.spect);
+    // Star temperature from the REAL catalogue colour (B−V); mass/radius/age/
+    // activity derived deterministically against the star's identity.
+    const sp = deriveStellarPhysical(parseSpectral(star.spect), idKey + '|' + star.spect, star.ci);
     const hzAu = +Math.sqrt(Math.max(sp.lumSun, 1e-4)).toPrecision(3);
     const planets = usable
       .slice()
       .sort((a, b) => (a.smax as number) - (b.smax as number))
-      .map((p) => {
+      .map((p, i) => {
         const kind = classifyByRadius(p.rade, p.masse);
-        const au = p.smax as number;
+        const au = +(p.smax as number).toPrecision(3);
         const inHZ = au >= hzAu * 0.75 && au <= hzAu * 1.5 && (kind === 'rocky' || kind === 'super-earth');
-        return { kind, au: +au.toPrecision(3), inHZ };
+        // REAL archive radius/mass are authoritative; only the missing side is modelled.
+        return {
+          kind, au, inHZ,
+          ...derivePlanetPhysical(kind, au, sp.luminositySolar, inHZ, idKey + '|' + star.spect, i, { rade: p.rade, masse: p.masse }),
+        };
       });
     // Belts placed against the REAL observed orbits, same formation rule as
     // the generator (deterministic per star identity).
     const snowAu = snowLineAu(sp.lumSun);
-    const beltRng = mulberry32(seedFrom((star.name || star.desig) + '|belts'));
+    const beltRng = mulberry32(seedFrom(idKey + '|belts'));
     const belts = genBelts(planets.map((p) => p.au), snowAu, beltRng);
     return { star: sp, planets, hzAu, snowAu, belts, habitableCount: planets.filter((p) => p.inHZ).length, real: true };
   }
-  return { ...generateSystem(star.name || star.desig, star.spect), real: false };
+  return { ...generateSystem(idKey, star.spect, { bv: star.ci }), real: false };
 }
