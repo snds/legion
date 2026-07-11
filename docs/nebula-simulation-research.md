@@ -193,3 +193,36 @@ particle/ribbon + a flat differentially-rotating emissive accretion disk with a 
   derivative; the *technique* is unencumbered. Sean has reached out to the artist directly (2026-07).
 - True volume raymarching is the most expensive path — reserve for a few showpieces; use nested
   shells / splats for the general field.
+
+---
+
+## 7. Additional procedural-generation sources (galaxy/nebula/particle techniques)
+
+Assessed against the shell + dust-map base. None is a drop-in upgrade, but three contribute reusable
+pieces; two are thin demos to skip.
+
+- **[Solaris-Explorer](https://github.com/Jupiter0818/Solaris-Explorer)** (Three.js, MIT, single-file
+  demo — math is production-sound). The standout: a **logarithmic spiral-arm particle placement**
+  recipe — `r = pow(rand(),1.5)·rMax` (core-density bias), `θ = base + (i%arms)·(2π/arms) +
+  (r/rMax)·W·π` (W≈3, arms 2–4, logarithmic winding), `y = (rand()−0.5)·r·0.2·(1−r/rMax·0.6)` (disk
+  thins outward), color lerp core→arm by `r/rMax`. Slots straight into the galactic-frame catalog
+  particle layer to give it real arm structure. Also: Keplerian accretion (`ω ∝ 1/r`) and Fresnel rim
+  shaders.
+- **[three-nebula](https://three-nebula.org)** ([repo](https://github.com/creativelifeform/three-nebula),
+  MIT, ~1.2k★, the only production-grade **library** — but last release targets three@0.122, so
+  **version/WebGPU compat needs checking; may adopt the emitter/behaviour *pattern* over the
+  dependency**). The right tool for **dynamic emissive effects shells can't do**: engine jets (line-
+  zone emitter + axial Force), CME/flares (radial Force + Life + Color/Alpha decay), accretion streams
+  (Attraction behaviour), SN ejecta, comet tails, sparse parallaxing nebula wisps. Gate counts by LOD.
+- **[ecency GLSL galaxies/nebulae article](https://ecency.com/@hey2d/creating-procedural-galaxies-and-nebulas-in-glsl-em9)**
+  — a **domain-warp + power-curve emission** recipe: `uv += vec2(fbm(p·3), fbm(p·3+5))·0.2` before
+  sampling density (kills banding, yields filaments), then escalating `pow(density,{2,5})` for layered
+  core glow. Maps directly onto the shell fragment shader (sampling the dust map instead of 2D fbm).
+- **Skip:** [Celestial-Object-Generator](https://github.com/Kritgoel/Celestial-Object-Generator)
+  (offline 2D Python raster) and [nebula-weaver](https://github.com/dropmoltbot/nebula-weaver) (thin
+  R3F demo; only the layered-sine motion + `mat2` vortex swirl are worth remembering).
+
+**Approach fit:** shells + dust map = the *base*; instanced particles = stars / spiral arms; screen-
+space fBm + domain warp = surface treatment *on* the shells; particle engine = *dynamic* effects
+(jets/CMEs/ejecta). Notably none of the five raymarch — validating shells as the pragmatic middle
+ground between raymarch cost and flat-billboard cheapness.
