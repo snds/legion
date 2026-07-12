@@ -81,6 +81,18 @@ float fbm(vec3 p){
   }
   return sum * 0.5 + 0.5;
 }
+
+// 3-octave fBm — the cheap variant for hot paths (dense granulation, the corona
+// raymarch) where five octaves at high base frequency is wasted cost + aliasing.
+float fbm3(vec3 p){
+  float sum = 0.0, amp = 0.5, freq = 1.0;
+  for (int i = 0; i < 3; i++){
+    sum += amp * snoise(p * freq);
+    freq *= 2.0;
+    amp *= 0.5;
+  }
+  return sum * 0.5 + 0.5;
+}
 `;
 
 export const starVertexShader = /* glsl */ `
@@ -143,24 +155,31 @@ void main() {
   vec3 so = vec3(uSeed * 0.137, uSeed * 0.271, uSeed * 0.523);
   vec3 sp = rotateDiff(vDir, uTime);
 
-  // ── Domain-warped plasma flow ──
-  // Base flow rate is brisk enough to read as convective churn at 1× and is
-  // amplified further by the time-warp-coupled uTime (see procedural-star.ts).
-  float flow = uTime * (0.12 + 0.22 * uActivity);
+  // ── Convective plasma flow ──
+  // A SMALL, high-frequency domain warp roils the granulation (turbulent shear)
+  // without the large-scale swirl that read as "cloud layers". Time enters the
+  // noise VOLUME as a z-offset so cells boil IN PLACE — appear, merge, fade — on
+  // top of the rotational advection carried by sp. Rate is time-warp-coupled via
+  // uTime (see procedural-star.ts).
+  float flow = uTime * (0.10 + 0.14 * uActivity);
   vec3 warp = vec3(
-    fbm(sp * 2.0 + so + flow),
-    fbm(sp * 2.0 + so + 5.2 - flow),
-    fbm(sp * 2.0 + so + 9.1 + flow * 0.5)
-  ) - 0.5;
-  vec3 q = sp + 0.35 * warp;
+    snoise(sp * 4.0 + vec3(0.0, 0.0, flow)),
+    snoise(sp * 4.0 + vec3(5.2, 0.0, flow)),
+    snoise(sp * 4.0 + vec3(9.1, 0.0, flow))
+  );
+  vec3 q = sp + 0.045 * warp;
 
-  // ── Granulation + sunspots + faculae → a "temperature field" ∈~[0,1] ──
-  // (bpodgursky reference technique): convective granule fBm as the base, dark
-  // low-frequency SUNSPOTS subtracted, bright FACULAE added. That single field
-  // then drives colour AND brightness across a WIDE range — troughs read cool
-  // and red, peaks white-hot — so the disc is mottled plasma, not a flat ball.
-  float granule = mix(fbm(q * 4.0 + so + flow * 0.6),
-                      fbm(q * 9.0 + so + flow * 1.1), 0.4);   // ~[0,1], mean ~0.5
+  // ── High-density granulation → a "temperature field" ∈~[0,1] ──
+  // Fine, dense convection cells tiled far higher than before (so it reads as
+  // roiling granules, not smooth clouds): a primary granule octave + a fine
+  // mottle octave, both boiling through the noise volume. Dark SUNSPOTS are
+  // subtracted and bright FACULAE added below. The field drives colour AND
+  // brightness; the colour RANGE is set by the star's temperature (kelvinToRGB),
+  // so type still governs hue — this only governs the mottling within it.
+  float boil = flow * 1.4;
+  float g1 = fbm3(q * 11.0 + so + vec3(0.0, 0.0, boil));        // primary granules
+  float g2 = fbm3(q * 24.0 + so + vec3(0.0, 0.0, boil * 1.7));  // fine mottle
+  float granule = g1 * 0.62 + g2 * 0.38;                        // ~[0,1], mean ~0.5
 
   float spotN = fbm(sp * 1.3 + so + 17.0);
   float sunspot = uSpotCoverage > 0.001
@@ -269,7 +288,7 @@ vec2 raySphere(vec3 ro, vec3 rd, float rad) {
   return vec2(-b - h, -b + h);
 }
 
-const int STEPS = 18;
+const int STEPS = 12;
 
 void main() {
   #include <logdepthbuf_fragment>
@@ -303,7 +322,7 @@ void main() {
     // features read as plumes/streamers reaching outward. Slow churn + a gentle
     // outward advection give the living, breathing look.
     vec3 qd = dir * 2.4 + so + vec3(0.0, 0.0, flow) - dir * flow * 0.6;
-    float n = fbm(qd * 1.7);
+    float n = fbm3(qd * 1.7);
     float streamer = pow(max(n, 0.0), 2.3);
     // Coronal density: brightest hugging the limb, decaying outward. The decay
     // rate is set by uReach — steep (tight rim) in-system, gentle (plumes reach
