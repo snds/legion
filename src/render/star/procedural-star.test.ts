@@ -27,7 +27,7 @@ describe('createProceduralStar — headless construction', () => {
     const star = createProceduralStar({ record: M_DWARF, bodyRadiusWU: 0.6 });
     const u = surfaceUniforms(star.group);
     for (const key of [
-      'uTempK', 'uRadius', 'uLuminosity', 'uGranulationAmp', 'uSpotCoverage',
+      'uTempK', 'uRadius', 'uLuminosity', 'uGranulationAmp', 'uSpotCount',
       'uActivity', 'uRotation', 'uDifferential', 'uTime',
     ]) {
       expect(u[key], key).toBeDefined();
@@ -38,19 +38,23 @@ describe('createProceduralStar — headless construction', () => {
     star.dispose();
   });
 
-  it('O/B stars build with ≈0 granulation + no prominences; M dwarfs get both', () => {
+  it('O/B stars build with ≈0 granulation + no active regions; active M dwarfs get both', () => {
     const ob = createProceduralStar({ record: OB_STAR, bodyRadiusWU: 2 });
     const uob = surfaceUniforms(ob.group);
     expect(uob.uGranulationAmp.value as number).toBeLessThan(0.05);
 
-    const proms = (g: { getObjectByName: (n: string) => unknown }): number => {
-      const node = g.getObjectByName('star-prominences') as { children: unknown[] } | null;
+    // Active-region field children (coronal loops + CME) — present only when the
+    // star has magnetic activity to erupt.
+    const regions = (g: { getObjectByName: (n: string) => unknown }): number => {
+      const node = g.getObjectByName('star-active-regions') as { children: unknown[] } | null;
       return node ? node.children.length : 0;
     };
-    expect(proms(ob.group)).toBe(0);              // O/B: no flares
+    expect(regions(ob.group)).toBe(0);              // O/B: quiet, no loops/flares
+    expect((surfaceUniforms(ob.group).uSpotCount.value as number)).toBe(0);
 
     const m = createProceduralStar({ record: M_DWARF, bodyRadiusWU: 0.6 });
-    expect(proms(m.group)).toBeGreaterThan(0);    // active M: prominences present
+    expect(regions(m.group)).toBeGreaterThan(0);    // active M: loops + CME present
+    expect((surfaceUniforms(m.group).uSpotCount.value as number)).toBeGreaterThan(0);
     ob.dispose();
     m.dispose();
   });

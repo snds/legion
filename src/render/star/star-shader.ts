@@ -131,6 +131,13 @@ uniform float uFlareRate;      // ∈[0,1] flare/prominence gate (S2)
 uniform float uDetailFade;     // 1 near → 0 far (LOD to flat disc)
 uniform float uSeed;
 
+// Magnetic active-region footpoints (active-regions.ts): dark umbra + bright
+// plage anchors. uSpotDir are object-space unit directions; keep the fixed 10
+// in lock-step with MAX_FOOTPOINTS.
+uniform int uSpotCount;
+uniform vec3 uSpotDir[10];
+uniform float uSpotStr[10];
+
 varying vec3 vDir;
 varying vec3 vNormalV;
 varying vec3 vViewDirV;
@@ -181,16 +188,27 @@ void main() {
   float g2 = fbm3(q * 24.0 + so + vec3(0.0, 0.0, boil * 1.7));  // fine mottle
   float granule = g1 * 0.62 + g2 * 0.38;                        // ~[0,1], mean ~0.5
 
-  float spotN = fbm(sp * 1.3 + so + 17.0);
-  float sunspot = uSpotCoverage > 0.001
-    ? smoothstep(1.0 - uSpotCoverage - 0.05, 1.0 - 0.30 * uSpotCoverage, spotN)
-    : 0.0;
-  float faculae = smoothstep(0.60, 0.92, fbm(sp * 0.9 + so + 4.0 + uTime * 0.05));
+  // Magnetic sunspots + plage from the active-region footpoints: each footpoint
+  // is a dark UMBRA core ringed by bright faculae/PLAGE. The coronal loops anchor
+  // at the SAME points, so the spots and the arcs are one magnetic structure. A
+  // little noise wobble keeps the spots from being perfect circles.
+  float umbra = 0.0;
+  float plage = 0.0;
+  float wob = 0.030 * (fbm(sp * 6.0 + so) - 0.5);   // irregular spot boundary
+  for (int i = 0; i < 10; i++) {
+    if (i >= uSpotCount) break;
+    float ang = acos(clamp(dot(sp, uSpotDir[i]), -1.0, 1.0)) + wob;
+    float s = uSpotStr[i];
+    // Dark umbra core + surrounding faculae/plage ring (bright).
+    umbra = max(umbra, s * smoothstep(0.135, 0.050, ang));
+    plage = max(plage, s * (smoothstep(0.34, 0.14, ang) - smoothstep(0.14, 0.075, ang)));
+  }
+  plage *= 0.55 + 0.85 * fbm(sp * 6.0 + so);      // plage is granular, not a flat wash
 
   float field = 0.5
     + (granule - 0.5) * (1.45 * uGranulationAmp)  // convective contrast (type-gated)
-    + faculae * 0.32                              // bright plage
-    - sunspot * 1.05;                             // dark spots (umbra)
+    + plage * 0.50                                // bright faculae ringing the spots
+    - umbra * 1.55;                               // dark umbra
   // Collapse to a flat disc as the star shrinks to a point (clean LOD, no shimmer).
   field = 0.5 + (field - 0.5) * uDetailFade;
   field = clamp(field, 0.0, 1.25);

@@ -16,19 +16,19 @@
 // ═══════════════════════════════════════════════════════════════════
 
 import {
-  AdditiveBlending, BackSide, Color, DoubleSide, Group, Mesh, PlaneGeometry,
+  AdditiveBlending, BackSide, Color, Group, Mesh,
   ShaderMaterial, SphereGeometry, Vector3, type Camera,
 } from 'three';
 import { SYSTEM_TIER_SCALE } from '../../core/metrics';
-import { mulberry32 } from '../../data/system-gen';
 import { kelvinToRGB } from './kelvin';
 import {
   differentialRate, emissiveGain, flareRate, granulationAmp, rotationRate,
-  spotCoverage, type StarRecord,
+  type StarRecord,
 } from './star-physics';
 import {
   coronaFragmentShader, coronaVertexShader, starFragmentShader, starVertexShader,
 } from './star-shader';
+import { createActiveRegions, MAX_FOOTPOINTS, type ActiveRegionField } from './active-regions';
 
 export interface ProceduralStar {
   /** Scene-graph node to parent under the star group (rides local scale). */
@@ -58,6 +58,11 @@ export function createProceduralStar(opts: { record: StarRecord; bodyRadiusWU: n
   const group = new Group();
   group.name = 'procedural-star';
 
+  // Magnetic footpoints fed to the surface shader (dark umbra + bright plage),
+  // populated from the active-region field below and refreshed on setRecord.
+  const spotDirs: Vector3[] = Array.from({ length: MAX_FOOTPOINTS }, () => new Vector3());
+  const spotStr: number[] = new Array(MAX_FOOTPOINTS).fill(0);
+
   // ── Surface ──
   const surfaceMat = new ShaderMaterial({
     vertexShader: starVertexShader,
@@ -70,7 +75,6 @@ export function createProceduralStar(opts: { record: StarRecord; bodyRadiusWU: n
       uRadius: { value: record.radiusSolar },
       uLuminosity: { value: record.luminositySolar },
       uGranulationAmp: { value: granulationAmp(record) },
-      uSpotCoverage: { value: spotCoverage(record) },
       uActivity: { value: record.activity },
       uRotation: { value: rotationRate(record) },
       uDifferential: { value: differentialRate(record) },
@@ -78,6 +82,9 @@ export function createProceduralStar(opts: { record: StarRecord; bodyRadiusWU: n
       uFlareRate: { value: flareRate(record) },
       uDetailFade: { value: 1 },
       uSeed: { value: seedUnit(record.seed) },
+      uSpotCount: { value: 0 },
+      uSpotDir: { value: spotDirs },
+      uSpotStr: { value: spotStr },
     },
   });
   const surfaceMesh = new Mesh(new SphereGeometry(bodyRadiusWU, 96, 96), surfaceMat);
@@ -115,9 +122,24 @@ export function createProceduralStar(opts: { record: StarRecord; bodyRadiusWU: n
   group.add(coronaMesh);
   let coronaBase = coronaIntensity(record); // record-driven brightness; enveloped by distance per frame
 
-  // ── S2 prominences: billboarded limb eruptions ──
-  const prominences = createProminences(record, bodyRadiusWU);
-  group.add(prominences.group);
+  // ── Magnetic active regions: coronal loops + flares + CME, anchored to the
+  // same footpoints that darken the surface into sunspots (active-regions.ts). ──
+  let field: ActiveRegionField = createActiveRegions(record, bodyRadiusWU);
+  group.add(field.group);
+
+  function feedSpots(): void {
+    for (let i = 0; i < MAX_FOOTPOINTS; i++) {
+      if (i < field.footCount) {
+        spotDirs[i].set(field.footDir[i * 3], field.footDir[i * 3 + 1], field.footDir[i * 3 + 2]);
+        spotStr[i] = field.footStr[i];
+      } else {
+        spotDirs[i].set(0, 0, 0);
+        spotStr[i] = 0;
+      }
+    }
+    surfaceMat.uniforms.uSpotCount.value = field.footCount;
+  }
+  feedSpots();
 
   function setRecord(next: StarRecord): void {
     record = next;
@@ -126,7 +148,6 @@ export function createProceduralStar(opts: { record: StarRecord; bodyRadiusWU: n
     u.uRadius.value = record.radiusSolar;
     u.uLuminosity.value = record.luminositySolar;
     u.uGranulationAmp.value = granulationAmp(record);
-    u.uSpotCoverage.value = spotCoverage(record);
     u.uActivity.value = record.activity;
     u.uRotation.value = rotationRate(record);
     u.uDifferential.value = differentialRate(record);
@@ -138,7 +159,12 @@ export function createProceduralStar(opts: { record: StarRecord; bodyRadiusWU: n
     coronaBase = coronaIntensity(record);
     cu.uActivity.value = record.activity;
     cu.uSeed.value = seedUnit(record.seed);
-    prominences.setRecord(record);
+    // Active regions are seeded from the record → rebuild on a record change.
+    group.remove(field.group);
+    field.dispose();
+    field = createActiveRegions(record, bodyRadiusWU);
+    group.add(field.group);
+    feedSpots();
   }
 
   let clock = 0;
@@ -176,7 +202,7 @@ export function createProceduralStar(opts: { record: StarRecord; bodyRadiusWU: n
     coronaMesh.worldToLocal(_camObj);
     (coronaMat.uniforms.uCamObjPos.value as Vector3).copy(_camObj);
 
-    prominences.update(clock, _camPos, fade);
+    field.update(clock, camera, fade);
   }
 
   function dispose(): void {
@@ -184,7 +210,7 @@ export function createProceduralStar(opts: { record: StarRecord; bodyRadiusWU: n
     surfaceMat.dispose();
     coronaMesh.geometry.dispose();
     coronaMat.dispose();
-    prominences.dispose();
+    field.dispose();
   }
 
   return { group, update, setRecord, dispose };
@@ -209,128 +235,4 @@ function seedUnit(seed: number): number {
 function smoothstep(edge0: number, edge1: number, x: number): number {
   const t = Math.min(1, Math.max(0, (x - edge0) / (edge1 - edge0)));
   return t * t * (3 - 2 * t);
-}
-
-// ── Billboarded limb prominences (S2) ────────────────────────────
-// A deterministic set of camera-facing plasma tongues anchored to seeded
-// surface points. Count and eruption strength scale with flareRate (frequent
-// on young M dwarfs, none on O/B or quiet dwarfs). Each pulses on its own
-// seeded schedule; billboarding + additive blend makes those near the limb
-// read as arcs erupting off the edge. Radius rides the star body, so they
-// shrink on pull-back with everything else.
-
-interface Prominences {
-  group: Group;
-  setRecord(record: StarRecord): void;
-  update(time: number, camWorldPos: Vector3, detailFade: number): void;
-  dispose(): void;
-}
-
-const MAX_PROMINENCES = 10;
-const _anchor = new Vector3();
-
-const prominenceFrag = /* glsl */ `
-uniform vec3 uColor;
-uniform float uOpacity;
-varying vec2 vUv;
-void main() {
-  // A soft upward tongue: bright, narrow base flaring out and fading with height.
-  vec2 p = vUv - vec2(0.5, 0.0);
-  float height = clamp(vUv.y, 0.0, 1.0);
-  float width = mix(0.16, 0.42, height);
-  float across = 1.0 - smoothstep(0.0, width, abs(p.x));
-  float along = (1.0 - height) * smoothstep(0.0, 0.15, height); // fade at top + base
-  float a = across * along * uOpacity;
-  gl_FragColor = vec4(uColor * (0.6 + across), a);
-}
-`;
-const prominenceVert = /* glsl */ `
-varying vec2 vUv;
-void main() {
-  vUv = uv;
-  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-}
-`;
-
-function createProminences(record0: StarRecord, bodyRadiusWU: number): Prominences {
-  const group = new Group();
-  group.name = 'star-prominences';
-
-  const mat = new ShaderMaterial({
-    vertexShader: prominenceVert,
-    fragmentShader: prominenceFrag,
-    transparent: true,
-    blending: AdditiveBlending,
-    depthWrite: false,
-    depthTest: true,
-    side: DoubleSide,
-    uniforms: {
-      uColor: { value: new Color(1.5, 0.55, 0.2) },
-      uOpacity: { value: 0 },
-    },
-  });
-  // Shared geometry (unit quad, pivot at base y=0 → grows outward).
-  const geo = new PlaneGeometry(1, 1);
-  geo.translate(0, 0.5, 0);
-
-  interface Tongue { mesh: Mesh; dir: Vector3; phase: number; rate: number; size: number; }
-  const tongues: Tongue[] = [];
-
-  function rebuild(record: StarRecord): void {
-    for (const t of tongues) group.remove(t.mesh);
-    tongues.length = 0;
-    const rate = flareRate(record);
-    const count = Math.round(rate * MAX_PROMINENCES);
-    (mat.uniforms.uColor.value as Color).setRGB(...kelvinToRGB(Math.min(record.tempK, 6000)));
-    const rng = mulberry32(record.seed ^ 0x9e3779b9);
-    for (let i = 0; i < count; i++) {
-      // Uniform point on the sphere.
-      const u = rng() * 2 - 1;
-      const theta = rng() * Math.PI * 2;
-      const r = Math.sqrt(Math.max(0, 1 - u * u));
-      const dir = new Vector3(r * Math.cos(theta), u, r * Math.sin(theta));
-      const mesh = new Mesh(geo, mat);
-      mesh.frustumCulled = false;
-      mesh.renderOrder = 2;
-      tongues.push({
-        mesh, dir,
-        phase: rng() * Math.PI * 2,
-        rate: 0.15 + rng() * 0.4,
-        size: bodyRadiusWU * (0.5 + rng() * 0.9),
-      });
-      group.add(mesh);
-    }
-  }
-
-  rebuild(record0);
-
-  function update(time: number, camWorldPos: Vector3, detailFade: number): void {
-    for (const t of tongues) {
-      // Seeded eruption schedule ∈[0,1]: mostly quiescent, occasional bursts.
-      const cycle = Math.sin(time * t.rate + t.phase) * 0.5 + 0.5;
-      const burst = Math.pow(cycle, 4); // sharp, infrequent peaks
-      const scale = t.size * burst * detailFade;
-      if (scale < 1e-5) { t.mesh.visible = false; continue; }
-      t.mesh.visible = true;
-      // Anchor just below the surface so the base is hidden behind the limb.
-      _anchor.copy(t.dir).multiplyScalar(bodyRadiusWU * 0.96);
-      t.mesh.position.copy(_anchor);
-      // Billboard: face the camera, base pointing radially outward.
-      t.mesh.lookAt(camWorldPos);
-      t.mesh.scale.set(scale, scale * 1.6, scale);
-    }
-    // Global opacity rides the current flare strength.
-    mat.uniforms.uOpacity.value = 0.9 * detailFade;
-  }
-
-  return {
-    group,
-    setRecord: rebuild,
-    update,
-    dispose() {
-      geo.dispose();
-      mat.dispose();
-      tongues.length = 0;
-    },
-  };
 }
