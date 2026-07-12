@@ -763,7 +763,7 @@ async function boot(): Promise<void> {
     // active star it REPLACES the legacy sun mesh (hides the sun-system
     // subgroup); the legacy updater runs only as a fallback when no procedural
     // star is installed (e.g. no local system).
-    if (!updateSystemStar(getActiveSystemHandle()?.groups, frameTime, camera, Game.data.camDist)) {
+    if (!updateSystemStar(getActiveSystemHandle()?.groups, frameTime, camera, Game.data.camDist, Game.getTimeSpeed().tc)) {
       updateSunSystem(renderCtx.renderer, frameTime);
     }
 

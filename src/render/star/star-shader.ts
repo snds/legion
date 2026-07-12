@@ -144,7 +144,9 @@ void main() {
   vec3 sp = rotateDiff(vDir, uTime);
 
   // ── Domain-warped plasma flow ──
-  float flow = uTime * (0.05 + 0.10 * uActivity);
+  // Base flow rate is brisk enough to read as convective churn at 1× and is
+  // amplified further by the time-warp-coupled uTime (see procedural-star.ts).
+  float flow = uTime * (0.12 + 0.22 * uActivity);
   vec3 warp = vec3(
     fbm(sp * 2.0 + so + flow),
     fbm(sp * 2.0 + so + 5.2 - flow),
@@ -152,21 +154,30 @@ void main() {
   ) - 0.5;
   vec3 q = sp + 0.35 * warp;
 
-  // ── Granulation (type-gated) ──
-  float gran = (fbm(q * 4.0 + so + flow * 0.6) - 0.5) * uGranulationAmp;
+  // ── Granulation + sunspots + faculae → a "temperature field" ∈~[0,1] ──
+  // (bpodgursky reference technique): convective granule fBm as the base, dark
+  // low-frequency SUNSPOTS subtracted, bright FACULAE added. That single field
+  // then drives colour AND brightness across a WIDE range — troughs read cool
+  // and red, peaks white-hot — so the disc is mottled plasma, not a flat ball.
+  float granule = mix(fbm(q * 4.0 + so + flow * 0.6),
+                      fbm(q * 9.0 + so + flow * 1.1), 0.4);   // ~[0,1], mean ~0.5
 
-  // ── Broad temperature-variation layer (slow, large-scale) ──
-  float broad = fbm(sp * 0.8 + so + uTime * 0.02) - 0.5;
-
-  // ── Starspots (low-freq clamped noise, activity-scaled coverage) ──
   float spotN = fbm(sp * 1.3 + so + 17.0);
-  float spot = uSpotCoverage > 0.001
-    ? smoothstep(1.0 - uSpotCoverage, 1.0 - 0.35 * uSpotCoverage, spotN)
+  float sunspot = uSpotCoverage > 0.001
+    ? smoothstep(1.0 - uSpotCoverage - 0.05, 1.0 - 0.30 * uSpotCoverage, spotN)
     : 0.0;
+  float faculae = smoothstep(0.60, 0.92, fbm(sp * 0.9 + so + 4.0 + uTime * 0.05));
 
-  // ── Per-fragment local temperature → Planckian colour ──
-  float tempMod = 1.0 + (0.12 * gran + 0.04 * broad - 0.34 * spot) * uDetailFade;
-  float localTemp = uTempK * tempMod;
+  float field = 0.5
+    + (granule - 0.5) * (1.45 * uGranulationAmp)  // convective contrast (type-gated)
+    + faculae * 0.32                              // bright plage
+    - sunspot * 1.05;                             // dark spots (umbra)
+  // Collapse to a flat disc as the star shrinks to a point (clean LOD, no shimmer).
+  field = 0.5 + (field - 0.5) * uDetailFade;
+  field = clamp(field, 0.0, 1.25);
+
+  // ── field → local temperature → Planckian colour (wide sweep, mean ≈ Teff) ──
+  float localTemp = uTempK * mix(0.66, 1.34, field);
   vec3 col = kelvinToRGB(localTemp);
 
   // ── Limb darkening (Fresnel): dimmer + redder toward the rim ──
@@ -177,11 +188,10 @@ void main() {
   col = mix(col * vec3(1.18, 0.72, 0.46), col, limb); // reddened rim
   col *= 1.0 + 0.05 * log(max(uLuminosity, 1e-3) + 1.0) * limb; // faint core lift
 
-  // Granulation + spots also modulate BRIGHTNESS (not just colour), so the
-  // convective mottling and dark starspots read through the HDR/bloom instead
-  // of washing out to a flat white disc. Faded out with distance (clean LOD).
-  float surfBright = 1.0 + (0.30 * gran - 0.60 * spot) * uDetailFade;
-  col *= max(surfBright, 0.15);
+  // Brightness tracks the SAME field so granules glow and sunspots go genuinely
+  // dark (they read through the HDR/bloom instead of washing to a flat disc).
+  float surfBright = mix(0.35, 1.55, field);
+  col *= max(surfBright, 0.08);
 
   // ── S2: activity-gated flares / prominences at the limb ──
   if (uFlareRate > 0.001) {
@@ -198,42 +208,113 @@ void main() {
   // ── HDR emissive → shared bloom (∝ luminosity) ──
   col *= uEmissiveGain;
 
+  // Close-range exposure trim: at full detail the ×gain disc otherwise clips to
+  // a flat white ball (bloom + AgX desaturate the highlight), burying both the
+  // granulation and the star's own colour. Pull the disc well down when it fills
+  // the frame so the amber photosphere + dark sunspots read; restore full
+  // magnitude as it shrinks so the distant point-of-light brightness / bloom
+  // hand-off stays calibrated (uDetailFade → 0 far away).
+  col *= mix(1.0, 0.34, uDetailFade);
+
   gl_FragColor = vec4(col, 1.0);
 }
 `;
 
-// ── Additive glow shell — scene-scaled corona (shrinks with the star) ────────
-// A soft rim halo on a slightly larger back-side sphere. Radius rides the star
-// body (never screen-constant), so on pull-back it shrinks WITH the disc — no
-// fixed-size "catalogue-ball" pile-up — and the shared bloom carries the rest.
+// ── Volumetric corona — raymarched streamers on a bounding shell ─────────────
+// Replaces the old flat back-side glow (which filled its whole disc with a grey
+// wash and occluded the starfield). A bounding sphere at uRb·body-radii is
+// marched in OBJECT space: at each sample the density is angular-noise streamers
+// (coherent along the radial → plumes point outward, like real coronal
+// streamers) times a radial falloff that's dense near the photosphere and
+// decays to nothing at the shell. Additive + wispy, so there is no hard
+// silhouette to collide with other bodies, and it rides the star body so it
+// LODs away on pull-back. Occluded by the photosphere: the march stops at the
+// near surface intersection, so the far half never bleeds through the star.
 
-export const starGlowVertexShader = /* glsl */ `
+export const coronaVertexShader = /* glsl */ `
 #include <common>
 #include <logdepthbuf_pars_vertex>
-varying vec3 vNormalV;
-varying vec3 vViewDirV;
+varying vec3 vObjPos;
 void main() {
+  vObjPos = position; // object space (body-radius units)
   vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-  vNormalV = normalize(normalMatrix * normalize(position));
-  vViewDirV = normalize(-mvPosition.xyz);
   gl_Position = projectionMatrix * mvPosition;
   #include <logdepthbuf_vertex>
 }
 `;
 
-export const starGlowFragmentShader = /* glsl */ `
+export const coronaFragmentShader = /* glsl */ `
 #include <common>
 #include <logdepthbuf_pars_fragment>
-uniform vec3 uColor;
-uniform float uIntensity;
-uniform float uDetailFade;
-varying vec3 vNormalV;
-varying vec3 vViewDirV;
+uniform vec3 uColor;      // temperature tint
+uniform vec3 uCamObjPos;  // camera position in this mesh's object space
+uniform float uIntensity; // distance-enveloped brightness (0 → skip)
+uniform float uReach;     // 0 = hug the limb (in-system) … 1 = flared plumes (Kuiper)
+uniform float uTime;
+uniform float uActivity;
+uniform float uSeed;
+uniform float uRs;        // photosphere radius (object units)
+uniform float uRb;        // bounding-shell radius (object units)
+varying vec3 vObjPos;
+
+${GLSL_SIMPLEX}
+
+// Ray/sphere: t at (near,far). Miss → (1e9,-1e9) so far<near fails every test.
+vec2 raySphere(vec3 ro, vec3 rd, float rad) {
+  float b = dot(ro, rd);
+  float c = dot(ro, ro) - rad * rad;
+  float h = b * b - c;
+  if (h < 0.0) return vec2(1e9, -1e9);
+  h = sqrt(h);
+  return vec2(-b - h, -b + h);
+}
+
+const int STEPS = 18;
+
 void main() {
   #include <logdepthbuf_fragment>
-  float ndv = clamp(dot(normalize(vNormalV), normalize(vViewDirV)), 0.0, 1.0);
-  // Back-side shell: brightest at the silhouette (grazing), fading outward.
-  float rim = pow(1.0 - ndv, 2.4);
-  gl_FragColor = vec4(uColor * rim * uIntensity, rim);
+  if (uIntensity < 0.001) discard;   // enveloped away (deep in-system dim, or past the heliopause)
+
+  vec3 ro = uCamObjPos;
+  vec3 rd = normalize(vObjPos - ro);
+
+  vec2 tb = raySphere(ro, rd, uRb);      // enter/exit the corona shell
+  float t0 = max(tb.x, 0.0);
+  float t1 = tb.y;
+  if (t1 <= t0) discard;
+
+  // Occlude behind the photosphere: clip the march to the near surface hit.
+  vec2 ts = raySphere(ro, rd, uRs);
+  if (ts.y > ts.x && ts.x > t0) t1 = min(t1, ts.x);
+  if (t1 <= t0) discard;
+
+  float stepLen = (t1 - t0) / float(STEPS);
+  float flow = uTime * (0.05 + 0.05 * uActivity);
+  vec3 so = vec3(uSeed * 0.13, uSeed * 0.29, uSeed * 0.51);
+
+  float emission = 0.0;
+  for (int i = 0; i < STEPS; i++) {
+    float t = t0 + (float(i) + 0.5) * stepLen;
+    vec3 p = ro + rd * t;
+    float r = length(p);
+    float radial = clamp((r - uRs) / max(uRb - uRs, 1e-4), 0.0, 1.0);
+    vec3 dir = p / max(r, 1e-4);
+    // Angular-dominated domain → noise is coherent along each radial line, so
+    // features read as plumes/streamers reaching outward. Slow churn + a gentle
+    // outward advection give the living, breathing look.
+    vec3 qd = dir * 2.4 + so + vec3(0.0, 0.0, flow) - dir * flow * 0.6;
+    float n = fbm(qd * 1.7);
+    float streamer = pow(max(n, 0.0), 2.3);
+    // Coronal density: brightest hugging the limb, decaying outward. The decay
+    // rate is set by uReach — steep (tight rim) in-system, gentle (plumes reach
+    // outward) at the Kuiper flare. A small dip at the surface keeps it a halo.
+    float decay = mix(9.0, 2.6, uReach);
+    float dens = streamer * exp(-radial * decay) * smoothstep(0.0, 0.05, radial);
+    emission += dens;
+  }
+  emission *= stepLen / max(uRb - uRs, 1e-4);
+  emission *= uIntensity;
+
+  gl_FragColor = vec4(uColor * emission, 1.0); // additive blend consumes rgb
 }
 `;

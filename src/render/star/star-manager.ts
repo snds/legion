@@ -80,6 +80,7 @@ export function updateSystemStar(
   dt: number,
   camera: Camera,
   camDistWU: number,
+  timeScale = 1,
 ): boolean {
   const starGroup = findStarGroup(groups);
 
@@ -99,7 +100,7 @@ export function updateSystemStar(
     installed = { starGroup, star, legacySun };
   }
 
-  installed.star.update(dt, camera, camDistWU);
+  installed.star.update(dt, camera, camDistWU, timeScale);
   return true;
 }
 

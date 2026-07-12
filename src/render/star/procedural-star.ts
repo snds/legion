@@ -27,14 +27,15 @@ import {
   spotCoverage, type StarRecord,
 } from './star-physics';
 import {
-  starFragmentShader, starGlowFragmentShader, starGlowVertexShader, starVertexShader,
+  coronaFragmentShader, coronaVertexShader, starFragmentShader, starVertexShader,
 } from './star-shader';
 
 export interface ProceduralStar {
   /** Scene-graph node to parent under the star group (rides local scale). */
   group: Group;
-  /** Per-frame: advance animation, refresh LOD/billboards. */
-  update(dt: number, camera: Camera, camDistWU: number): void;
+  /** Per-frame: advance animation, refresh LOD/billboards. `timeScale` is the
+   *  sim time-compression (tc) so the surface churn accelerates with time-warp. */
+  update(dt: number, camera: Camera, camDistWU: number, timeScale?: number): void;
   /** Re-point at a new record (system swap / dev override) without rebuilding. */
   setRecord(record: StarRecord): void;
   /** Free GPU resources. */
@@ -48,6 +49,7 @@ const LOD_LO = 0.0006;
 const LOD_HI = 0.004;
 
 const _camPos = new Vector3();
+const _camObj = new Vector3();
 
 export function createProceduralStar(opts: { record: StarRecord; bodyRadiusWU: number }): ProceduralStar {
   const { bodyRadiusWU } = opts;
@@ -82,10 +84,14 @@ export function createProceduralStar(opts: { record: StarRecord; bodyRadiusWU: n
   surfaceMesh.renderOrder = 0;
   group.add(surfaceMesh);
 
-  // ── Additive glow shell (scene-scaled — shrinks with the star) ──
-  const glowMat = new ShaderMaterial({
-    vertexShader: starGlowVertexShader,
-    fragmentShader: starGlowFragmentShader,
+  // ── Volumetric corona (raymarched streamers on a bounding shell) ──
+  // Rendered on the BACK faces so the fragment always exists across the shell's
+  // whole disc (even with the camera close); the shader marches object-space
+  // from the camera into the shell. Additive, no depth write. Radius rides the
+  // star body so it LODs away with everything else.
+  const coronaMat = new ShaderMaterial({
+    vertexShader: coronaVertexShader,
+    fragmentShader: coronaFragmentShader,
     side: BackSide,
     transparent: true,
     blending: AdditiveBlending,
@@ -93,14 +99,21 @@ export function createProceduralStar(opts: { record: StarRecord; bodyRadiusWU: n
     depthWrite: false,
     uniforms: {
       uColor: { value: new Color(...kelvinToRGB(record.tempK)) },
-      uIntensity: { value: glowIntensity(record) },
-      uDetailFade: { value: 1 },
+      uCamObjPos: { value: new Vector3() },
+      uIntensity: { value: 0 },       // set per-frame from the distance envelope
+      uReach: { value: 0 },           // 0 hugs the limb, 1 flares outward
+      uTime: { value: 0 },
+      uActivity: { value: record.activity },
+      uSeed: { value: seedUnit(record.seed) },
+      uRs: { value: bodyRadiusWU },
+      uRb: { value: bodyRadiusWU * CORONA_R },
     },
   });
-  const glowMesh = new Mesh(new SphereGeometry(bodyRadiusWU * 1.6, 48, 48), glowMat);
-  glowMesh.renderOrder = 1;
-  glowMesh.frustumCulled = false;
-  group.add(glowMesh);
+  const coronaMesh = new Mesh(new SphereGeometry(bodyRadiusWU * CORONA_R, 32, 32), coronaMat);
+  coronaMesh.renderOrder = 1;
+  coronaMesh.frustumCulled = false;
+  group.add(coronaMesh);
+  let coronaBase = coronaIntensity(record); // record-driven brightness; enveloped by distance per frame
 
   // ── S2 prominences: billboarded limb eruptions ──
   const prominences = createProminences(record, bodyRadiusWU);
@@ -120,43 +133,72 @@ export function createProceduralStar(opts: { record: StarRecord; bodyRadiusWU: n
     u.uEmissiveGain.value = emissiveGain(record);
     u.uFlareRate.value = flareRate(record);
     u.uSeed.value = seedUnit(record.seed);
-    (glowMat.uniforms.uColor.value as Color).setRGB(...kelvinToRGB(record.tempK));
-    glowMat.uniforms.uIntensity.value = glowIntensity(record);
+    const cu = coronaMat.uniforms;
+    (cu.uColor.value as Color).setRGB(...kelvinToRGB(record.tempK));
+    coronaBase = coronaIntensity(record);
+    cu.uActivity.value = record.activity;
+    cu.uSeed.value = seedUnit(record.seed);
     prominences.setRecord(record);
   }
 
   let clock = 0;
-  function update(dt: number, camera: Camera, camDistWU: number): void {
-    // Bounded shader clock (float32-safe over long sessions, like sun.ts).
-    clock = (clock + dt) % 1000;
+  function update(dt: number, camera: Camera, camDistWU: number, timeScale = 1): void {
+    // Shader clock advances on wall-clock dt so it lives at 1×, but the rate is
+    // amplified (log-compressed, so warp speeds the churn a few× without the
+    // domain exploding/aliasing) by the sim time-compression — "warp time to
+    // watch it churn." Bounded modulus keeps it float32-safe over long sessions.
+    const churn = 1 + 1.3 * Math.log10(Math.max(timeScale, 1));
+    clock = (clock + dt * churn) % 4000;
     surfaceMat.uniforms.uTime.value = clock;
+    coronaMat.uniforms.uTime.value = clock;
 
-    // LOD: world-space apparent radius / distance → detail + glow fade.
+    // LOD: world-space apparent radius / distance → surface-detail fade.
     const worldRadius = bodyRadiusWU * SYSTEM_TIER_SCALE;
     const apparent = worldRadius / Math.max(camDistWU, 1e-6);
     const fade = smoothstep(LOD_LO, LOD_HI, apparent);
     surfaceMat.uniforms.uDetailFade.value = fade;
-    glowMat.uniforms.uDetailFade.value = fade;
 
+    // Corona distance envelope (camDist in WU, true scale): a small rim in-system,
+    // flaring out through the Kuiper/outer-system, easing away entirely by the
+    // heliopause. `baseline` keeps a faint always-on rim while the star is framed;
+    // `flare` is the outer-system bump; both vanish past the heliopause.
+    const flare = smoothstep(0.04, 0.22, camDistWU) * (1 - smoothstep(0.35, 0.9, camDistWU));
+    const baseline = (1 - smoothstep(0.5, 1.2, camDistWU)) * 0.26;
+    const env = Math.min(1, flare + baseline);
+    coronaMat.uniforms.uIntensity.value = coronaBase * env;
+    coronaMat.uniforms.uReach.value = 0.12 + 0.88 * env;
+
+    // Camera position in the corona mesh's OBJECT space (body-radius units), so
+    // the fragment can march the shell. worldToLocal needs an up-to-date matrix.
     camera.getWorldPosition(_camPos);
+    coronaMesh.updateWorldMatrix(true, false);
+    _camObj.copy(_camPos);
+    coronaMesh.worldToLocal(_camObj);
+    (coronaMat.uniforms.uCamObjPos.value as Vector3).copy(_camObj);
+
     prominences.update(clock, _camPos, fade);
   }
 
   function dispose(): void {
     surfaceMesh.geometry.dispose();
     surfaceMat.dispose();
-    glowMesh.geometry.dispose();
-    glowMat.dispose();
+    coronaMesh.geometry.dispose();
+    coronaMat.dispose();
     prominences.dispose();
   }
 
   return { group, update, setRecord, dispose };
 }
 
-// ── Glow intensity: brighter for hot/active stars, never zero. ──
-function glowIntensity(record: StarRecord): number {
-  const hotBoost = record.spectralType === 'O' || record.spectralType === 'B' ? 0.25 : 0;
-  return 0.6 + 0.9 * record.activity + hotBoost;
+/** Corona bounding-shell radius, in star-body radii. The march density decays
+ *  to ~0 well before this, so the visible corona reaches ~1.8× the disc while
+ *  the shell gives the raymarch headroom. */
+const CORONA_R = 2.6;
+
+// ── Corona intensity: brighter for hot/active stars, never zero. ──
+function coronaIntensity(record: StarRecord): number {
+  const hotBoost = record.spectralType === 'O' || record.spectralType === 'B' ? 0.6 : 0;
+  return 1.6 + 2.4 * record.activity + hotBoost;
 }
 
 /** Map a 32-bit seed to a stable [0,1000) shader offset (float32-safe). */
