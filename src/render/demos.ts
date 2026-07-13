@@ -19,7 +19,7 @@
 import { Vector3 } from 'three';
 import { nebulaCenterAbsWU, ORION_NEBULA_PARAMS } from './nebula';
 
-export type DemoId = 'star' | 'planet' | 'nebula' | 'blackhole' | 'galaxy';
+export type DemoId = 'star' | 'planet' | 'nebula' | 'blackhole' | 'galaxy' | 'approach';
 
 /** URL query key that selects a demo. */
 export const DEMO_PARAM = 'demo';
@@ -43,6 +43,8 @@ export interface DemoDef {
   readonly targetZoom: number;
   /** Absolute scene-WU focus point for the camera (fed to camFocusTarget). */
   readonly focusAbs: Vector3;
+  /** Hidden from the subsystem list (mounted + navigated specially in main.ts). */
+  readonly hidden?: boolean;
 }
 
 export const DEMOS: readonly DemoDef[] = [
@@ -95,6 +97,16 @@ export const DEMOS: readonly DemoDef[] = [
       + 'the arms, plus domain-warped gas-shell filament emission breaking up the banding.',
     targetZoom: 0.97, // near GALAXY tier: whole Milky Way disc in frame
     focusAbs: new Vector3(0, 0, 0),
+  },
+  {
+    id: 'approach',
+    icon: '🌍',
+    label: '1:1 Approach',
+    source: 'planet v2 · Phase 0',
+    blurb: 'Fly into a single Earth-radius world at true 1:1 scale under the telephoto FOV.',
+    targetZoom: 0.085, // low orbit — camera TRACKS the true-scale globe (main.ts), not this focus
+    focusAbs: new Vector3(0, 0, 0),
+    hidden: true,
   },
 ];
 

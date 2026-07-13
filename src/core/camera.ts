@@ -375,9 +375,12 @@ export class CameraController {
       // direct resolver at true scale, else the residual+R round-trip.
       const abs = this._trackedAbsolute(obj);
       Game.data.camFocusTarget = { x: abs.x, y: abs.y, z: abs.z };
-      // Derive close-tier scale factor from the body's geometry radius.
+      // Derive close-tier scale factor from the body's geometry radius. The floor
+      // is tiny (1e-4) so the camera can actually close on a TRUE-SCALE planet
+      // (focusScale ~1.4e-3 for Earth); normal inflated bodies sit at 0.3–7 and
+      // never approach the floor, so ordinary tracking is unchanged.
       const r = (obj.userData?.bodyRadius as number | undefined) ?? FOCUS_REFERENCE_RADIUS;
-      this.focusScale = Math.max(0.1, r / FOCUS_REFERENCE_RADIUS);
+      this.focusScale = Math.max(1e-4, r / FOCUS_REFERENCE_RADIUS);
     } else {
       this.focusScale = 1.0;
     }

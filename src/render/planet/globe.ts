@@ -84,6 +84,7 @@ export class PlanetGlobe {
     this.root.userData.type = 'planet-globe';
     this.root.userData.seed = planet.seed;
     this.root.userData.planetType = planet.type;
+    this.root.userData.bodyRadius = radius; // lets the camera focus/approach frame this globe
 
     // tilt → spin → surface
     const rng = channel(planet.seed >>> 0, 'orient');

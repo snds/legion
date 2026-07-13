@@ -101,6 +101,7 @@ import { PlanetGlobes, showcaseSystem } from './render/planet';
 import { activeDemoId, demoById, HERO_BLACKHOLE_ABS } from './render/demos';
 import { activeLabId } from './ui/labs';
 import { createPlanetLab, type PlanetLabHandle } from './render/planet/planet-lab';
+import { createApproachPlanet, type ApproachPlanet } from './render/planet/approach';
 import { initDemoMenu } from './ui/demo-menu';
 import { PlanetState, Identity, EntityType, BobState, Personality, StarSystem } from './core/components';
 
@@ -468,7 +469,7 @@ async function boot(): Promise<void> {
   // ?demo=planet mounts them (see the PlanetGlobes block below). Destinations
   // (tier + absolute focus) live in the registry: src/render/demos.ts.
   const demo = demoById(activeDemoId());
-  if (demo) {
+  if (demo && !demo.hidden) { // hidden demos (approach) mount + navigate specially below
     camCtrl.trackObject(null); // release the home-planet lock — the demo drives focus
     // flyTo() is wall-clock timed (≤5 s real, ease-in-out Bezier) — unlike the
     // per-frame focus/zoom lerps, it arrives regardless of frame-rate, so a
@@ -552,6 +553,20 @@ async function boot(): Promise<void> {
     Game.data.zoomLevel = planetLab.framingZoom;
     Game.data.targetZoom = planetLab.framingZoom;
     Game.data.camFocusTarget = { x: 0, y: 0, z: 0 }; // archetype row is centred on the local origin
+  }
+
+  // 1:1 Approach (?demo=approach): one true-scale Earth-radius world at the local
+  // origin that the camera TRACKS (so focusScale frames its true radius) and dives
+  // into at low orbit — the one-click review of the scale/FOV phase.
+  let approach: ApproachPlanet | null = null;
+  if (activeDemoId() === 'approach') {
+    approach = createApproachPlanet(layers.local);
+    for (const child of layers.local.children) {
+      if (child.userData?.type !== 'planet-globe') child.visible = false;
+    }
+    camCtrl.trackObject(approach.root); // focusScale = trueRadius/ref → camera closes to the true size
+    Game.data.zoomLevel = 0.085;        // low orbit
+    Game.data.targetZoom = 0.085;
   }
 
   // One deterministic simulation tick.
@@ -783,8 +798,8 @@ async function boot(): Promise<void> {
     // active star it REPLACES the legacy sun mesh (hides the sun-system
     // subgroup); the legacy updater runs only as a fallback when no procedural
     // star is installed (e.g. no local system).
-    // Suppressed in the planet lab (the archetype row uses its own key light).
-    if (!planetLab
+    // Suppressed in the planet lab / 1:1 approach (they use their own key light).
+    if (!planetLab && !approach
       && !updateSystemStar(getActiveSystemHandle()?.groups, frameTime, camera, Game.data.camDist, Game.getTimeSpeed().tc)) {
       updateSunSystem(renderCtx.renderer, frameTime);
     }
@@ -813,6 +828,14 @@ async function boot(): Promise<void> {
       camera.updateMatrixWorld();
       layers.local.updateWorldMatrix(true, true);
       planetLab.update({
+        camera, rootWorld: _localRoot, dt: frameTime,
+        fovYRad: (camera.fov * Math.PI) / 180, viewportH: window.innerHeight,
+      });
+    }
+    if (approach) {
+      camera.updateMatrixWorld();
+      layers.local.updateWorldMatrix(true, true);
+      approach.update({
         camera, rootWorld: _localRoot, dt: frameTime,
         fovYRad: (camera.fov * Math.PI) / 180, viewportH: window.innerHeight,
       });

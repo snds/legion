@@ -38,6 +38,15 @@ function togglePhase(param: string): void {
   location.href = url.toString();
 }
 
+/** Launch the one-click 1:1 approach (a hidden demo + the scale/FOV flag). */
+function goApproach(): void {
+  const url = new URL(location.href);
+  url.searchParams.set(DEMO_PARAM, 'approach');
+  url.searchParams.set('scale1to1', '1');
+  url.searchParams.delete(LAB_PARAM);
+  location.href = url.toString();
+}
+
 /** Independent, in-game review-phase toggles (planet v2 rollout). */
 const REVIEW_PHASES: readonly { param: string; icon: string; label: string; blurb: string }[] = [
   {
@@ -78,6 +87,7 @@ export function initDemoMenu(): void {
     + 'font:inherit;cursor:pointer';
 
   for (const d of DEMOS) {
+    if (d.hidden) continue; // e.g. the 1:1 Approach — launched from REVIEW PHASES
     const isActive = d.id === active;
     const item = document.createElement('button');
     item.style.cssText = rowBase + (isActive ? ';background:#1c2b3a;border-color:#3a5a80' : '');
@@ -137,6 +147,21 @@ export function initDemoMenu(): void {
       `<span style="color:#eaf0f7">${p.icon} ${p.label}`
       + `  <span style="color:${on ? '#6aa3ff' : '#7e8a9c'}">${on ? '● ON' : '○ off'}</span></span>`
       + `<span style="display:block;margin-top:3px;opacity:0.6;font-size:10.5px;line-height:1.4">${p.blurb}</span>`;
+    menu.appendChild(item);
+  }
+
+  // One-click 1:1 approach — fly into a single true-scale world (scale + FOV in one shot).
+  {
+    const on = active === 'approach';
+    const item = document.createElement('button');
+    item.style.cssText = rowBase + (on ? ';background:#1c2b3a;border-color:#3a5a80' : '');
+    item.onmouseenter = () => { if (!on) item.style.background = '#161d27'; };
+    item.onmouseleave = () => { if (!on) item.style.background = 'transparent'; };
+    item.onclick = () => goApproach();
+    item.innerHTML =
+      `<span style="color:#eaf0f7">🌍 1:1 Approach${on ? '  <span style="color:#6aa3ff">● live</span>' : ''}</span>`
+      + `<span style="display:block;margin-top:3px;opacity:0.6;font-size:10.5px;line-height:1.4">`
+      + `Fly into a single Earth-radius world at true scale under the telephoto lens — the one-click scale/FOV review.</span>`;
     menu.appendChild(item);
   }
 
