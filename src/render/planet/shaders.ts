@@ -12,12 +12,14 @@
 // planet shaders; Three injects position/normal/uv/matrices/cameraPosition.
 // ═══════════════════════════════════════════════════════════════════
 
-import { GLSL_SIMPLEX, GLSL_FBM, GLSL_RAMP } from './glsl';
+import { GLSL_SIMPLEX, GLSL_FBM, GLSL_PLATES, GLSL_TERRAIN, GLSL_RAMP } from './glsl';
 
 // ── Surface globe (cube-sphere terrain) ─────────────────────────────
 export const SURFACE_VERT = /* glsl */ `
 ${GLSL_SIMPLEX}
 ${GLSL_FBM}
+${GLSL_PLATES}
+${GLSL_TERRAIN}
 uniform float uDisplacement;
 varying vec3  vWorldPos;
 varying vec3  vWorldNormal;

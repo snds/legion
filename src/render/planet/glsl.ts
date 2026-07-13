@@ -57,9 +57,8 @@ float snoise(vec3 v){
 }
 `;
 
-/** fBm, ridged multifractal, domain warp + the combined terrain height field.
- *  `terrainHeight(dir)` returns a normalised height in ~[0,1] for a unit-sphere
- *  direction, blending smooth fBm and sharp ridges by uRidged, warped by uWarp. */
+/** fBm + ridged multifractal noise — the detail vocabulary. `uNoiseSeed` offsets
+ *  the domain per body; `uRidged`/`uWarp` steer the combined terrain field below. */
 export const GLSL_FBM = /* glsl */ `
 uniform vec3  uNoiseSeed;   // per-body domain offset (determinism)
 uniform float uRidged;      // 0 = fBm hills, 1 = ridged mountains
@@ -85,15 +84,68 @@ float ridged(vec3 p){
   }
   return f; // ~[0,1.x]
 }
+`;
 
+/** Tectonic-plate MACRO field — the GLSL mirror of plates.ts `macroHeight()`.
+ *  MUST stay line-for-line with that CPU reference (the Phase-3 bake caches it).
+ *  Only ever called from the VERTEX shader, and only loop-index array access, so
+ *  it is safe on GLSL ES 1.0. `MAX_PLATES` must equal plates.ts MAX_PLATES. */
+export const GLSL_PLATES = /* glsl */ `
+const int MAX_PLATES = 24;
+uniform int   uPlateCount;
+uniform vec3  uPlateSeed[MAX_PLATES];   // unit plate-centre directions
+uniform float uPlateElev[MAX_PLATES];   // per-plate base elevation [0,1]
+uniform vec3  uPlateMotion[MAX_PLATES]; // per-plate tangent drift
+uniform float uPlateBoundary;           // dot-space boundary half-width
+uniform float uPlateUplift;             // convergent-range height gain
+
+float plateMacro(vec3 dir){
+  // Nearest two plates by angular proximity (larger dot = closer). Capture each
+  // plate's attributes during the scan so we never index by a runtime value.
+  float d1 = -1e9, d2 = -1e9;
+  vec3  s1 = vec3(0.0), s2 = vec3(0.0), m1 = vec3(0.0), m2 = vec3(0.0);
+  float e1 = 0.0, e2 = 0.0;
+  for (int i = 0; i < MAX_PLATES; i++){
+    if (i >= uPlateCount) break;
+    vec3 s = uPlateSeed[i];
+    float dp = dot(dir, s);
+    if (dp > d1){
+      d2 = d1; s2 = s1; m2 = m1; e2 = e1;
+      d1 = dp; s1 = s;  m1 = uPlateMotion[i]; e1 = uPlateElev[i];
+    } else if (dp > d2){
+      d2 = dp; s2 = s;  m2 = uPlateMotion[i]; e2 = uPlateElev[i];
+    }
+  }
+  // Blend base elevation across the boundary (smooth coast, not a cliff).
+  float t = smoothstep(0.0, uPlateBoundary, d1 - d2);
+  float h = mix(e2, e1, t);
+  // Convergent boundaries push up ranges; divergent ones rift down.
+  vec3 axis = normalize(s2 - s1);
+  float conv = dot(m1, axis) - dot(m2, axis);
+  float band = 1.0 - t;                 // 1 at boundary → 0 inside a plate
+  h += band * conv * uPlateUplift;
+  return clamp(h, 0.0, 1.0);
+}
+`;
+
+/** Combined terrain height: plate MACRO (continents + ranges) roughened by fBm/
+ *  ridged DETAIL, with the plate lookup domain-warped so cells read as coastlines
+ *  rather than polygons. Returns a normalised height in [0,1] for a unit dir.
+ *  Requires GLSL_FBM (fbm/ridged/uNoiseSeed/uRidged/uWarp) + GLSL_PLATES. */
+export const GLSL_TERRAIN = /* glsl */ `
 float terrainHeight(vec3 dir){
   vec3 p = dir * 1.7 + uNoiseSeed;
-  // domain warp for organic coastlines
   vec3 w = vec3(fbm(p + 11.3), fbm(p + 47.7), fbm(p + 83.1));
-  p += uWarp * w;
-  float hills = fbm(p) * 0.5 + 0.5;      // [0,1]
-  float mts   = clamp(ridged(p), 0.0, 1.0);
-  return mix(hills, mts, uRidged);
+  // Warp the plate lookup direction → organic, non-polygonal coastlines.
+  vec3 wdir = normalize(dir + uWarp * 0.12 * w);
+  float macro = plateMacro(wdir);
+  // Mid/high-frequency detail, also domain-warped, centred so it roughens the
+  // macro relief without shifting its mean (keeps sea level meaningful).
+  vec3 dp = p + uWarp * w;
+  float hills = fbm(dp) * 0.5 + 0.5;
+  float mts   = clamp(ridged(dp), 0.0, 1.0);
+  float detail = mix(hills, mts, uRidged);
+  return clamp(macro + (detail - 0.5) * 0.35, 0.0, 1.0);
 }
 `;
 

@@ -26,6 +26,7 @@ import {
   type QuadNode, type Vec3,
 } from './cube-sphere';
 import { derivePlanetParams, type PlanetRenderParams } from './presets';
+import { generatePlates, packSeeds, packElev, packMotion } from './plates';
 import { generateRings, densityLUT, type RingSystem } from './rings';
 import { channel, range } from './rng';
 import { stageForPx, apparentRadiusPx, dotBrightness, LodStage } from './lod';
@@ -146,6 +147,7 @@ export class PlanetGlobe {
         uNoiseSeed: { value: new Vector3(...p.noiseSeed) },
         uRidged: { value: p.ridged }, uWarp: { value: p.warp },
         uDisplacement: { value: p.displacement },
+        ...this.plateUniforms(),
         uSunDir: { value: new Vector3(0, 0, 1) },
         uSeaLevel: { value: p.seaLevel },
         uOceanShallow: { value: new Vector3(...p.oceanShallow) },
@@ -163,6 +165,20 @@ export class PlanetGlobe {
         uRampColor: { value: col },
       },
     });
+  }
+
+  /** Tectonic-plate uniforms for the surface material — the macro (continent /
+   *  range) structure, deterministic from the body seed (plates.ts). */
+  private plateUniforms(): Record<string, { value: unknown }> {
+    const f = generatePlates(this.planet.seed, this.params.type);
+    return {
+      uPlateCount: { value: f.count },
+      uPlateSeed: { value: packSeeds(f) },
+      uPlateElev: { value: packElev(f) },
+      uPlateMotion: { value: packMotion(f) },
+      uPlateBoundary: { value: f.boundaryWidth },
+      uPlateUplift: { value: f.uplift },
+    };
   }
 
   private buildGiantMat(): ShaderMaterial {
