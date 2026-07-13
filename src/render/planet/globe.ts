@@ -43,16 +43,18 @@ export interface UpdateCtx {
   viewportH: number;
 }
 
-const NODE_RES = 16;    // grid resolution per quadtree leaf
 // Planet v2 Phase 1: subdivide by SCREEN error, deep near the camera. DETAIL is
-// the target on-screen angular size of a leaf (radians) — 0.02 ≈ 1.1°, so a leaf
-// keeps splitting until it's ~a degree on screen. The old 1.1 only split when a
-// patch spanned >60° → at orbital distance the planet stayed a 6-face cube
-// (the faceting). MAX_LEVEL is the deep-zoom cap; only camera-facing patches
-// reach it, so the total leaf count stays bounded by screen coverage.
-const MAX_LEVEL = 9;
-const DETAIL = 0.02;
-const MAX_LEAF_CACHE = 1400; // evict beyond this so deep dives don't grow unbounded
+// the target on-screen angular size of a leaf (radians); a leaf keeps splitting
+// until it's about that size on screen. FEWER but FINER leaves (high NODE_RES,
+// larger DETAIL) both smooths the silhouette AND shrinks the LOD cracks: coarse
+// leaves still track the displaced terrain closely (less under-sampling), and
+// with fewer splits the level jumps between neighbours are smaller. MAX_LEVEL is
+// the deep-zoom cap; only camera-facing leaves reach it, so total count stays
+// bounded by screen coverage.
+const NODE_RES = 32;
+const MAX_LEVEL = 8;
+const DETAIL = 0.045;
+const MAX_LEAF_CACHE = 900; // evict beyond this so deep dives don't grow unbounded
 const RING_SEGMENTS = 96;
 const LUT_N = 128;
 
