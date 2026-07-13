@@ -844,7 +844,7 @@ async function boot(): Promise<void> {
     // 9c. Lens flare update (star position → screen space)
     // Star world position = the local-tier root (the sun sits at the local-tier
     // origin), so the flare stays glued to the sun once the floating origin floats.
-    if (!planetLab) lensFlare.update(_localRoot, camera, frameTime);
+    if (!planetLab && !approach) lensFlare.update(_localRoot, camera, frameTime);
 
     // 9d. Galaxy animations (dashed lines, chevron pulses) — bounded shader clock
     updateGalaxyAnimations(shaderTime);

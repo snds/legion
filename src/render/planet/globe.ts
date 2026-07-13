@@ -43,9 +43,16 @@ export interface UpdateCtx {
   viewportH: number;
 }
 
-const NODE_RES = 16;   // grid resolution per quadtree leaf
-const MAX_LEVEL = 4;   // system-zoom never needs a deeper tree
-const DETAIL = 1.1;    // split threshold (see cube-sphere.selectFace)
+const NODE_RES = 16;    // grid resolution per quadtree leaf
+// Planet v2 Phase 1: subdivide by SCREEN error, deep near the camera. DETAIL is
+// the target on-screen angular size of a leaf (radians) — 0.02 ≈ 1.1°, so a leaf
+// keeps splitting until it's ~a degree on screen. The old 1.1 only split when a
+// patch spanned >60° → at orbital distance the planet stayed a 6-face cube
+// (the faceting). MAX_LEVEL is the deep-zoom cap; only camera-facing patches
+// reach it, so the total leaf count stays bounded by screen coverage.
+const MAX_LEVEL = 9;
+const DETAIL = 0.02;
+const MAX_LEAF_CACHE = 1400; // evict beyond this so deep dives don't grow unbounded
 const RING_SEGMENTS = 96;
 const LUT_N = 128;
 
@@ -113,7 +120,7 @@ export class PlanetGlobe {
 
     // Atmosphere shell (P2).
     if (this.params.hasAtmosphere) {
-      this.atmosMesh = new Mesh(new IcosahedronGeometry(radius * 1.035, 4), this.buildAtmosMat());
+      this.atmosMesh = new Mesh(new IcosahedronGeometry(radius * 1.035, 6), this.buildAtmosMat());
       this.root.add(this.atmosMesh);
     }
 
@@ -262,6 +269,14 @@ export class PlanetGlobe {
       let geo = this.nodeGeoCache.get(nodeId(n));
       if (!geo) { geo = buildNodeGeometry(n, this.radius, NODE_RES); this.nodeGeoCache.set(nodeId(n), geo); }
       this.surfaceGroup.add(new Mesh(geo, this.surfaceMat));
+    }
+    // Evict cold cached leaves beyond the cap (never the active set).
+    if (this.nodeGeoCache.size > MAX_LEAF_CACHE) {
+      const active = new Set(nodes.map(nodeId));
+      for (const [id, geo] of this.nodeGeoCache) {
+        if (this.nodeGeoCache.size <= MAX_LEAF_CACHE) break;
+        if (!active.has(id)) { geo.dispose(); this.nodeGeoCache.delete(id); }
+      }
     }
   }
 
