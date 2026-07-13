@@ -18,6 +18,7 @@ import type { GenPlanet, PlanetVisualType } from '../../data/system-gen';
 import { PlanetGlobe, type UpdateCtx } from './globe';
 import { visualRadius } from './index';
 import { PRESETS, PLANET_TYPES, snapshotPresets, type Preset } from './presets';
+import { MACRO, type MacroParams } from './plates';
 import { mountControlPanel, type ControlPanelHandle, type LabCtrl, type LabSection } from '../../ui/control-panel';
 
 const SPACING = 5.5;              // authoring units between globe centres
@@ -84,6 +85,13 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
     get: () => P()[key] as [number, number, number],
     set: (v) => { P()[key] = v; },
   });
+  // Tectonics (Orogen-style macro): edits the live MACRO table for the archetype.
+  const M = (): MacroParams => MACRO[selected];
+  const macroSlider = (label: string, key: keyof MacroParams, min: number, max: number, step: number): LabCtrl => ({
+    label, min, max, step,
+    get: () => M()[key],
+    set: (v) => { M()[key] = v; },
+  });
 
   const sections = (): LabSection[] => {
     const giant = selected === 'gas' || selected === 'ice';
@@ -113,10 +121,19 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
       }];
     }
     return [typeSel, {
+      title: 'Tectonics', key: 'lab-tectonics', ctrls: [
+        macroSlider('Plates', 'plateCount', 3, 48, 1),
+        macroSlider('Continents', 'continents', 1, 8, 1),
+        macroSlider('Land coverage', 'landCoverage', 0.02, 0.98, 0.01),
+        macroSlider('Size variety', 'sizeVariety', 0, 1, 0.01),
+        macroSlider('Range uplift', 'uplift', 0, 0.6, 0.01),
+        macroSlider('Range width', 'rangeWidth', 0.02, 0.2, 0.005),
+        slider('Terrain warp', 'warp', 0, 1.5, 0.01),
+      ],
+    }, {
       title: 'Terrain', key: 'lab-terrain', ctrls: [
         slider('Displacement', 'displacement', 0, 0.12, 0.001),
         slider('Ridged', 'ridged', 0, 1, 0.01),
-        slider('Warp', 'warp', 0, 1, 0.01),
         slider('Roughness', 'roughness', 0, 1, 0.01),
         slider('Sea level', 'seaLevel', 0, 1, 0.01),
         slider('Moisture', 'moisture', 0, 1, 0.01),
@@ -145,6 +162,7 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
     sections,
     onChange: () => { build(selected); },   // rebuild the edited archetype
     actions: [
+      { label: 'Rebuild', onClick: () => { build(selected); return 'Rebuilt ✓'; } },
       { label: 'Reseed', onClick: () => { seeds[selected] = (seeds[selected] * 1103515245 + 12345) & 0x7fffffff; build(selected); } },
       { label: 'Copy JSON → presets.ts', minor: true, onClick: () => {
         const json = JSON.stringify(snapshotPresets(), null, 2);

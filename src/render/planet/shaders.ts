@@ -15,6 +15,10 @@
 import { GLSL_SIMPLEX, GLSL_FBM, GLSL_PLATES, GLSL_TERRAIN, GLSL_RAMP } from './glsl';
 
 // ── Surface globe (cube-sphere terrain) ─────────────────────────────
+// The vertex shader only DISPLACES geometry (silhouette); all height + normal
+// used for shading is recomputed PER-FRAGMENT (analytic gradient of the height
+// field), so shading, coastlines and ocean depth are tessellation-independent —
+// no faceting/stair-stepping regardless of mesh LOD.
 export const SURFACE_VERT = /* glsl */ `
 ${GLSL_SIMPLEX}
 ${GLSL_FBM}
@@ -22,39 +26,39 @@ ${GLSL_PLATES}
 ${GLSL_TERRAIN}
 uniform float uDisplacement;
 varying vec3  vWorldPos;
-varying vec3  vWorldNormal;
 varying vec3  vDir;      // undisplaced object-space unit direction
-varying float vHeight;   // [0,1] terrain height
+varying vec3  vWN;       // world-space sphere normal (smooth)
+varying vec3  vWT;       // world-space tangent   (basis for relief perturbation)
+varying vec3  vWB;       // world-space bitangent
 
 void main(){
   vec3 dir = normalize(position);
-  float h = terrainHeight(dir);
-  vHeight = h;
   vDir = dir;
-
-  // Finite-difference normal on the sphere tangent plane → lit relief.
+  // Smooth world-space TBN basis (interpolates cleanly — the crisp relief comes
+  // from the per-fragment gradient, this only orients it).
   vec3 up = abs(dir.y) < 0.99 ? vec3(0.0,1.0,0.0) : vec3(1.0,0.0,0.0);
   vec3 t = normalize(cross(up, dir));
-  vec3 b = cross(dir, t);
-  float eps = 0.02;
-  float hT = terrainHeight(normalize(dir + t*eps));
-  float hB = terrainHeight(normalize(dir + b*eps));
-  vec3 grad = (t*(hT-h) + b*(hB-h)) / eps;
-  vec3 nObj = normalize(dir - grad * uDisplacement * 4.0);
-
+  vec3 bt = cross(dir, t);
+  vWN = normalize(normalMatrix * dir);
+  vWT = normalize(normalMatrix * t);
+  vWB = normalize(normalMatrix * bt);
   // Displace land radially; centre the mean so the globe keeps its radius.
+  float h = terrainHeight(dir);
   float disp = uDisplacement * (h - 0.5);
   vec3 displaced = position * (1.0 + disp);
-
   vWorldPos = (modelMatrix * vec4(displaced, 1.0)).xyz;
-  vWorldNormal = normalize(normalMatrix * nObj);
   gl_Position = projectionMatrix * modelViewMatrix * vec4(displaced, 1.0);
 }
 `;
 
 export const SURFACE_FRAG = /* glsl */ `
 ${GLSL_SIMPLEX}
+${GLSL_FBM}
+${GLSL_PLATES}
+${GLSL_TERRAIN}
 ${GLSL_RAMP}
+uniform float uDisplacement;
+uniform float uNormalStrength; // relief-normal (bump) exaggeration
 uniform vec3  uSunDir;        // world-space, surface → sun
 uniform float uSeaLevel;
 uniform vec3  uOceanShallow;
@@ -68,12 +72,24 @@ uniform float uNightLights;
 uniform float uTerminator;    // terminator softness
 uniform vec3  uAtmosTint;
 varying vec3  vWorldPos;
-varying vec3  vWorldNormal;
 varying vec3  vDir;
-varying float vHeight;
+varying vec3  vWN;
+varying vec3  vWT;
+varying vec3  vWB;
 
 void main(){
-  vec3 N = normalize(vWorldNormal);
+  vec3 dir = normalize(vDir);
+  // Per-fragment height + relief normal. The height GRADIENT is sampled per
+  // fragment (crisp, tessellation-independent); it perturbs the smooth world TBN
+  // basis from the vertex — tangent-space normal mapping, no faceting.
+  float vHeight = terrainHeight(dir);
+  vec3 up = abs(dir.y) < 0.99 ? vec3(0.0,1.0,0.0) : vec3(1.0,0.0,0.0);
+  vec3 t = normalize(cross(up, dir));
+  vec3 b = cross(dir, t);
+  float eps = 0.0035;
+  float gx = (terrainHeight(normalize(dir + t*eps)) - vHeight) / eps;
+  float gy = (terrainHeight(normalize(dir + b*eps)) - vHeight) / eps;
+  vec3 N = normalize(vWN - uNormalStrength * (gx * normalize(vWT) + gy * normalize(vWB)));
   vec3 V = normalize(cameraPosition - vWorldPos);
   float ndl = dot(N, uSunDir);
   float day = smoothstep(-uTerminator, uTerminator, ndl);
@@ -95,7 +111,7 @@ void main(){
     // Moisture darkens/greens lowlands a touch.
     albedo = mix(albedo, albedo * vec3(0.8, 1.05, 0.8), uMoisture * (1.0 - hh) * 0.5);
     // Latitude ice caps.
-    float lat = abs(vDir.y);
+    float lat = abs(dir.y);
     float ice = smoothstep(1.0 - uLatitudeIce * 0.6, 1.0, lat) * step(uSeaLevel, vHeight);
     albedo = mix(albedo, vec3(0.95, 0.97, 1.0), ice);
   }
@@ -114,7 +130,7 @@ void main(){
   if (uNightLights > 0.0){
     float night = 1.0 - day;
     float land = step(uSeaLevel, vHeight);
-    float m = snoise(vDir * 40.0);
+    float m = snoise(dir * 40.0);
     float lights = smoothstep(0.72, 0.9, m) * land * night;
     lit += vec3(1.0, 0.85, 0.5) * lights * uNightLights;
   }

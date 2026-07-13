@@ -26,7 +26,9 @@ import {
   type QuadNode, type Vec3,
 } from './cube-sphere';
 import { derivePlanetParams, type PlanetRenderParams } from './presets';
-import { generatePlates, packSeeds, packElev, packMotion } from './plates';
+import {
+  generatePlates, packContSeeds, packContSize, packPlateSeeds, packPlateMotion,
+} from './plates';
 import { generateRings, densityLUT, type RingSystem } from './rings';
 import { channel, range } from './rng';
 import { stageForPx, apparentRadiusPx, dotBrightness, LodStage } from './lod';
@@ -147,6 +149,7 @@ export class PlanetGlobe {
         uNoiseSeed: { value: new Vector3(...p.noiseSeed) },
         uRidged: { value: p.ridged }, uWarp: { value: p.warp },
         uDisplacement: { value: p.displacement },
+        uNormalStrength: { value: p.displacement * 12 },
         ...this.plateUniforms(),
         uSunDir: { value: new Vector3(0, 0, 1) },
         uSeaLevel: { value: p.seaLevel },
@@ -167,17 +170,19 @@ export class PlanetGlobe {
     });
   }
 
-  /** Tectonic-plate uniforms for the surface material — the macro (continent /
-   *  range) structure, deterministic from the body seed (plates.ts). */
+  /** Tectonic uniforms for the surface material — the continent + plate macro
+   *  structure, deterministic from the body seed (plates.ts). */
   private plateUniforms(): Record<string, { value: unknown }> {
     const f = generatePlates(this.planet.seed, this.params.type);
     return {
-      uPlateCount: { value: f.count },
-      uPlateSeed: { value: packSeeds(f) },
-      uPlateElev: { value: packElev(f) },
-      uPlateMotion: { value: packMotion(f) },
-      uPlateBoundary: { value: f.boundaryWidth },
+      uContCount: { value: f.continentCount },
+      uContSeed: { value: packContSeeds(f) },
+      uContSize: { value: packContSize(f) },
+      uPlateCount: { value: f.plateCount },
+      uPlateSeed: { value: packPlateSeeds(f) },
+      uPlateMotion: { value: packPlateMotion(f) },
       uPlateUplift: { value: f.uplift },
+      uRangeWidth: { value: f.rangeWidth },
     };
   }
 

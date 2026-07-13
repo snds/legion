@@ -104,19 +104,51 @@ the current camera distance. Everything below is a facet of that one idea.
 
 ## Phased roadmap
 
-- **Phase 0 — Scale + camera foundation.** `trueRadiusWU`, extend zoom/`getCamDist` close
-  end, FOV-narrowing, floating-origin precision check. Planet renders at 1:1 (still old
-  shader) — proves the scale/camera before touching the surface. _(start here)_
-- **Phase 1 — Per-fragment shading + deep adaptive LOD.** Kills the faceting; crisp
-  coastlines; detail octaves by distance. Old fBm terrain, new resolve.
-- **Phase 2 — Macro generator (plates + fBm hybrid)** → the height master (analytic).
-- **Phase 3 — Master bake (8K cube maps) + detail-over-master** sampling.
+- **Phase 0 — Scale + camera foundation.** ✅ `trueRadiusWU`, extended zoom close end,
+  FOV-narrowing, floating-origin precision. Planet renders at 1:1.
+- **Phase 1 — Per-fragment shading + deep adaptive LOD.** ✅ Deep quadtree LOD;
+  winding fix (the real "missing faces"). Per-fragment shading landed in Phase 2b.
+- **Phase 2 — Macro generator.** ✅ (a) plate Voronoi hybrid; (b) **reworked to the
+  Orogen two-layer model** — see below.
+- **Phase 3 — Master bake (8K cube maps) + erosion + detail-over-master.** The bake
+  caches `macroHeight`, then runs **erosion passes on the grid** (hydraulic channels,
+  thermal talus, glacial smoothing — a grid SIM, not an analytic term; this is the fine
+  detail Orogen shows). Shader samples the eroded map + adds sub-texel procedural detail.
 - **Phase 4 — Water shader.**
 - **Phase 5 — Atmosphere/clouds (rocky single layer; gas multi-layer + composition).**
 - **Phase 6 — Biosphere colour (photosynthesis) + rings detail.**
 - **Phase 7 — Lab v2 (single-planet carousel + new authoring controls).**
 
 Each phase: tsc + vitest green, verified in the lab, its own PR.
+
+## Decisions locked (2026-07-13) — Orogen reference review
+
+Reviewing the real World Orogen generator (orogen.studio) against our Phase-2 output:
+
+6. **Plates ≠ continents (two decoupled layers).** Orogen exposes *Plates: 80* AND
+   *Continents: 4* separately. Plates are fine tectonic cells whose BOUNDARIES make
+   mountain ranges; continents are a coarse grouping that sets land coverage. Our v1
+   Phase-2 conflated them (one plate = one blob → cellular look). **Reworked:** a
+   continent field (few caps sized by `landCoverage`) sets base land/ocean shape; a
+   separate plate field supplies convergent ranges / divergent rifts on top.
+7. **Rebuild-on-demand is allowed.** The lab may regenerate on an explicit "Rebuild"
+   (or param change) rather than every frame — heavy generation (and Phase-3 erosion) is
+   fine if real-time isn't. Unlocks the grid-sim erosion the analytic shader can't do.
+8. **Crispness is the bar.** No stair-stepping in shading / specular / normals; landmarks
+   must be legible. **Landed:** shading is now PER-FRAGMENT (analytic height + tangent-
+   space relief normal), tessellation-independent. Cell edges dissolved by a strong
+   multi-scale domain warp (Orogen "Terrain Warp").
+9. **Orogen param vocabulary in the lab** (Tectonics section, live + Rebuild): Plates,
+   Continents, Land coverage, Size variety, Range uplift, Range width, Terrain warp.
+   Still to add toward parity: Irregularity, Roughness, Erosion (Phase 3: glacial/
+   hydraulic/thermal), Smoothing.
+
+## Known gaps after Phase 2b (for Phase 3)
+- **Erosion** — the hydraulic/glacial fine detail is a grid simulation; needs the bake.
+- **Range realism** — convergent ranges are a smooth exp falloff now; erosion + ridged
+  bake will give real foothills/valleys.
+- **Perf** — per-fragment `terrainHeight` (continent + up-to-48-plate loop + fBm, ×3 for
+  the gradient) is heavy at 1:1 full-screen; the bake makes it a texture fetch.
 
 ## Open questions
 - Bake target/format: cube-map array PNG/EXR vs KTX2; per-face res for "8K-equivalent"

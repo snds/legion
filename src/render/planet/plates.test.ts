@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
-  generatePlates, macroHeight, macroParams, packSeeds, packElev, packMotion,
-  MAX_PLATES, type Vec3,
+  generatePlates, macroHeight, macroParams,
+  packContSeeds, packContSize, packPlateSeeds, packPlateMotion,
+  MAX_PLATES, MAX_CONTINENTS, type Vec3,
 } from './plates';
 
 const dot = (a: Vec3, b: Vec3): number => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
@@ -22,47 +23,44 @@ function dirs(n: number): Vec3[] {
 
 describe('generatePlates', () => {
   it('is deterministic — same seed ⇒ identical field', () => {
-    const a = generatePlates(4242, 'rocky');
-    const b = generatePlates(4242, 'rocky');
-    expect(a).toEqual(b);
+    expect(generatePlates(4242, 'rocky')).toEqual(generatePlates(4242, 'rocky'));
   });
 
   it('different seeds diverge', () => {
-    const a = generatePlates(1, 'rocky');
-    const b = generatePlates(2, 'rocky');
-    expect(a.seeds).not.toEqual(b.seeds);
+    expect(generatePlates(1, 'rocky').plateSeeds).not.toEqual(generatePlates(2, 'rocky').plateSeeds);
   });
 
-  it('places `plateCount` seeds on the unit sphere', () => {
-    const f = generatePlates(7, 'rocky');
-    expect(f.count).toBe(macroParams('rocky').plateCount);
-    for (const s of f.seeds) expect(len(s)).toBeCloseTo(1, 5);
+  it('places the archetype’s continent + plate counts on the unit sphere', () => {
+    const mp = macroParams('ocean');
+    const f = generatePlates(7, 'ocean');
+    expect(f.continentCount).toBe(mp.continents);
+    expect(f.plateCount).toBe(mp.plateCount);
+    for (const s of f.contSeeds) expect(len(s)).toBeCloseTo(1, 5);
+    for (const s of f.plateSeeds) expect(len(s)).toBeCloseTo(1, 5);
   });
 
   it('plate drift is tangent to the sphere at its seed', () => {
     const f = generatePlates(99, 'lava');
-    for (let i = 0; i < f.count; i++) {
-      // motion ⟂ seed (drift lies in the local tangent plane)
-      expect(Math.abs(dot(f.seeds[i], f.motion[i]))).toBeLessThan(1e-6);
+    for (let i = 0; i < f.plateCount; i++) {
+      expect(Math.abs(dot(f.plateSeeds[i], f.plateMotion[i]))).toBeLessThan(1e-6);
     }
   });
 
-  it('never exceeds MAX_PLATES (uniform-array bound)', () => {
+  it('respects the uniform-array caps', () => {
     for (const t of ['rocky', 'ocean', 'desert', 'lava', 'ice', 'gas'] as const) {
-      expect(generatePlates(3, t).count).toBeLessThanOrEqual(MAX_PLATES);
+      const f = generatePlates(3, t);
+      expect(f.plateCount).toBeLessThanOrEqual(MAX_PLATES);
+      expect(f.continentCount).toBeLessThanOrEqual(MAX_CONTINENTS);
     }
   });
 
-  it('base elevations respect the archetype land/ocean bands', () => {
-    const mp = macroParams('ocean');
-    const f = generatePlates(55, 'ocean');
-    const lo = Math.min(mp.oceanElev[0], mp.contElev[0]);
-    const hi = Math.max(mp.oceanElev[1], mp.contElev[1]);
-    for (const e of f.elev) { expect(e).toBeGreaterThanOrEqual(lo); expect(e).toBeLessThanOrEqual(hi); }
-    // an ocean world should have both water plates and land plates
-    const hasWater = f.elev.some((e) => e <= mp.oceanElev[1]);
-    const hasLand = f.elev.some((e) => e >= mp.contElev[0]);
-    expect(hasWater && hasLand).toBe(true);
+  it('continent cap radii scale down as land coverage drops', () => {
+    // Ocean (30% land) should have smaller continents than desert (92% land).
+    const meanR = (t: 'ocean' | 'desert'): number => {
+      const f = generatePlates(11, t);
+      return f.contSize.reduce((s, r) => s + r, 0) / f.contSize.length;
+    };
+    expect(meanR('ocean')).toBeLessThan(meanR('desert'));
   });
 });
 
@@ -76,44 +74,44 @@ describe('macroHeight', () => {
     }
   });
 
-  it('is deterministic and continuous (no NaNs)', () => {
+  it('is finite everywhere (no NaNs)', () => {
     const f = generatePlates(808, 'desert');
     for (const d of dirs(200)) expect(Number.isFinite(macroHeight(f, d))).toBe(true);
   });
 
-  it('reads a plate interior as that plate’s base elevation', () => {
-    // Sampling exactly at a seed direction is deep inside that plate, so the
-    // blend collapses to its own base elevation (± the boundary uplift, ~0 here).
-    const f = generatePlates(2024, 'rocky');
-    const i = 0;
-    const h = macroHeight(f, f.seeds[i]);
-    expect(h).toBeCloseTo(f.elev[i], 2);
+  it('a continent centre is land; a far-from-any-continent point is ocean-floor', () => {
+    const f = generatePlates(2024, 'ocean');
+    // Continent centre reads as land (≥ the land plateau, minus rift possibility).
+    const atCentre = macroHeight(f, f.contSeeds[0]);
+    expect(atCentre).toBeGreaterThan(0.55);
+    // The antipode of every continent is far from all of them for a sparse ocean
+    // world — pick the sphere direction maximally distant from all continents.
+    let worst = Infinity, wd: Vec3 = [0, 1, 0];
+    for (const d of dirs(600)) {
+      const nearest = Math.max(...f.contSeeds.map((c) => dot(d, c)));
+      if (nearest < worst) { worst = nearest; wd = d; }
+    }
+    expect(macroHeight(f, wd)).toBeLessThan(0.45); // below the ocean waterline band
   });
 
-  it('varies across the sphere (continents, not a flat shell)', () => {
+  it('varies across the sphere (continents + ranges, not a flat shell)', () => {
     const f = generatePlates(2024, 'rocky');
-    const hs = dirs(300).map((d) => macroHeight(f, d));
-    const min = Math.min(...hs), max = Math.max(...hs);
-    expect(max - min).toBeGreaterThan(0.2); // real relief between ocean & land
+    const hs = dirs(400).map((d) => macroHeight(f, d));
+    expect(Math.max(...hs) - Math.min(...hs)).toBeGreaterThan(0.25);
   });
 });
 
 describe('uniform packing', () => {
-  it('packs fixed MAX_PLATES arrays, zero-padded past count', () => {
+  it('packs fixed-size arrays, zero-padded past count', () => {
     const f = generatePlates(5, 'rocky');
-    const seeds = packSeeds(f), elev = packElev(f), motion = packMotion(f);
-    expect(seeds).toHaveLength(MAX_PLATES * 3);
-    expect(elev).toHaveLength(MAX_PLATES);
-    expect(motion).toHaveLength(MAX_PLATES * 3);
-    // padding region is zero
-    for (let i = f.count; i < MAX_PLATES; i++) {
-      expect(elev[i]).toBe(0);
-      expect(seeds[i * 3]).toBe(0);
-    }
-    // first plate round-trips (float32 packing ⇒ compare with tolerance)
-    expect(seeds[0]).toBeCloseTo(f.seeds[0][0], 6);
-    expect(seeds[1]).toBeCloseTo(f.seeds[0][1], 6);
-    expect(seeds[2]).toBeCloseTo(f.seeds[0][2], 6);
-    expect(elev[0]).toBeCloseTo(f.elev[0], 6);
+    expect(packContSeeds(f)).toHaveLength(MAX_CONTINENTS * 3);
+    expect(packContSize(f)).toHaveLength(MAX_CONTINENTS);
+    expect(packPlateSeeds(f)).toHaveLength(MAX_PLATES * 3);
+    expect(packPlateMotion(f)).toHaveLength(MAX_PLATES * 3);
+    const ps = packPlateSeeds(f);
+    for (let i = f.plateCount; i < MAX_PLATES; i++) expect(ps[i * 3]).toBe(0);
+    // first plate round-trips (float32 packing ⇒ tolerance)
+    expect(ps[0]).toBeCloseTo(f.plateSeeds[0][0], 6);
+    expect(ps[1]).toBeCloseTo(f.plateSeeds[0][1], 6);
   });
 });
