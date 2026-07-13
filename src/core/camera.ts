@@ -51,17 +51,34 @@ const FOV_ANCHORS: readonly (readonly [number, number])[] = [
   [6.5, FOV_WIDE],
 ];
 
+// Planet v2 Phase 0a (?scale1to1): as the camera closes on a body the FOV keeps
+// NARROWING past FOV_NEAR into telephoto — the "human looking at a planet from
+// orbit" feel (a long lens compresses + steadies the approach) instead of the
+// default curve flattening at 32°. Reviewable now against current planets;
+// pairs with the true-1:1 radius in Phase 0b. Anchors are (log10 camDist WU, °).
+const SCALE_1TO1 = typeof location !== 'undefined'
+  && new URLSearchParams(location.search).has('scale1to1');
+const FOV_ANCHORS_CLOSE: readonly (readonly [number, number])[] = [
+  [-6.5, 12],   // ~3e-7 WU — right down at a true-scale surface: strong telephoto
+  [-3.2, 24],   // closing in on a body
+  [-1.5, 40],
+  [0.1, FOV_MID],
+  [2.3, FOV_FAR],
+  [6.5, FOV_WIDE],
+];
+
 function fovForDistance(camDist: number): number {
-  const l = Math.log10(Math.max(camDist, 1e-6));
-  if (l <= FOV_ANCHORS[0][0]) return FOV_ANCHORS[0][1];
-  for (let i = 1; i < FOV_ANCHORS.length; i++) {
-    const [l1, f1] = FOV_ANCHORS[i];
+  const anchors = SCALE_1TO1 ? FOV_ANCHORS_CLOSE : FOV_ANCHORS;
+  const l = Math.log10(Math.max(camDist, 1e-9));
+  if (l <= anchors[0][0]) return anchors[0][1];
+  for (let i = 1; i < anchors.length; i++) {
+    const [l1, f1] = anchors[i];
     if (l <= l1) {
-      const [l0, f0] = FOV_ANCHORS[i - 1];
+      const [l0, f0] = anchors[i - 1];
       return f0 + (f1 - f0) * ((l - l0) / (l1 - l0));
     }
   }
-  return FOV_ANCHORS[FOV_ANCHORS.length - 1][1];
+  return anchors[anchors.length - 1][1];
 }
 
 // Per-object focus scale: the close-in tiers (surface, low-orbit, orbit)

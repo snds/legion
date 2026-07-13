@@ -30,6 +30,22 @@ function goLab(id: LabId): void {
   location.href = url.toString();
 }
 
+/** Toggle an independent review-phase flag (coexists with normal play). */
+function togglePhase(param: string): void {
+  const url = new URL(location.href);
+  if (url.searchParams.has(param)) url.searchParams.delete(param);
+  else url.searchParams.set(param, '1');
+  location.href = url.toString();
+}
+
+/** Independent, in-game review-phase toggles (planet v2 rollout). */
+const REVIEW_PHASES: readonly { param: string; icon: string; label: string; blurb: string }[] = [
+  {
+    param: 'scale1to1', icon: '🌍', label: '1:1 Scale + FOV (Phase 0)',
+    blurb: 'Telephoto FOV that narrows as you close on a body (the "from orbit" feel). Phase 0b adds true 1:1 planet radius on this same flag.',
+  },
+];
+
 /** Mount the review-builds button + menu (+ caption when a demo is active). */
 export function initDemoMenu(): void {
   if (typeof document === 'undefined' || document.getElementById('demo-menu-btn')) return;
@@ -99,6 +115,28 @@ export function initDemoMenu(): void {
       + `${isActive ? '  <span style="color:#6aa3ff">● live</span>' : ''}`
       + `${!l.available ? '  <span style="opacity:0.7">· soon</span>' : ''}</span>`
       + `<span style="display:block;margin-top:3px;opacity:0.6;font-size:10.5px;line-height:1.4">${l.blurb}</span>`;
+    menu.appendChild(item);
+  }
+
+  // ── Review phases (independent in-game toggles) ──
+  const phaseHeading = document.createElement('div');
+  phaseHeading.textContent = 'REVIEW PHASES';
+  phaseHeading.style.cssText = 'padding:11px 8px 6px;margin-top:6px;color:#eaf0f7;font-weight:600;'
+    + 'letter-spacing:0.08em;border-top:1px solid #2a3340';
+  menu.appendChild(phaseHeading);
+
+  const params = new URLSearchParams(location.search);
+  for (const p of REVIEW_PHASES) {
+    const on = params.has(p.param);
+    const item = document.createElement('button');
+    item.style.cssText = rowBase + (on ? ';background:#1c2b3a;border-color:#3a5a80' : '');
+    item.onmouseenter = () => { if (!on) item.style.background = '#161d27'; };
+    item.onmouseleave = () => { if (!on) item.style.background = 'transparent'; };
+    item.onclick = () => togglePhase(p.param);
+    item.innerHTML =
+      `<span style="color:#eaf0f7">${p.icon} ${p.label}`
+      + `  <span style="color:${on ? '#6aa3ff' : '#7e8a9c'}">${on ? '● ON' : '○ off'}</span></span>`
+      + `<span style="display:block;margin-top:3px;opacity:0.6;font-size:10.5px;line-height:1.4">${p.blurb}</span>`;
     menu.appendChild(item);
   }
 
