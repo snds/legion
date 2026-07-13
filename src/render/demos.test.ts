@@ -3,12 +3,15 @@ import { DEMOS, demoById, HERO_BLACKHOLE_ABS, type DemoId } from './demos';
 
 describe('demos registry', () => {
   it('exposes the five shipped subsystems with unique ids', () => {
-    expect(DEMOS).toHaveLength(5);
     const ids = DEMOS.map((d) => d.id);
-    expect(new Set(ids).size).toBe(ids.length);
-    expect(ids).toEqual(
+    expect(new Set(ids).size).toBe(ids.length); // unique across all (incl. hidden)
+    // The five visible, shipped review subsystems (hidden internal demos like
+    // the 1:1 "approach" scene are excluded from the dropdown).
+    const visible = DEMOS.filter((d) => !d.hidden).map((d) => d.id);
+    expect(visible).toEqual(
       expect.arrayContaining(['star', 'planet', 'nebula', 'blackhole', 'galaxy']),
     );
+    expect(visible).toHaveLength(5);
   });
 
   it('every demo has a tier target in [0,1] and a finite focus point', () => {

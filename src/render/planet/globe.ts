@@ -43,18 +43,16 @@ export interface UpdateCtx {
   viewportH: number;
 }
 
+const NODE_RES = 16;    // grid resolution per quadtree leaf
 // Planet v2 Phase 1: subdivide by SCREEN error, deep near the camera. DETAIL is
-// the target on-screen angular size of a leaf (radians); a leaf keeps splitting
-// until it's about that size on screen. FEWER but FINER leaves (high NODE_RES,
-// larger DETAIL) both smooths the silhouette AND shrinks the LOD cracks: coarse
-// leaves still track the displaced terrain closely (less under-sampling), and
-// with fewer splits the level jumps between neighbours are smaller. MAX_LEVEL is
-// the deep-zoom cap; only camera-facing leaves reach it, so total count stays
-// bounded by screen coverage.
-const NODE_RES = 32;
-const MAX_LEVEL = 8;
-const DETAIL = 0.045;
-const MAX_LEAF_CACHE = 900; // evict beyond this so deep dives don't grow unbounded
+// the target on-screen angular size of a leaf (radians) — 0.02 ≈ 1.1°. Only
+// camera-facing leaves reach MAX_LEVEL, so total count stays bounded by screen
+// coverage. (The "missing faces" that looked like LOD cracks were actually
+// inverted winding on the ±Y cube faces — see buildNodeGeometry — not
+// under-sampling, so no need for heavy over-tessellation here.)
+const MAX_LEVEL = 9;
+const DETAIL = 0.02;
+const MAX_LEAF_CACHE = 1400; // evict beyond this so deep dives don't grow unbounded
 const RING_SEGMENTS = 96;
 const LUT_N = 128;
 
@@ -387,11 +385,28 @@ export function buildNodeGeometry(node: QuadNode, radius: number, res: number): 
       k += 3;
     }
   }
+  // Wind triangles so the FRONT face points OUTWARD on every cube face. Half the
+  // cube faces parametrise with opposite handedness, so a fixed winding faces
+  // INWARD on them → a FrontSide material culls those patches: they vanish and
+  // you see the interior through the gap (the "transparent/missing faces" bug).
+  // Decide the flip from the ACTUAL built geometry (robust to the cube→sphere
+  // warp): does the first triangle's face normal point inward from the centre?
+  const facesIn = (i0: number, i1: number, i2: number): boolean => {
+    const ax = positions[i0 * 3], ay = positions[i0 * 3 + 1], az = positions[i0 * 3 + 2];
+    const bx = positions[i1 * 3], by = positions[i1 * 3 + 1], bz = positions[i1 * 3 + 2];
+    const cx = positions[i2 * 3], cy = positions[i2 * 3 + 1], cz = positions[i2 * 3 + 2];
+    const ux = bx - ax, uy = by - ay, uz = bz - az;
+    const vx = cx - ax, vy = cy - ay, vz = cz - az;
+    const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+    return nx * (ax + bx + cx) + ny * (ay + by + cy) + nz * (az + bz + cz) < 0;
+  };
+  const flip = facesIn(0, dim, 1); // default winding of the first quad = (a, c, b)
   const indices: number[] = [];
   for (let iy = 0; iy < res; iy++) {
     for (let ix = 0; ix < res; ix++) {
       const a = iy * dim + ix, b = a + 1, c = a + dim, d = c + 1;
-      indices.push(a, c, b, b, c, d);
+      if (flip) indices.push(a, b, c, b, d, c);
+      else indices.push(a, c, b, b, c, d);
     }
   }
   const geo = new BufferGeometry();
