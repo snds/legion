@@ -11,12 +11,22 @@
 // ═══════════════════════════════════════════════════════════════════
 
 import { DEMOS, activeDemoId, demoById, DEMO_PARAM, type DemoId } from '../render/demos';
+import { LABS, activeLabId, labById, LAB_PARAM, type LabId } from './labs';
 
 /** Navigate to a demo (or back to the plain game) by rewriting ?demo= + reloading. */
 function go(id: DemoId | null): void {
   const url = new URL(location.href);
   if (id) url.searchParams.set(DEMO_PARAM, id);
   else url.searchParams.delete(DEMO_PARAM);
+  url.searchParams.delete(LAB_PARAM); // demo and lab are mutually exclusive
+  location.href = url.toString();
+}
+
+/** Navigate to a generator lab (clears any demo). */
+function goLab(id: LabId): void {
+  const url = new URL(location.href);
+  url.searchParams.set(LAB_PARAM, id);
+  url.searchParams.delete(DEMO_PARAM);
   location.href = url.toString();
 }
 
@@ -25,6 +35,8 @@ export function initDemoMenu(): void {
   if (typeof document === 'undefined' || document.getElementById('demo-menu-btn')) return;
 
   const active = activeDemoId();
+  const lab = labById(activeLabId());
+  const anyActive = !!active || !!lab;
   if (active) buildCaption(demoById(active)!.id);
 
   // ── Menu (hidden until the button is clicked) ──────────────────────
@@ -63,12 +75,39 @@ export function initDemoMenu(): void {
     menu.appendChild(item);
   }
 
-  if (active) {
+  // ── Generator labs (editable tuning views) ──
+  const labHeading = document.createElement('div');
+  labHeading.textContent = 'GENERATOR LAB';
+  labHeading.style.cssText = 'padding:11px 8px 6px;margin-top:6px;color:#eaf0f7;font-weight:600;'
+    + 'letter-spacing:0.08em;border-top:1px solid #2a3340';
+  menu.appendChild(labHeading);
+
+  for (const l of LABS) {
+    const isActive = lab?.id === l.id;
+    const item = document.createElement('button');
+    item.disabled = !l.available;
+    item.style.cssText = rowBase
+      + (isActive ? ';background:#1c2b3a;border-color:#3a5a80' : '')
+      + (!l.available ? ';opacity:0.4;cursor:default' : '');
+    if (l.available) {
+      item.onmouseenter = () => { if (!isActive) item.style.background = '#161d27'; };
+      item.onmouseleave = () => { if (!isActive) item.style.background = 'transparent'; };
+      item.onclick = () => goLab(l.id);
+    }
+    item.innerHTML =
+      `<span style="color:#eaf0f7">${l.icon} ${l.label}`
+      + `${isActive ? '  <span style="color:#6aa3ff">● live</span>' : ''}`
+      + `${!l.available ? '  <span style="opacity:0.7">· soon</span>' : ''}</span>`
+      + `<span style="display:block;margin-top:3px;opacity:0.6;font-size:10.5px;line-height:1.4">${l.blurb}</span>`;
+    menu.appendChild(item);
+  }
+
+  if (anyActive) {
     const exit = document.createElement('button');
     exit.style.cssText = rowBase + ';margin-top:6px;border-top:1px solid #2a3340;border-radius:0 0 6px 6px;color:#9fb0c3';
     exit.onmouseenter = () => { exit.style.background = '#161d27'; };
     exit.onmouseleave = () => { exit.style.background = 'transparent'; };
-    exit.textContent = '↩  Exit demo — back to the game';
+    exit.textContent = '↩  Exit — back to the game';
     exit.onclick = () => go(null);
     menu.appendChild(exit);
   }
@@ -78,16 +117,16 @@ export function initDemoMenu(): void {
   // ── Button ─────────────────────────────────────────────────────────
   const btn = document.createElement('button');
   btn.id = 'demo-menu-btn';
-  const label = active ? `🚩 ${demoById(active)!.label}` : '🚩 REVIEW BUILDS';
-  btn.textContent = label;
-  btn.title = 'Review the shipped subsystems — jump the camera to each';
+  const activeLabel = active ? demoById(active)!.label : lab ? lab.label : null;
+  btn.textContent = activeLabel ? `🚩 ${activeLabel}` : '🚩 REVIEW BUILDS';
+  btn.title = 'Review the shipped subsystems, or open a generator lab';
   btn.style.cssText = [
     'position:fixed', 'left:16px', 'bottom:16px', 'z-index:9999',
     'font-family:ui-monospace,Menlo,monospace', 'font-size:11px',
     'letter-spacing:1px', 'padding:7px 12px', 'cursor:pointer',
     'max-width:288px', 'overflow:hidden', 'text-overflow:ellipsis', 'white-space:nowrap',
-    `background:${active ? 'rgba(20,40,64,0.94)' : 'rgba(8,10,18,0.9)'}`,
-    'color:#aab8e8', `border:1px solid ${active ? 'rgba(120,170,255,0.6)' : 'rgba(120,150,220,0.4)'}`,
+    `background:${anyActive ? 'rgba(20,40,64,0.94)' : 'rgba(8,10,18,0.9)'}`,
+    'color:#aab8e8', `border:1px solid ${anyActive ? 'rgba(120,170,255,0.6)' : 'rgba(120,150,220,0.4)'}`,
     'border-radius:6px', 'box-shadow:0 4px 16px rgba(0,0,0,0.5)',
   ].join(';');
   btn.onclick = (e) => {

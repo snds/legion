@@ -99,6 +99,8 @@ import { COSMIC_OBJECTS } from './data/cosmic-objects';
 import { LY_TO_WU, KPC_TO_WU, SOL_GAL_PC, SYSTEM_TIER_SCALE } from './core/metrics';
 import { PlanetGlobes, showcaseSystem } from './render/planet';
 import { activeDemoId, demoById, HERO_BLACKHOLE_ABS } from './render/demos';
+import { activeLabId } from './ui/labs';
+import { createPlanetLab, type PlanetLabHandle } from './render/planet/planet-lab';
 import { initDemoMenu } from './ui/demo-menu';
 import { PlanetState, Identity, EntityType, BobState, Personality, StarSystem } from './core/components';
 
@@ -534,6 +536,24 @@ async function boot(): Promise<void> {
     planetGlobes.mount(showcaseSystem(), layers.local);
   }
 
+  // Generator Lab (?lab=planet): a row of the six archetype worlds + a control
+  // panel that tunes their canonical presets live (src/render/planet/planet-lab).
+  // Mounted into the same local tier; hides the curated system + suppresses the
+  // star so the archetypes read cleanly under the lab's own fixed key light.
+  let planetLab: PlanetLabHandle | null = null;
+  if (activeLabId() === 'planet') {
+    planetLab = createPlanetLab(layers.local);
+    // Clean room: the curated system + lab globes share layers.local, so hide
+    // every local child that isn't a lab globe (star, planets, moons, orbits).
+    for (const child of layers.local.children) {
+      if (child.userData?.type !== 'planet-globe') child.visible = false;
+    }
+    camCtrl.trackObject(null);
+    Game.data.zoomLevel = planetLab.framingZoom;
+    Game.data.targetZoom = planetLab.framingZoom;
+    Game.data.camFocusTarget = { x: 0, y: 0, z: 0 }; // archetype row is centred on the local origin
+  }
+
   // One deterministic simulation tick.
   function stepSim(dt: number): void {
     const tc = Game.getTimeSpeed().tc;
@@ -763,7 +783,9 @@ async function boot(): Promise<void> {
     // active star it REPLACES the legacy sun mesh (hides the sun-system
     // subgroup); the legacy updater runs only as a fallback when no procedural
     // star is installed (e.g. no local system).
-    if (!updateSystemStar(getActiveSystemHandle()?.groups, frameTime, camera, Game.data.camDist, Game.getTimeSpeed().tc)) {
+    // Suppressed in the planet lab (the archetype row uses its own key light).
+    if (!planetLab
+      && !updateSystemStar(getActiveSystemHandle()?.groups, frameTime, camera, Game.data.camDist, Game.getTimeSpeed().tc)) {
       updateSunSystem(renderCtx.renderer, frameTime);
     }
 
@@ -785,10 +807,21 @@ async function boot(): Promise<void> {
       });
     }
 
+    // 9b-ter. Planet Lab archetype row (?lab=planet) — same LOD/lighting pump,
+    // but a fixed key light (rootWorld) so the archetypes are lit identically.
+    if (planetLab) {
+      camera.updateMatrixWorld();
+      layers.local.updateWorldMatrix(true, true);
+      planetLab.update({
+        camera, rootWorld: _localRoot, dt: frameTime,
+        fovYRad: (camera.fov * Math.PI) / 180, viewportH: window.innerHeight,
+      });
+    }
+
     // 9c. Lens flare update (star position → screen space)
     // Star world position = the local-tier root (the sun sits at the local-tier
     // origin), so the flare stays glued to the sun once the floating origin floats.
-    lensFlare.update(_localRoot, camera, frameTime);
+    if (!planetLab) lensFlare.update(_localRoot, camera, frameTime);
 
     // 9d. Galaxy animations (dashed lines, chevron pulses) — bounded shader clock
     updateGalaxyAnimations(shaderTime);

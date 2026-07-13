@@ -86,9 +86,17 @@ interface Preset {
 
 const G0: RGB = [0, 0, 0];
 
+/** The archetype types, in a stable display order (matches the lab + catalog). */
+export const PLANET_TYPES: readonly PlanetVisualType[] = ['rocky', 'ocean', 'desert', 'lava', 'ice', 'gas'];
+
+export type { Preset };
+
 // Archetype baselines. Colours are linear RGB (roughly sRGB²·² pre-corrected by
-// eye — the shader outputs linear and the pipeline tonemaps).
-const PRESETS: Record<PlanetVisualType, Preset> = {
+// eye — the shader outputs linear and the pipeline tonemaps). MUTABLE so the
+// Generator Lab can tune the canonical guideposts live; derivePlanetParams reads
+// them each build, so a tuned archetype propagates to every generated body of
+// that type. snapshotPresets() serialises the current set for Copy-JSON / Save.
+export const PRESETS: Record<PlanetVisualType, Preset> = {
   rocky: {
     ramp: [
       { at: 0.0, color: [0.20, 0.17, 0.14] },
@@ -164,6 +172,23 @@ const PRESETS: Record<PlanetVisualType, Preset> = {
     emissive: G0, emissiveStrength: 0,
   },
 };
+
+/** Deep clone of the current archetype presets — the Copy-JSON / Save payload. */
+export function snapshotPresets(): Record<PlanetVisualType, Preset> {
+  return JSON.parse(JSON.stringify(PRESETS)) as Record<PlanetVisualType, Preset>;
+}
+
+/** Overlay a (partial) preset set onto the live PRESETS — committed defaults from
+ *  planet-defaults.json, or an interim lab tuning. Mutates in place so existing
+ *  references (derivePlanetParams closures) see the change on the next build. */
+export function applyPresetOverrides(
+  overrides: Partial<Record<PlanetVisualType, Partial<Preset>>>,
+): void {
+  for (const type of Object.keys(overrides) as PlanetVisualType[]) {
+    const o = overrides[type];
+    if (o) Object.assign(PRESETS[type], o);
+  }
+}
 
 function jitterRGB(c: RGB, rng: () => number, amt: number): RGB {
   return [
