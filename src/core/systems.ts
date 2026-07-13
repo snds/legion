@@ -179,9 +179,12 @@ function renderSyncSystem(w: IWorld, ctx: FrameContext): void {
       Position.z[eid],
     );
 
-    // Apply visual scale to local entities (planets, star, bobs)
+    // Apply visual scale to local entities (planets, star, bobs). Under
+    // ?scale1to1 (planet v2 Phase 0b) a per-body trueScaleFactor brings planets/
+    // moons to true 1:1 radius; absent (default game, star, bobs) it's 1 → no change.
     if (localEids.has(eid)) {
-      obj.scale.setScalar(visualScale);
+      const tsf = (obj.userData.trueScaleFactor as number | undefined) ?? 1;
+      obj.scale.setScalar(visualScale * tsf);
     }
   }
 }

@@ -20,6 +20,7 @@ import { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import { createIcon, createLabel, type IconShape } from './icons';
+import { trueScaleFactor, planetTypeRepRadiusEarth, MOON_REP_R_EARTH } from './planet-scale';
 import type { CosmicObject } from '../data/cosmic-objects';
 import { AU_TO_WU } from '../core/metrics';
 import { createSunSystem, type SunSystem } from './sun';
@@ -220,6 +221,13 @@ export function createPlanetMesh(
   group.userData.hasAtmosphere = hasAtmosphere;
   group.userData.planetTypeId = planetType;
   group.userData.bodyRadius = size;  // for camera per-object scale
+  // Phase 0b (?scale1to1): render at TRUE 1:1 radius. Store the per-body factor
+  // (renderSyncSystem folds it into the visual scale) and correct bodyRadius so
+  // the camera focus/approach frames the true size, not the authored one.
+  {
+    const tsf = trueScaleFactor(size, planetTypeRepRadiusEarth(planetType));
+    if (tsf !== 1) { group.userData.trueScaleFactor = tsf; group.userData.bodyRadius = size * tsf; }
+  }
 
   const segments = VP.get('planetSegments');
   const c = new Color(color);
@@ -713,6 +721,10 @@ export function createMoonMesh(
   group.userData.type = 'moon';
   group.userData.name = name;
   group.userData.bodyRadius = size;
+  {
+    const tsf = trueScaleFactor(size, MOON_REP_R_EARTH); // Phase 0b: true 1:1 radius
+    if (tsf !== 1) { group.userData.trueScaleFactor = tsf; group.userData.bodyRadius = size * tsf; }
+  }
 
   const segments = 32;
   const c = new Color(color);
