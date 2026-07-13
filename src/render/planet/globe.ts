@@ -268,7 +268,13 @@ export class PlanetGlobe {
     for (const n of nodes) {
       let geo = this.nodeGeoCache.get(nodeId(n));
       if (!geo) { geo = buildNodeGeometry(n, this.radius, NODE_RES); this.nodeGeoCache.set(nodeId(n), geo); }
-      this.surfaceGroup.add(new Mesh(geo, this.surfaceMat));
+      const leaf = new Mesh(geo, this.surfaceMat);
+      // The leaf's undisplaced bounding sphere doesn't include the vertex-shader
+      // displacement; at true scale + deep transforms that mis-cull can drop
+      // whole patches ("missing faces"). The globe as a whole is culled by its
+      // LOD stage, so per-leaf frustum culling only costs correctness here.
+      leaf.frustumCulled = false;
+      this.surfaceGroup.add(leaf);
     }
     // Evict cold cached leaves beyond the cap (never the active set).
     if (this.nodeGeoCache.size > MAX_LEAF_CACHE) {
