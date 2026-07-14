@@ -27,7 +27,7 @@ import {
 } from './cube-sphere';
 import { derivePlanetParams, type PlanetRenderParams } from './presets';
 import {
-  generatePlates, packContSeeds, packContSize, packPlateSeeds, packPlateMotion,
+  generatePlates, macroParams, packContSeeds, packContSize, packPlateSeeds, packPlateMotion,
 } from './plates';
 import { generateRings, densityLUT, type RingSystem } from './rings';
 import { channel, range } from './rng';
@@ -67,7 +67,7 @@ const _worldScale = new Vector3();
 
 export class PlanetGlobe {
   readonly root = new Group();
-  readonly params: PlanetRenderParams;
+  params: PlanetRenderParams; // mutable: the lab re-derives + refreshes uniforms live
   readonly rings: RingSystem | null;
 
   private readonly tiltGroup = new Group();
@@ -150,6 +150,7 @@ export class PlanetGlobe {
         uRidged: { value: p.ridged }, uWarp: { value: p.warp },
         uDisplacement: { value: p.displacement },
         uNormalStrength: { value: p.displacement * 12 },
+        uDetailScale: { value: macroParams(p.type).detailScale },
         ...this.plateUniforms(),
         uSunDir: { value: new Vector3(0, 0, 1) },
         uSeaLevel: { value: p.seaLevel },
@@ -184,6 +185,54 @@ export class PlanetGlobe {
       uPlateUplift: { value: f.uplift },
       uRangeWidth: { value: f.rangeWidth },
     };
+  }
+
+  /**
+   * Re-derive params (presets + live MACRO) and push them into the EXISTING
+   * materials' uniforms — no teardown, no shader recompile. Terrain + tectonics
+   * are entirely GPU-uniform-driven and the cube-sphere geometry is independent
+   * of them, so the lab can tune live without rebuilding the globe (which caused
+   * a vanish + a heavy per-fragment recompile on every slider tick). Structural
+   * changes (planet type, atmosphere on/off) still need a full rebuild.
+   */
+  refreshParams(): void {
+    this.params = derivePlanetParams(this.planet);
+    const p = this.params;
+    if (this.surfaceMat) {
+      const u = this.surfaceMat.uniforms;
+      (u.uNoiseSeed.value as Vector3).set(...p.noiseSeed);
+      u.uRidged.value = p.ridged; u.uWarp.value = p.warp;
+      u.uDisplacement.value = p.displacement;
+      u.uNormalStrength.value = p.displacement * 12;
+      u.uDetailScale.value = macroParams(p.type).detailScale;
+      u.uSeaLevel.value = p.seaLevel;
+      (u.uOceanShallow.value as Vector3).set(...p.oceanShallow);
+      (u.uOceanDeep.value as Vector3).set(...p.oceanDeep);
+      u.uLatitudeIce.value = p.latitudeIce; u.uMoisture.value = p.moisture; u.uRoughness.value = p.roughness;
+      (u.uEmissive.value as Vector3).set(...p.emissive); u.uEmissiveStrength.value = p.emissiveStrength;
+      u.uNightLights.value = p.nightLights; u.uTerminator.value = p.hasAtmosphere ? 0.1 : 0.03;
+      (u.uAtmosTint.value as Vector3).set(...p.atmosphere);
+      const at = u.uRampAt.value as Float32Array;
+      const col = u.uRampColor.value as Float32Array;
+      at.fill(0); col.fill(0);
+      p.ramp.slice(0, 6).forEach((s, i) => { at[i] = s.at; col[i * 3] = s.color[0]; col[i * 3 + 1] = s.color[1]; col[i * 3 + 2] = s.color[2]; });
+      u.uRampCount.value = Math.min(6, p.ramp.length);
+      Object.assign(u, this.plateUniforms());
+    }
+    if (this.giantMesh) {
+      const u = (this.giantMesh.material as ShaderMaterial).uniforms;
+      (u.uBandA.value as Vector3).set(...p.bandColorA);
+      (u.uBandB.value as Vector3).set(...p.bandColorB);
+      u.uBandCount.value = Math.max(1, p.bandCount);
+      u.uTurbulence.value = p.bandTurbulence;
+    }
+    if (this.atmosMesh) {
+      const u = (this.atmosMesh.material as ShaderMaterial).uniforms;
+      (u.uColor.value as Vector3).set(...p.atmosphere);
+      u.uDensity.value = p.atmosphereDensity;
+    }
+    const c = this.baseColor();
+    (this.impostorMat.uniforms.uColor.value as Vector3).set(c[0], c[1], c[2]);
   }
 
   private buildGiantMat(): ShaderMaterial {

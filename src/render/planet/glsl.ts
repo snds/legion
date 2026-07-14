@@ -138,6 +138,7 @@ float plateMacro(vec3 dir){
  *  so continent/plate edges dissolve into organic coastlines rather than cells.
  *  Returns a normalised height in [0,1]. Requires GLSL_FBM + GLSL_PLATES. */
 export const GLSL_TERRAIN = /* glsl */ `
+uniform float uDetailScale;   // detail-noise frequency multiplier (fine vs lumpy)
 float terrainHeight(vec3 dir){
   vec3 p = dir * 1.7 + uNoiseSeed;
   // Two-scale domain warp: a broad warp bends coastlines, a finer warp crenellates
@@ -146,14 +147,14 @@ float terrainHeight(vec3 dir){
   vec3 wHi = vec3(fbm(p * 2.3 + 5.1), fbm(p * 2.3 + 27.9), fbm(p * 2.3 + 61.4));
   vec3 wdir = normalize(dir + uWarp * (0.55 * wLo + 0.18 * wHi));
   float macro = plateMacro(wdir);
-  // Mid/high-frequency detail, warped too, centred so it roughens relief without
-  // shifting the mean (keeps sea level meaningful). Ridged near ranges reads as
-  // rugged peaks; fBm elsewhere as rolling terrain.
-  vec3 dp = p + uWarp * wLo;
+  // Detail sampled at a HIGHER base frequency (uDetailScale) so relief is fine and
+  // planet-scale, not lumpy; centred so it roughens without shifting the mean
+  // (keeps sea level meaningful). Ridged near ranges = rugged peaks; fBm elsewhere.
+  vec3 dp = (p + uWarp * wLo) * uDetailScale;
   float hills = fbm(dp) * 0.5 + 0.5;
   float mts   = clamp(ridged(dp), 0.0, 1.0);
   float detail = mix(hills, mts, uRidged);
-  float relief = mix(0.22, 0.42, smoothstep(0.55, 0.85, macro)); // rougher up high
+  float relief = mix(0.16, 0.32, smoothstep(0.55, 0.85, macro)); // rougher up high
   return clamp(macro + (detail - 0.5) * relief, 0.0, 1.0);
 }
 `;

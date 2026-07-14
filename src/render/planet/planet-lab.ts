@@ -132,6 +132,7 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
       ],
     }, {
       title: 'Terrain', key: 'lab-terrain', ctrls: [
+        macroSlider('Detail scale', 'detailScale', 1, 8, 0.1),
         slider('Displacement', 'displacement', 0, 0.12, 0.001),
         slider('Ridged', 'ridged', 0, 1, 0.01),
         slider('Roughness', 'roughness', 0, 1, 0.01),
@@ -160,7 +161,10 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
     title: '🪐 PLANET LAB',
     collapseKey: 'legion.planetLab.collapse',
     sections,
-    onChange: () => { build(selected); },   // rebuild the edited archetype
+    // Push edits into the live globe's uniforms — no teardown/recompile (that
+    // vanished the planet + recompiled the heavy per-fragment shader per tick).
+    // Structural changes (type switch, atmosphere on/off) use Rebuild / Reseed.
+    onChange: () => { globes.get(selected)?.refreshParams(); },
     actions: [
       { label: 'Rebuild', onClick: () => { build(selected); return 'Rebuilt ✓'; } },
       { label: 'Reseed', onClick: () => { seeds[selected] = (seeds[selected] * 1103515245 + 12345) & 0x7fffffff; build(selected); } },
