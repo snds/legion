@@ -26,23 +26,34 @@ ${GLSL_PLATES}
 ${GLSL_TERRAIN}
 uniform float uDisplacement;
 uniform float uUseBake;          // 1 = sample the baked master, 0 = live analytic
-uniform sampler2D uHeightFace;   // this leaf's baked cube face (bound per draw)
-uniform vec3  uFaceU;            // object-space face axes → world tangents for bake
-uniform vec3  uFaceV;
+uniform sampler2D uHeightAtlas;  // stacked 6-face height atlas (res × 6·res)
+uniform float uHeightRes;
 attribute vec2 faceUV;           // face-local (u,v) ∈ [0,1] → bake lookup
+attribute float aFace;           // cube face index 0..5 (constant per leaf)
+attribute vec3 aFaceU;           // object-space face axes → world tangents for bake
+attribute vec3 aFaceV;
 varying vec3  vWorldPos;
 varying vec3  vDir;      // undisplaced object-space unit direction
 varying vec3  vWN;       // world-space sphere normal (smooth)
 varying vec3  vWT;       // world-space tangent   (basis for relief perturbation)
 varying vec3  vWB;       // world-space bitangent
 varying vec2  vFaceUV;
+varying float vFace;
 varying vec3  vFU;       // world-space face-U tangent (bake normal basis)
 varying vec3  vFV;
+
+// Sample the stacked atlas for face f at face-local fuv. Clamp a half-texel
+// inside the face's row band so linear filtering never bleeds across faces.
+float atlasHeight(sampler2D atlas, float f, vec2 fuv, float res){
+  vec2 c = clamp(fuv, 0.5 / res, 1.0 - 0.5 / res);
+  return texture2D(atlas, vec2(c.x, (f + c.y) / 6.0)).r;
+}
 
 void main(){
   vec3 dir = normalize(position);
   vDir = dir;
   vFaceUV = faceUV;
+  vFace = aFace;
   // Smooth world-space TBN basis (interpolates cleanly — the crisp relief comes
   // from the per-fragment gradient, this only orients it). WORLD-space via
   // modelMatrix (object→world); normalMatrix is object→VIEW here (headlight).
@@ -53,10 +64,10 @@ void main(){
   vWN = normalize(m3 * dir);
   vWT = normalize(m3 * t);
   vWB = normalize(m3 * bt);
-  vFU = normalize(m3 * uFaceU);
-  vFV = normalize(m3 * uFaceV);
-  // Height: baked master (texture) or live analytic terrain.
-  float h = uUseBake > 0.5 ? texture2D(uHeightFace, faceUV).r : terrainHeight(dir);
+  vFU = normalize(m3 * aFaceU);
+  vFV = normalize(m3 * aFaceV);
+  // Height: baked master (atlas) or live analytic terrain.
+  float h = uUseBake > 0.5 ? atlasHeight(uHeightAtlas, aFace, faceUV, uHeightRes) : terrainHeight(dir);
   // Displace land radially; centre the mean so the globe keeps its radius.
   float disp = uDisplacement * (h - 0.5);
   vec3 displaced = position * (1.0 + disp);
@@ -74,8 +85,8 @@ ${GLSL_RAMP}
 uniform float uDisplacement;
 uniform float uNormalStrength; // relief-normal (bump) exaggeration
 uniform float uUseBake;
-uniform sampler2D uHeightFace; // this leaf's baked cube face
-uniform float uHeightRes;      // baked face resolution (for the normal step)
+uniform sampler2D uHeightAtlas; // stacked 6-face height atlas
+uniform float uHeightRes;       // baked face resolution (for the normal step)
 uniform vec3  uSunDir;        // world-space, surface → sun
 uniform float uSeaLevel;
 uniform vec3  uOceanShallow;
@@ -94,20 +105,26 @@ varying vec3  vWN;
 varying vec3  vWT;
 varying vec3  vWB;
 varying vec2  vFaceUV;
+varying float vFace;
 varying vec3  vFU;
 varying vec3  vFV;
+
+float atlasHeight(sampler2D atlas, float f, vec2 fuv, float res){
+  vec2 c = clamp(fuv, 0.5 / res, 1.0 - 0.5 / res);
+  return texture2D(atlas, vec2(c.x, (f + c.y) / 6.0)).r;
+}
 
 void main(){
   vec3 dir = normalize(vDir);
   float vHeight;
   vec3 N;
   if (uUseBake > 0.5) {
-    // Baked master: height + relief normal from the eroded face texture. The
-    // gradient is taken in face-UV and oriented by the world face tangents.
-    vHeight = texture2D(uHeightFace, vFaceUV).r;
+    // Baked master: height + relief normal from the eroded atlas. The gradient is
+    // taken in face-UV and oriented by the world face tangents.
+    vHeight = atlasHeight(uHeightAtlas, vFace, vFaceUV, uHeightRes);
     float e = 1.5 / uHeightRes;
-    float hu = texture2D(uHeightFace, vFaceUV + vec2(e, 0.0)).r;
-    float hv = texture2D(uHeightFace, vFaceUV + vec2(0.0, e)).r;
+    float hu = atlasHeight(uHeightAtlas, vFace, vFaceUV + vec2(e, 0.0), uHeightRes);
+    float hv = atlasHeight(uHeightAtlas, vFace, vFaceUV + vec2(0.0, e), uHeightRes);
     vec3 grad = ((hu - vHeight) / e) * normalize(vFU) + ((hv - vHeight) / e) * normalize(vFV);
     N = normalize(vWN - uNormalStrength * grad);
   } else {

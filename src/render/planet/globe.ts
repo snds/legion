@@ -85,7 +85,7 @@ export class PlanetGlobe {
   private readonly spinRate: number;
   private activeIds = '';
   private readonly nodeGeoCache = new Map<string, BufferGeometry>();
-  private faceTextures: DataTexture[] | null = null; // 6 eroded height faces (baked)
+  private atlasTex: DataTexture | null = null; // stacked 6-face eroded height atlas
   private useBake = false;
   private seed: number; // mutable so the lab can reseed IN PLACE (keep the root)
 
@@ -157,12 +157,11 @@ export class PlanetGlobe {
         uDisplacement: { value: p.displacement },
         uNormalStrength: { value: macroParams(p.type).normalStrength },
         uDetailScale: { value: macroParams(p.type).detailScale },
-        // Baked master (Phase 3): per-leaf face texture bound in onBeforeRender.
+        // Baked master (Phase 3): ONE stacked atlas (res × 6·res); the leaf picks
+        // its face row via the per-vertex aFace attribute (no per-leaf uniforms).
         uUseBake: { value: 0 },
-        uHeightFace: { value: null as Texture | null },
+        uHeightAtlas: { value: null as Texture | null },
         uHeightRes: { value: 256 },
-        uFaceU: { value: new Vector3() },
-        uFaceV: { value: new Vector3() },
         ...this.plateUniforms(),
         uSunDir: { value: new Vector3(0, 0, 1) },
         uSeaLevel: { value: p.seaLevel },
@@ -204,15 +203,19 @@ export class PlanetGlobe {
   bake(params: Partial<BakeParams> = {}): void {
     if (this.params.isGiant || !this.surfaceMat) return;
     const cube = bakeCube(this.seed, this.params.type, params);
-    this.faceTextures?.forEach((t) => t.dispose());
-    this.faceTextures = cube.faces.map((g) => {
-      const tex = new DataTexture(g as Float32Array<ArrayBuffer>, cube.res, cube.res, RedFormat, FloatType);
-      tex.minFilter = tex.magFilter = LinearFilter;
-      tex.wrapS = tex.wrapT = ClampToEdgeWrapping;
-      tex.needsUpdate = true;
-      return tex;
-    });
-    this.surfaceMat.uniforms.uHeightRes.value = cube.res;
+    const res = cube.res;
+    // Stack the 6 faces vertically into one atlas (res wide × 6·res tall); face f
+    // owns rows [f·res, (f+1)·res). The shader maps (aFace, faceUV) into it.
+    const atlas = new Float32Array(res * res * 6);
+    for (let f = 0; f < 6; f++) atlas.set(cube.faces[f], f * res * res);
+    this.atlasTex?.dispose();
+    const tex = new DataTexture(atlas as Float32Array<ArrayBuffer>, res, res * 6, RedFormat, FloatType);
+    tex.minFilter = tex.magFilter = LinearFilter;
+    tex.wrapS = tex.wrapT = ClampToEdgeWrapping;
+    tex.needsUpdate = true;
+    this.atlasTex = tex;
+    this.surfaceMat.uniforms.uHeightAtlas.value = tex;
+    this.surfaceMat.uniforms.uHeightRes.value = res;
     this.useBake = true;
     this.surfaceMat.uniforms.uUseBake.value = 1;
   }
@@ -389,16 +392,6 @@ export class PlanetGlobe {
       // whole patches ("missing faces"). The globe as a whole is culled by its
       // LOD stage, so per-leaf frustum culling only costs correctness here.
       leaf.frustumCulled = false;
-      // Per-leaf: bind THIS cube face's baked texture + face axes just before the
-      // draw (shared material, sequential draws), so the baked master samples the
-      // right face with the geometry's own (u,v) — no GL cube-map orientation.
-      const cf = CUBE_FACES[n.face];
-      leaf.onBeforeRender = (): void => {
-        const u = this.surfaceMat!.uniforms;
-        if (this.useBake && this.faceTextures) u.uHeightFace.value = this.faceTextures[n.face];
-        (u.uFaceU.value as Vector3).set(cf.axisU[0], cf.axisU[1], cf.axisU[2]);
-        (u.uFaceV.value as Vector3).set(cf.axisV[0], cf.axisV[1], cf.axisV[2]);
-      };
       this.surfaceGroup.add(leaf);
     }
     // Evict cold cached leaves beyond the cap (never the active set).
@@ -471,7 +464,7 @@ export class PlanetGlobe {
     this.root.removeFromParent();
     for (const g of this.nodeGeoCache.values()) g.dispose();
     this.nodeGeoCache.clear();
-    this.faceTextures?.forEach((t) => t.dispose());
+    this.atlasTex?.dispose();
     this.surfaceMat?.dispose();
     this.giantMesh?.geometry.dispose();
     (this.giantMesh?.material as ShaderMaterial | undefined)?.dispose();
@@ -501,7 +494,12 @@ export function buildNodeGeometry(node: QuadNode, radius: number, res: number): 
   const positions = new Float32Array(dim * dim * 3);
   const normals = new Float32Array(dim * dim * 3);
   const faceUV = new Float32Array(dim * dim * 2); // face-local (u,v) ∈ [0,1] → bake lookup
-  let k = 0, k2 = 0;
+  // Per-vertex (constant per leaf) so the baked path never depends on a shared-
+  // material per-leaf uniform — the leaf carries its own face index + axes.
+  const aFace = new Float32Array(dim * dim);
+  const aFaceU = new Float32Array(dim * dim * 3);
+  const aFaceV = new Float32Array(dim * dim * 3);
+  let k = 0, k2 = 0, k1 = 0;
   for (let iy = 0; iy <= res; iy++) {
     for (let ix = 0; ix <= res; ix++) {
       const u = node.u0 + node.size * (ix / res);
@@ -510,7 +508,10 @@ export function buildNodeGeometry(node: QuadNode, radius: number, res: number): 
       positions[k] = s[0] * radius; positions[k + 1] = s[1] * radius; positions[k + 2] = s[2] * radius;
       normals[k] = s[0]; normals[k + 1] = s[1]; normals[k + 2] = s[2];
       faceUV[k2] = u; faceUV[k2 + 1] = v;
-      k += 3; k2 += 2;
+      aFace[k1] = node.face;
+      aFaceU[k] = face.axisU[0]; aFaceU[k + 1] = face.axisU[1]; aFaceU[k + 2] = face.axisU[2];
+      aFaceV[k] = face.axisV[0]; aFaceV[k + 1] = face.axisV[1]; aFaceV[k + 2] = face.axisV[2];
+      k += 3; k2 += 2; k1 += 1;
     }
   }
   // Wind triangles so the FRONT face points OUTWARD on every cube face. Half the
@@ -541,6 +542,9 @@ export function buildNodeGeometry(node: QuadNode, radius: number, res: number): 
   geo.setAttribute('position', new BufferAttribute(positions, 3));
   geo.setAttribute('normal', new BufferAttribute(normals, 3));
   geo.setAttribute('faceUV', new BufferAttribute(faceUV, 2));
+  geo.setAttribute('aFace', new BufferAttribute(aFace, 1));
+  geo.setAttribute('aFaceU', new BufferAttribute(aFaceU, 3));
+  geo.setAttribute('aFaceV', new BufferAttribute(aFaceV, 3));
   geo.setIndex(indices);
   return geo;
 }
