@@ -191,8 +191,15 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
     // Structural changes (type switch, atmosphere on/off) use Rebuild / Reseed.
     onChange: () => { globes.get(selected)?.refreshParams(); },
     actions: [
-      { label: 'Rebuild', onClick: () => { build(selected); applyBake(); return 'Rebuilt ✓'; } },
-      { label: 'Reseed', onClick: () => { seeds[selected] = (seeds[selected] * 1103515245 + 12345) & 0x7fffffff; build(selected); } },
+      // In-place (no teardown): recreating the globe strands a camera that is
+      // tracking it → the planet vanishes. Refresh uniforms + re-bake on the SAME
+      // root instead. (build() is only used for the initial mount.)
+      { label: 'Rebuild', onClick: () => { globes.get(selected)?.refreshParams(); applyBake(); return 'Rebuilt ✓'; } },
+      { label: 'Reseed', onClick: () => {
+        seeds[selected] = (seeds[selected] * 1103515245 + 12345) & 0x7fffffff;
+        globes.get(selected)?.reseed(seeds[selected]);
+        applyBake();
+      } },
       { label: 'Copy JSON → presets.ts', minor: true, onClick: () => {
         const json = JSON.stringify(snapshotPresets(), null, 2);
         return navigator.clipboard?.writeText(json).then(() => 'Copied ✓', () => 'Copy failed') ?? 'No clipboard';

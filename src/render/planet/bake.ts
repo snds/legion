@@ -140,11 +140,11 @@ export function hydraulicErode(g: Float32Array, res: number, seed: number, p: Ba
       if (dh > 0 || sediment > cap) {
         // uphill or over capacity → deposit
         const amt = dh > 0 ? Math.min(dh, sediment) : (sediment - cap) * deposit;
-        depositAt(g, res, x - dx, y - dy, amt);
+        splat(g, res, x - dx, y - dy, amt);
         sediment -= amt;
       } else {
         const amt = Math.min((cap - sediment) * erode, -dh);
-        erodeAt(g, res, x - dx, y - dy, amt);
+        splat(g, res, x - dx, y - dy, -amt);
         sediment += amt;
       }
       speed = Math.sqrt(Math.max(0, speed * speed + dh * -gravity));
@@ -154,15 +154,25 @@ export function hydraulicErode(g: Float32Array, res: number, seed: number, p: Ba
   }
 }
 
-function depositAt(g: Float32Array, res: number, x: number, y: number, amt: number): void {
-  const xi = Math.min(res - 1, Math.max(0, Math.floor(x)));
-  const yi = Math.min(res - 1, Math.max(0, Math.floor(y)));
-  g[yi * res + xi] = Math.min(1, g[yi * res + xi] + amt);
-}
-function erodeAt(g: Float32Array, res: number, x: number, y: number, amt: number): void {
-  const xi = Math.min(res - 1, Math.max(0, Math.floor(x)));
-  const yi = Math.min(res - 1, Math.max(0, Math.floor(y)));
-  g[yi * res + xi] = Math.max(0, g[yi * res + xi] - amt);
+/** Border texels left untouched by erosion so face edges keep the CONTINUOUS
+ *  analytic master value (macroHeight is a function of direction, so it matches
+ *  across cube-face seams — only per-face erosion would break it). */
+const EDGE_MARGIN = 3;
+
+/** Add `amt` (may be negative) bilinearly across the 4 nearest texels — spreads
+ *  sediment so it never piles into single-texel spikes, and skips the border. */
+function splat(g: Float32Array, res: number, x: number, y: number, amt: number): void {
+  const x0 = Math.floor(x), y0 = Math.floor(y);
+  const fx = x - x0, fy = y - y0;
+  const add = (xi: number, yi: number, w: number): void => {
+    if (xi < EDGE_MARGIN || yi < EDGE_MARGIN || xi >= res - EDGE_MARGIN || yi >= res - EDGE_MARGIN) return;
+    const i = yi * res + xi;
+    g[i] = Math.min(1, Math.max(0, g[i] + amt * w));
+  };
+  add(x0, y0, (1 - fx) * (1 - fy));
+  add(x0 + 1, y0, fx * (1 - fy));
+  add(x0, y0 + 1, (1 - fx) * fy);
+  add(x0 + 1, y0 + 1, fx * fy);
 }
 
 /**
@@ -172,8 +182,8 @@ function erodeAt(g: Float32Array, res: number, x: number, y: number, amt: number
  */
 export function thermalErode(g: Float32Array, res: number, p: BakeParams): void {
   for (let it = 0; it < p.thermalIters; it++) {
-    for (let y = 1; y < res - 1; y++) {
-      for (let x = 1; x < res - 1; x++) {
+    for (let y = EDGE_MARGIN; y < res - EDGE_MARGIN; y++) {
+      for (let x = EDGE_MARGIN; x < res - EDGE_MARGIN; x++) {
         const i = y * res + x, h = g[i];
         let lowest = i, drop = 0;
         for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1]] as const) {

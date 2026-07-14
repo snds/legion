@@ -87,12 +87,14 @@ export class PlanetGlobe {
   private readonly nodeGeoCache = new Map<string, BufferGeometry>();
   private faceTextures: DataTexture[] | null = null; // 6 eroded height faces (baked)
   private useBake = false;
+  private seed: number; // mutable so the lab can reseed IN PLACE (keep the root)
 
   constructor(
     readonly planet: GenPlanet,
     /** Visual radius in local-tier AUTHORING units (before SYSTEM_TIER_SCALE). */
     readonly radius: number,
   ) {
+    this.seed = planet.seed;
     this.params = derivePlanetParams(planet);
     this.root.name = `globe-${planet.seed}`;
     this.root.userData.type = 'planet-globe';
@@ -184,7 +186,7 @@ export class PlanetGlobe {
   /** Tectonic uniforms for the surface material — the continent + plate macro
    *  structure, deterministic from the body seed (plates.ts). */
   private plateUniforms(): Record<string, { value: unknown }> {
-    const f = generatePlates(this.planet.seed, this.params.type);
+    const f = generatePlates(this.seed, this.params.type);
     return {
       uContCount: { value: f.continentCount },
       uContSeed: { value: packContSeeds(f) },
@@ -201,7 +203,7 @@ export class PlanetGlobe {
    *  demand (the lab's Bake / Rebuild), never per-frame. Disposes any prior set. */
   bake(params: Partial<BakeParams> = {}): void {
     if (this.params.isGiant || !this.surfaceMat) return;
-    const cube = bakeCube(this.planet.seed, this.params.type, params);
+    const cube = bakeCube(this.seed, this.params.type, params);
     this.faceTextures?.forEach((t) => t.dispose());
     this.faceTextures = cube.faces.map((g) => {
       const tex = new DataTexture(g as Float32Array<ArrayBuffer>, cube.res, cube.res, RedFormat, FloatType);
@@ -222,6 +224,14 @@ export class PlanetGlobe {
     if (this.surfaceMat) this.surfaceMat.uniforms.uUseBake.value = 0;
   }
 
+  /** Re-jitter the terrain from a new seed IN PLACE (keeps the root, so a camera
+   *  tracking this globe isn't stranded). Geometry is seed-independent, so only
+   *  the shader params + plate field change; callers re-apply the bake if active. */
+  reseed(seed: number): void {
+    this.seed = seed >>> 0;
+    this.refreshParams();
+  }
+
   /**
    * Re-derive params (presets + live MACRO) and push them into the EXISTING
    * materials' uniforms — no teardown, no shader recompile. Terrain + tectonics
@@ -231,7 +241,7 @@ export class PlanetGlobe {
    * changes (planet type, atmosphere on/off) still need a full rebuild.
    */
   refreshParams(): void {
-    this.params = derivePlanetParams(this.planet);
+    this.params = derivePlanetParams({ ...this.planet, seed: this.seed });
     const p = this.params;
     if (this.surfaceMat) {
       const u = this.surfaceMat.uniforms;
