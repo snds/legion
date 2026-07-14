@@ -561,6 +561,7 @@ async function boot(): Promise<void> {
   let approach: ApproachPlanet | null = null;
   if (activeDemoId() === 'approach') {
     approach = createApproachPlanet(layers.local);
+    (window as unknown as { __approach?: ApproachPlanet }).__approach = approach; // debug
     for (const child of layers.local.children) {
       if (child.userData?.type !== 'planet-globe') child.visible = false;
     }

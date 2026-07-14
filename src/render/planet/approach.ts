@@ -23,6 +23,8 @@ const EARTH: GenPlanet = {
 export interface ApproachPlanet {
   /** The world to track (camera frames its true radius). */
   readonly root: Object3D;
+  /** The globe (exposed for debugging — e.g. toggling the baked master). */
+  readonly globe: PlanetGlobe;
   update(ctx: { camera: UpdateCtx['camera']; rootWorld: Vector3; dt: number; fovYRad: number; viewportH: number }): void;
   dispose(): void;
 }
@@ -36,6 +38,7 @@ export function createApproachPlanet(parent: Object3D): ApproachPlanet {
   const _sun = new Vector3();
   return {
     root: globe.root,
+    globe,
     update(ctx) {
       _sun.copy(FIXED_SUN).multiplyScalar(1e4).add(ctx.rootWorld);
       globe.update({ camera: ctx.camera, sunWorldPos: _sun, dt: ctx.dt, fovYRad: ctx.fovYRad, viewportH: ctx.viewportH });

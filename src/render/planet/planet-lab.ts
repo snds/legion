@@ -19,6 +19,7 @@ import { PlanetGlobe, type UpdateCtx } from './globe';
 import { visualRadius } from './index';
 import { PRESETS, PLANET_TYPES, snapshotPresets, type Preset } from './presets';
 import { MACRO, type MacroParams } from './plates';
+import { DEFAULT_BAKE, type BakeParams } from './bake';
 import { mountControlPanel, type ControlPanelHandle, type LabCtrl, type LabSection } from '../../ui/control-panel';
 
 const SPACING = 5.5;              // authoring units between globe centres
@@ -66,6 +67,14 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
 
   let selected: PlanetVisualType = 'ocean';
 
+  // Bake (Phase 3): per-type on/off + shared erosion params. Baking is heavy, so
+  // it runs only on toggle-on and the Rebuild action — never on a slider tick.
+  const baked: Record<PlanetVisualType, boolean> = {
+    rocky: false, ocean: false, desert: false, lava: false, ice: false, gas: false,
+  };
+  const bakeParams: BakeParams = { ...DEFAULT_BAKE };
+  const applyBake = (): void => { globes.get(selected)?.setBaked(baked[selected], bakeParams); };
+
   // ── Control schema (dynamic: editable fields differ surface vs giant) ──
   // Index the preset object (cast once) so the get/set close over a plain field.
   const P = (): Record<string, number | boolean | number[]> =>
@@ -91,6 +100,12 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
     label, min, max, step,
     get: () => M()[key],
     set: (v) => { M()[key] = v; },
+  });
+  // Bake-param sliders edit the shared erosion config (applied on Re-bake / Rebuild).
+  const bakeSlider = (label: string, key: keyof BakeParams, min: number, max: number, step: number): LabCtrl => ({
+    label, min, max, step,
+    get: () => bakeParams[key],
+    set: (v) => { bakeParams[key] = v; },
   });
 
   const sections = (): LabSection[] => {
@@ -142,6 +157,15 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
         slider('Polar ice', 'latitudeIce', 0, 1, 0.01),
       ],
     }, {
+      title: 'Master bake (erosion)', key: 'lab-bake', ctrls: [
+        { kind: 'toggle', label: 'Baked + eroded', get: () => baked[selected], set: (v) => { baked[selected] = v; applyBake(); } },
+        bakeSlider('Bake res', 'res', 64, 512, 32),
+        bakeSlider('Droplets', 'droplets', 0, 120000, 5000),
+        bakeSlider('Erosion', 'erosionStrength', 0, 1, 0.01),
+        bakeSlider('Talus', 'talus', 0.001, 0.02, 0.001),
+        bakeSlider('Thermal iters', 'thermalIters', 0, 20, 1),
+      ],
+    }, {
       title: 'Ocean / lava', key: 'lab-liquid', ctrls: [
         color('Shallow', 'oceanShallow'),
         color('Deep', 'oceanDeep'),
@@ -167,7 +191,7 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
     // Structural changes (type switch, atmosphere on/off) use Rebuild / Reseed.
     onChange: () => { globes.get(selected)?.refreshParams(); },
     actions: [
-      { label: 'Rebuild', onClick: () => { build(selected); return 'Rebuilt ✓'; } },
+      { label: 'Rebuild', onClick: () => { build(selected); applyBake(); return 'Rebuilt ✓'; } },
       { label: 'Reseed', onClick: () => { seeds[selected] = (seeds[selected] * 1103515245 + 12345) & 0x7fffffff; build(selected); } },
       { label: 'Copy JSON → presets.ts', minor: true, onClick: () => {
         const json = JSON.stringify(snapshotPresets(), null, 2);

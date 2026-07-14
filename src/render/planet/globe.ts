@@ -18,7 +18,8 @@ import {
   Group, Mesh, BufferGeometry, BufferAttribute, ShaderMaterial,
   IcosahedronGeometry, RingGeometry, PlaneGeometry, DataTexture,
   Vector3, BackSide, DoubleSide, AdditiveBlending, RedFormat, FloatType,
-  type Object3D,
+  LinearFilter, ClampToEdgeWrapping,
+  type Object3D, type Texture,
 } from 'three';
 import type { GenPlanet } from '../../data/system-gen';
 import {
@@ -29,6 +30,7 @@ import { derivePlanetParams, type PlanetRenderParams } from './presets';
 import {
   generatePlates, macroParams, packContSeeds, packContSize, packPlateSeeds, packPlateMotion,
 } from './plates';
+import { bakeCube, type BakeParams } from './bake';
 import { generateRings, densityLUT, type RingSystem } from './rings';
 import { channel, range } from './rng';
 import { stageForPx, apparentRadiusPx, dotBrightness, LodStage } from './lod';
@@ -83,6 +85,8 @@ export class PlanetGlobe {
   private readonly spinRate: number;
   private activeIds = '';
   private readonly nodeGeoCache = new Map<string, BufferGeometry>();
+  private faceTextures: DataTexture[] | null = null; // 6 eroded height faces (baked)
+  private useBake = false;
 
   constructor(
     readonly planet: GenPlanet,
@@ -151,6 +155,12 @@ export class PlanetGlobe {
         uDisplacement: { value: p.displacement },
         uNormalStrength: { value: macroParams(p.type).normalStrength },
         uDetailScale: { value: macroParams(p.type).detailScale },
+        // Baked master (Phase 3): per-leaf face texture bound in onBeforeRender.
+        uUseBake: { value: 0 },
+        uHeightFace: { value: null as Texture | null },
+        uHeightRes: { value: 256 },
+        uFaceU: { value: new Vector3() },
+        uFaceV: { value: new Vector3() },
         ...this.plateUniforms(),
         uSunDir: { value: new Vector3(0, 0, 1) },
         uSeaLevel: { value: p.seaLevel },
@@ -185,6 +195,31 @@ export class PlanetGlobe {
       uPlateUplift: { value: f.uplift },
       uRangeWidth: { value: f.rangeWidth },
     };
+  }
+
+  /** Bake the eroded height master into 6 face textures (Phase 3). Heavy — run on
+   *  demand (the lab's Bake / Rebuild), never per-frame. Disposes any prior set. */
+  bake(params: Partial<BakeParams> = {}): void {
+    if (this.params.isGiant || !this.surfaceMat) return;
+    const cube = bakeCube(this.planet.seed, this.params.type, params);
+    this.faceTextures?.forEach((t) => t.dispose());
+    this.faceTextures = cube.faces.map((g) => {
+      const tex = new DataTexture(g as Float32Array<ArrayBuffer>, cube.res, cube.res, RedFormat, FloatType);
+      tex.minFilter = tex.magFilter = LinearFilter;
+      tex.wrapS = tex.wrapT = ClampToEdgeWrapping;
+      tex.needsUpdate = true;
+      return tex;
+    });
+    this.surfaceMat.uniforms.uHeightRes.value = cube.res;
+    this.useBake = true;
+    this.surfaceMat.uniforms.uUseBake.value = 1;
+  }
+
+  /** Toggle between the baked master and the live analytic terrain. */
+  setBaked(on: boolean, params: Partial<BakeParams> = {}): void {
+    if (on) { this.bake(params); return; }
+    this.useBake = false;
+    if (this.surfaceMat) this.surfaceMat.uniforms.uUseBake.value = 0;
   }
 
   /**
@@ -344,6 +379,16 @@ export class PlanetGlobe {
       // whole patches ("missing faces"). The globe as a whole is culled by its
       // LOD stage, so per-leaf frustum culling only costs correctness here.
       leaf.frustumCulled = false;
+      // Per-leaf: bind THIS cube face's baked texture + face axes just before the
+      // draw (shared material, sequential draws), so the baked master samples the
+      // right face with the geometry's own (u,v) — no GL cube-map orientation.
+      const cf = CUBE_FACES[n.face];
+      leaf.onBeforeRender = (): void => {
+        const u = this.surfaceMat!.uniforms;
+        if (this.useBake && this.faceTextures) u.uHeightFace.value = this.faceTextures[n.face];
+        (u.uFaceU.value as Vector3).set(cf.axisU[0], cf.axisU[1], cf.axisU[2]);
+        (u.uFaceV.value as Vector3).set(cf.axisV[0], cf.axisV[1], cf.axisV[2]);
+      };
       this.surfaceGroup.add(leaf);
     }
     // Evict cold cached leaves beyond the cap (never the active set).
@@ -416,6 +461,7 @@ export class PlanetGlobe {
     this.root.removeFromParent();
     for (const g of this.nodeGeoCache.values()) g.dispose();
     this.nodeGeoCache.clear();
+    this.faceTextures?.forEach((t) => t.dispose());
     this.surfaceMat?.dispose();
     this.giantMesh?.geometry.dispose();
     (this.giantMesh?.material as ShaderMaterial | undefined)?.dispose();
@@ -444,7 +490,8 @@ export function buildNodeGeometry(node: QuadNode, radius: number, res: number): 
   const dim = res + 1;
   const positions = new Float32Array(dim * dim * 3);
   const normals = new Float32Array(dim * dim * 3);
-  let k = 0;
+  const faceUV = new Float32Array(dim * dim * 2); // face-local (u,v) ∈ [0,1] → bake lookup
+  let k = 0, k2 = 0;
   for (let iy = 0; iy <= res; iy++) {
     for (let ix = 0; ix <= res; ix++) {
       const u = node.u0 + node.size * (ix / res);
@@ -452,7 +499,8 @@ export function buildNodeGeometry(node: QuadNode, radius: number, res: number): 
       const s = cubeToSphere(facePoint(face, u, v));
       positions[k] = s[0] * radius; positions[k + 1] = s[1] * radius; positions[k + 2] = s[2] * radius;
       normals[k] = s[0]; normals[k + 1] = s[1]; normals[k + 2] = s[2];
-      k += 3;
+      faceUV[k2] = u; faceUV[k2 + 1] = v;
+      k += 3; k2 += 2;
     }
   }
   // Wind triangles so the FRONT face points OUTWARD on every cube face. Half the
@@ -482,6 +530,7 @@ export function buildNodeGeometry(node: QuadNode, radius: number, res: number): 
   const geo = new BufferGeometry();
   geo.setAttribute('position', new BufferAttribute(positions, 3));
   geo.setAttribute('normal', new BufferAttribute(normals, 3));
+  geo.setAttribute('faceUV', new BufferAttribute(faceUV, 2));
   geo.setIndex(indices);
   return geo;
 }
