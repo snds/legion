@@ -39,9 +39,13 @@ void main(){
   vec3 up = abs(dir.y) < 0.99 ? vec3(0.0,1.0,0.0) : vec3(1.0,0.0,0.0);
   vec3 t = normalize(cross(up, dir));
   vec3 bt = cross(dir, t);
-  vWN = normalize(normalMatrix * dir);
-  vWT = normalize(normalMatrix * t);
-  vWB = normalize(normalMatrix * bt);
+  // WORLD-space basis via modelMatrix (object→world). normalMatrix is object→VIEW
+  // here, which would make the lit side track the camera (a headlight); the sun
+  // direction is world-space, so the normal must be too.
+  mat3 m3 = mat3(modelMatrix);
+  vWN = normalize(m3 * dir);
+  vWT = normalize(m3 * t);
+  vWB = normalize(m3 * bt);
   // Displace land radially; centre the mean so the globe keeps its radius.
   float h = terrainHeight(dir);
   float disp = uDisplacement * (h - 0.5);
@@ -147,7 +151,7 @@ varying vec3 vDir;
 void main(){
   vDir = normalize(position);
   vWorldPos = (modelMatrix * vec4(position, 1.0)).xyz;
-  vWorldNormal = normalize(normalMatrix * vDir);
+  vWorldNormal = normalize(mat3(modelMatrix) * vDir); // world-space (not view)
   gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
 }
 `;
@@ -203,7 +207,7 @@ varying vec3 vWorldPos;
 varying vec3 vWorldNormal;
 void main(){
   vWorldPos = (modelMatrix * vec4(position, 1.0)).xyz;
-  vWorldNormal = normalize(normalMatrix * normalize(position));
+  vWorldNormal = normalize(mat3(modelMatrix) * normalize(position)); // world-space (not view)
   gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
 }
 `;

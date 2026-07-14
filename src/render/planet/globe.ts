@@ -149,7 +149,7 @@ export class PlanetGlobe {
         uNoiseSeed: { value: new Vector3(...p.noiseSeed) },
         uRidged: { value: p.ridged }, uWarp: { value: p.warp },
         uDisplacement: { value: p.displacement },
-        uNormalStrength: { value: p.displacement * 12 },
+        uNormalStrength: { value: macroParams(p.type).normalStrength },
         uDetailScale: { value: macroParams(p.type).detailScale },
         ...this.plateUniforms(),
         uSunDir: { value: new Vector3(0, 0, 1) },
@@ -203,7 +203,7 @@ export class PlanetGlobe {
       (u.uNoiseSeed.value as Vector3).set(...p.noiseSeed);
       u.uRidged.value = p.ridged; u.uWarp.value = p.warp;
       u.uDisplacement.value = p.displacement;
-      u.uNormalStrength.value = p.displacement * 12;
+      u.uNormalStrength.value = macroParams(p.type).normalStrength;
       u.uDetailScale.value = macroParams(p.type).detailScale;
       u.uSeaLevel.value = p.seaLevel;
       (u.uOceanShallow.value as Vector3).set(...p.oceanShallow);

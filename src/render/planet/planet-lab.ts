@@ -133,6 +133,7 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
     }, {
       title: 'Terrain', key: 'lab-terrain', ctrls: [
         macroSlider('Detail scale', 'detailScale', 1, 8, 0.1),
+        macroSlider('Normal depth', 'normalStrength', 0, 0.8, 0.01),
         slider('Displacement', 'displacement', 0, 0.12, 0.001),
         slider('Ridged', 'ridged', 0, 1, 0.01),
         slider('Roughness', 'roughness', 0, 1, 0.01),

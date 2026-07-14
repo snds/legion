@@ -38,6 +38,7 @@ export interface MacroParams {
   uplift: number;         // convergent-boundary range height
   rangeWidth: number;     // how far ranges spread inland from a boundary (dot-space)
   detailScale: number;    // fBm/ridged detail frequency multiplier (fine vs lumpy)
+  normalStrength: number; // relief-normal (bump) depth — shading only, not geometry
 }
 
 /** Editable macro defaults per archetype. The lab mutates these and rebuilds; the
@@ -45,12 +46,12 @@ export interface MacroParams {
  *  land with a few continents; desert/rocky are land-dominant; lava is broken up
  *  into many plates (vigorous tectonics). Giants never call terrainHeight. */
 export const MACRO: Record<PlanetVisualType, MacroParams> = {
-  rocky:  { plateCount: 22, continents: 5, landCoverage: 0.82, sizeVariety: 0.4, uplift: 0.30, rangeWidth: 0.05, detailScale: 3.0 },
-  ocean:  { plateCount: 26, continents: 4, landCoverage: 0.30, sizeVariety: 0.35, uplift: 0.26, rangeWidth: 0.055, detailScale: 3.0 },
-  desert: { plateCount: 18, continents: 3, landCoverage: 0.92, sizeVariety: 0.5, uplift: 0.32, rangeWidth: 0.05, detailScale: 3.2 },
-  lava:   { plateCount: 30, continents: 6, landCoverage: 0.68, sizeVariety: 0.45, uplift: 0.36, rangeWidth: 0.045, detailScale: 3.5 },
-  ice:    { plateCount: 8, continents: 3, landCoverage: 0.5, sizeVariety: 0.3, uplift: 0.2, rangeWidth: 0.06, detailScale: 3.0 },
-  gas:    { plateCount: 8, continents: 3, landCoverage: 0.5, sizeVariety: 0.3, uplift: 0.2, rangeWidth: 0.06, detailScale: 3.0 },
+  rocky:  { plateCount: 22, continents: 5, landCoverage: 0.82, sizeVariety: 0.4, uplift: 0.30, rangeWidth: 0.05, detailScale: 3.0, normalStrength: 0.22 },
+  ocean:  { plateCount: 26, continents: 4, landCoverage: 0.30, sizeVariety: 0.35, uplift: 0.26, rangeWidth: 0.055, detailScale: 3.0, normalStrength: 0.20 },
+  desert: { plateCount: 18, continents: 3, landCoverage: 0.92, sizeVariety: 0.5, uplift: 0.32, rangeWidth: 0.05, detailScale: 3.2, normalStrength: 0.24 },
+  lava:   { plateCount: 30, continents: 6, landCoverage: 0.68, sizeVariety: 0.45, uplift: 0.36, rangeWidth: 0.045, detailScale: 3.5, normalStrength: 0.26 },
+  ice:    { plateCount: 8, continents: 3, landCoverage: 0.5, sizeVariety: 0.3, uplift: 0.2, rangeWidth: 0.06, detailScale: 3.0, normalStrength: 0.2 },
+  gas:    { plateCount: 8, continents: 3, landCoverage: 0.5, sizeVariety: 0.3, uplift: 0.2, rangeWidth: 0.06, detailScale: 3.0, normalStrength: 0.2 },
 };
 
 /** Base elevations (normalised) the continent field ramps between. Ranges rise
