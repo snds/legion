@@ -160,6 +160,9 @@ export class PlanetGlobe {
         uCoastAmp: { value: macroParams(p.type).coastAmp },
         uCoastFreq: { value: macroParams(p.type).coastFreq },
         uRangeVar: { value: macroParams(p.type).rangeVar },
+        uCraters: { value: macroParams(p.type).craters },
+        uCraterFreq: { value: macroParams(p.type).craterFreq },
+        uCraterDepth: { value: macroParams(p.type).craterDepth },
         // Baked master (Phase 3): ONE stacked atlas (res × 6·res); the leaf picks
         // its face row via the per-vertex aFace attribute (no per-leaf uniforms).
         uUseBake: { value: 0 },
@@ -261,6 +264,9 @@ export class PlanetGlobe {
       u.uCoastAmp.value = macroParams(p.type).coastAmp;
       u.uCoastFreq.value = macroParams(p.type).coastFreq;
       u.uRangeVar.value = macroParams(p.type).rangeVar;
+      u.uCraters.value = macroParams(p.type).craters;
+      u.uCraterFreq.value = macroParams(p.type).craterFreq;
+      u.uCraterDepth.value = macroParams(p.type).craterDepth;
       u.uSeaLevel.value = p.seaLevel;
       (u.uOceanShallow.value as Vector3).set(...p.oceanShallow);
       (u.uOceanDeep.value as Vector3).set(...p.oceanDeep);

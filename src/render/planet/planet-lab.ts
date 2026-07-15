@@ -193,6 +193,14 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
         slider('Polar ice', 'latitudeIce', 0, 1, 0.01),
       ],
     }, {
+      // Optional structural ephemera (Mercury/Mars/Venus). Impact craters ship
+      // first; canyons + scarps follow. Randomised placement + overlap.
+      title: 'Surface features', key: 'lab-surface', ctrls: [
+        macroSlider('Craters', 'craters', 0, 1, 0.01),
+        macroSlider('Crater density', 'craterFreq', 6, 32, 0.5),
+        macroSlider('Crater depth', 'craterDepth', 0, 0.2, 0.005),
+      ],
+    }, {
       title: 'Master bake (erosion)', key: 'lab-bake', ctrls: [
         { kind: 'toggle', label: 'Baked + eroded', get: () => baked[selected], set: (v) => { baked[selected] = v; applyBake(); } },
         bakeSlider('Bake res', 'res', 64, 512, 32),

@@ -184,6 +184,42 @@ float plateMacro(vec3 dir){
  *  Returns a normalised height in [0,1]. Requires GLSL_FBM + GLSL_PLATES. */
 export const GLSL_TERRAIN = /* glsl */ `
 uniform float uDetailScale;   // detail-noise frequency multiplier (fine vs lumpy)
+uniform float uCraters;       // impact-crater coverage 0..1 (0 = off) — Mercury/Mars ephemera
+uniform float uCraterFreq;    // crater cell density (also sets size scale)
+uniform float uCraterDepth;   // bowl depth / rim height
+
+// Dave Hoskins hashes (cheap, decorrelated) for crater cell placement.
+float hash13(vec3 p3){ p3 = fract(p3 * 0.1031); p3 += dot(p3, p3.zyx + 31.32); return fract((p3.x + p3.y) * p3.z); }
+vec3  hash33(vec3 p3){ p3 = fract(p3 * vec3(0.1031, 0.1030, 0.0973)); p3 += dot(p3, p3.yxz + 33.33); return fract((p3.xxy + p3.yzz) * p3.zyx); }
+
+// Overlapping impact craters: a jittered cell grid on the sphere shell. Each cell
+// may host a crater (hash gate → coverage), its centre jittered (no lattice), its
+// radius randomised (size variety). Profile = parabolic BOWL (down) + thin gaussian
+// RIM (up) + soft ejecta fade — reads as impacts, not bumps. Contributions SUM, so
+// craters overlap and deepen where they cross (basins-in-basins).
+float craterField(vec3 dir){
+  if (uCraters <= 0.0) return 0.0;
+  vec3 ip = floor(dir * uCraterFreq);
+  float h = 0.0;
+  for (int x = -1; x <= 1; x++)
+  for (int y = -1; y <= 1; y++)
+  for (int z = -1; z <= 1; z++){
+    vec3 cell = ip + vec3(float(x), float(y), float(z));
+    if (hash13(cell + 3.7) > uCraters) continue;            // sparsity ← coverage
+    vec3 j = hash33(cell + 1.9);
+    vec3 c = normalize(cell + (j - 0.5) * 1.6);              // jittered centre on the shell
+    float rad = mix(0.35, 1.9, j.x) / uCraterFreq;          // varied angular radius
+    float t = acos(clamp(dot(dir, c), -1.0, 1.0)) / rad;    // 0 centre → 1 rim
+    if (t > 1.7) continue;
+    // Mercury/Mars profile: a FLAT depressed floor that walls up to a SHARP raised
+    // rim, then ejecta fades out — reads as a crisp impact, not a soft dimple.
+    float floor = -(1.0 - smoothstep(0.55, 1.0, t));        // flat floor → 0 at rim
+    float rim   = exp(-pow((t - 1.0) * 4.5, 2.0));          // sharp rim ring at t=1
+    h += (0.95 * floor + 0.6 * rim) * rad * smoothstep(1.7, 1.02, t);
+  }
+  return h * uCraterDepth;
+}
+
 float terrainHeight(vec3 dir){
   vec3 p = dir * 1.7 + uNoiseSeed;
   // Isotropic simplex domain warp (a broad bend + a finer crenellation) so
@@ -202,7 +238,7 @@ float terrainHeight(vec3 dir){
   float mts   = clamp(ridged(dp), 0.0, 1.0);
   float detail = mix(hills, mts, uRidged);
   float relief = mix(0.16, 0.32, smoothstep(0.55, 0.85, macro)); // rougher up high
-  return clamp(macro + (detail - 0.5) * relief, 0.0, 1.0);
+  return clamp(macro + (detail - 0.5) * relief + craterField(dir), 0.0, 1.0);
 }
 `;
 
