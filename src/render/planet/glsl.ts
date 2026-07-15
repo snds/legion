@@ -208,14 +208,17 @@ float craterField(vec3 dir){
     if (hash13(cell + 3.7) > uCraters) continue;            // sparsity ← coverage
     vec3 j = hash33(cell + 1.9);
     vec3 c = normalize(cell + (j - 0.5) * 1.6);              // jittered centre on the shell
-    float rad = mix(0.35, 1.9, j.x) / uCraterFreq;          // varied angular radius
+    float sizeF = mix(0.35, 1.9, j.x);                       // crater size factor (~1)
+    float rad = sizeF / uCraterFreq;                        // varied angular radius
     float t = acos(clamp(dot(dir, c), -1.0, 1.0)) / rad;    // 0 centre → 1 rim
     if (t > 1.7) continue;
     // Mercury/Mars profile: a FLAT depressed floor that walls up to a SHARP raised
     // rim, then ejecta fades out — reads as a crisp impact, not a soft dimple.
     float floor = -(1.0 - smoothstep(0.55, 1.0, t));        // flat floor → 0 at rim
     float rim   = exp(-pow((t - 1.0) * 4.5, 2.0));          // sharp rim ring at t=1
-    h += (0.95 * floor + 0.6 * rim) * rad * smoothstep(1.7, 1.02, t);
+    // depth scales with the crater's SIZE FACTOR (~1), not the tiny angular radius
+    // (radians) — scaling by rad shrank craters ~10x below the terrain relief.
+    h += (0.95 * floor + 0.6 * rim) * sizeF * smoothstep(1.7, 1.02, t);
   }
   return h * uCraterDepth;
 }
