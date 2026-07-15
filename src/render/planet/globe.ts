@@ -157,6 +157,9 @@ export class PlanetGlobe {
         uDisplacement: { value: p.displacement },
         uNormalStrength: { value: macroParams(p.type).normalStrength },
         uDetailScale: { value: macroParams(p.type).detailScale },
+        uCoastAmp: { value: macroParams(p.type).coastAmp },
+        uCoastFreq: { value: macroParams(p.type).coastFreq },
+        uRangeVar: { value: macroParams(p.type).rangeVar },
         // Baked master (Phase 3): ONE stacked atlas (res × 6·res); the leaf picks
         // its face row via the per-vertex aFace attribute (no per-leaf uniforms).
         uUseBake: { value: 0 },
@@ -202,7 +205,9 @@ export class PlanetGlobe {
    *  demand (the lab's Bake / Rebuild), never per-frame. Disposes any prior set. */
   bake(params: Partial<BakeParams> = {}): void {
     if (this.params.isGiant || !this.surfaceMat) return;
-    const cube = bakeCube(this.seed, this.params.type, params);
+    // Warp the bake with the SAME simplex + noiseSeed the live shader uses, so a
+    // baked world's coasts/ranges land exactly where the live view drew them.
+    const cube = bakeCube(this.seed, this.params.type, params, this.params.warp, this.params.noiseSeed);
     const res = cube.res;
     // Stack the 6 faces vertically into one atlas (res wide × 6·res tall); face f
     // owns rows [f·res, (f+1)·res). The shader maps (aFace, faceUV) into it.
@@ -253,6 +258,9 @@ export class PlanetGlobe {
       u.uDisplacement.value = p.displacement;
       u.uNormalStrength.value = macroParams(p.type).normalStrength;
       u.uDetailScale.value = macroParams(p.type).detailScale;
+      u.uCoastAmp.value = macroParams(p.type).coastAmp;
+      u.uCoastFreq.value = macroParams(p.type).coastFreq;
+      u.uRangeVar.value = macroParams(p.type).rangeVar;
       u.uSeaLevel.value = p.seaLevel;
       (u.uOceanShallow.value as Vector3).set(...p.oceanShallow);
       (u.uOceanDeep.value as Vector3).set(...p.oceanDeep);

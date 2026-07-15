@@ -39,6 +39,9 @@ export interface MacroParams {
   rangeWidth: number;     // how far ranges spread inland from a boundary (dot-space)
   detailScale: number;    // fBm/ridged detail frequency multiplier (fine vs lumpy)
   normalStrength: number; // relief-normal (bump) depth — shading only, not geometry
+  coastAmp: number;       // coastline-fracture amplitude (radians the shoreline meanders)
+  coastFreq: number;      // coastline-fracture frequency (bay/peninsula scale)
+  rangeVar: number;       // along-boundary uplift variation (0 = uniform wall, 1 = broken peaks)
 }
 
 /** Editable macro defaults per archetype. The lab mutates these and rebuilds; the
@@ -46,12 +49,12 @@ export interface MacroParams {
  *  land with a few continents; desert/rocky are land-dominant; lava is broken up
  *  into many plates (vigorous tectonics). Giants never call terrainHeight. */
 export const MACRO: Record<PlanetVisualType, MacroParams> = {
-  rocky:  { plateCount: 22, continents: 5, landCoverage: 0.82, sizeVariety: 0.4, uplift: 0.30, rangeWidth: 0.05, detailScale: 3.0, normalStrength: 0.22 },
-  ocean:  { plateCount: 26, continents: 4, landCoverage: 0.30, sizeVariety: 0.35, uplift: 0.26, rangeWidth: 0.055, detailScale: 3.0, normalStrength: 0.20 },
-  desert: { plateCount: 18, continents: 3, landCoverage: 0.92, sizeVariety: 0.5, uplift: 0.32, rangeWidth: 0.05, detailScale: 3.2, normalStrength: 0.24 },
-  lava:   { plateCount: 30, continents: 6, landCoverage: 0.68, sizeVariety: 0.45, uplift: 0.36, rangeWidth: 0.045, detailScale: 3.5, normalStrength: 0.26 },
-  ice:    { plateCount: 8, continents: 3, landCoverage: 0.5, sizeVariety: 0.3, uplift: 0.2, rangeWidth: 0.06, detailScale: 3.0, normalStrength: 0.2 },
-  gas:    { plateCount: 8, continents: 3, landCoverage: 0.5, sizeVariety: 0.3, uplift: 0.2, rangeWidth: 0.06, detailScale: 3.0, normalStrength: 0.2 },
+  rocky:  { plateCount: 22, continents: 5, landCoverage: 0.82, sizeVariety: 0.4, uplift: 0.30, rangeWidth: 0.05, detailScale: 3.0, normalStrength: 0.22, coastAmp: 0.35, coastFreq: 2.2, rangeVar: 0.6 },
+  ocean:  { plateCount: 26, continents: 4, landCoverage: 0.30, sizeVariety: 0.35, uplift: 0.26, rangeWidth: 0.055, detailScale: 3.0, normalStrength: 0.20, coastAmp: 0.40, coastFreq: 2.4, rangeVar: 0.55 },
+  desert: { plateCount: 18, continents: 3, landCoverage: 0.92, sizeVariety: 0.5, uplift: 0.32, rangeWidth: 0.05, detailScale: 3.2, normalStrength: 0.24, coastAmp: 0.30, coastFreq: 2.0, rangeVar: 0.65 },
+  lava:   { plateCount: 30, continents: 6, landCoverage: 0.68, sizeVariety: 0.45, uplift: 0.36, rangeWidth: 0.045, detailScale: 3.5, normalStrength: 0.26, coastAmp: 0.38, coastFreq: 2.6, rangeVar: 0.7 },
+  ice:    { plateCount: 8, continents: 3, landCoverage: 0.5, sizeVariety: 0.3, uplift: 0.2, rangeWidth: 0.06, detailScale: 3.0, normalStrength: 0.2, coastAmp: 0.32, coastFreq: 2.2, rangeVar: 0.5 },
+  gas:    { plateCount: 8, continents: 3, landCoverage: 0.5, sizeVariety: 0.3, uplift: 0.2, rangeWidth: 0.06, detailScale: 3.0, normalStrength: 0.2, coastAmp: 0, coastFreq: 2.2, rangeVar: 0 },
 };
 
 /** Base elevations (normalised) the continent field ramps between. Ranges rise
@@ -76,6 +79,9 @@ export interface PlateField {
   // shared scalars mirrored into the shader
   uplift: number;
   rangeWidth: number;
+  coastAmp: number;
+  coastFreq: number;
+  rangeVar: number;
 }
 
 // ── vector helpers (plain arrays; no Three.js so the module stays pure) ──
@@ -148,7 +154,44 @@ export function generatePlates(seed: number, type: PlanetVisualType): PlateField
     continentCount: nCont, contSeeds, contSize,
     plateCount: nPlate, plateSeeds, plateMotion,
     uplift: mp.uplift, rangeWidth: mp.rangeWidth,
+    coastAmp: mp.coastAmp, coastFreq: mp.coastFreq, rangeVar: mp.rangeVar,
   };
+}
+
+// ── Coastline-fracture value-noise ──────────────────────────────────
+// Shared with GLSL_COAST (glsl.ts) — the SAME integer-hash value noise both
+// sides run, so a baked coast and a live coast agree (to float precision; the
+// GPU is float32, this is float64, which differs by <<1 texel — imperceptible,
+// and far smaller than the pre-existing baked/warp gap). All hashing is done in
+// unsigned 32-bit (Math.imul + >>>0) to mirror GLSL uint wraparound exactly.
+// This is a MACRO term (a function of direction, continuous across cube faces),
+// NOT fine detail — it decides WHERE the shoreline is, so it must be shared.
+function uhash(X: number, Y: number, Z: number): number {
+  let h = (Math.imul(X | 0, 374761393) + Math.imul(Y | 0, 668265263) + Math.imul(Z | 0, 1274126177)) >>> 0;
+  h = Math.imul((h ^ (h >>> 13)) >>> 0, 1274126177) >>> 0;
+  h = (h ^ (h >>> 16)) >>> 0;
+  return h / 4294967295;
+}
+function coastNoise(x: number, y: number, z: number): number {
+  const xi = Math.floor(x), yi = Math.floor(y), zi = Math.floor(z);
+  const xf = x - xi, yf = y - yi, zf = z - zi;
+  const u = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf), w = zf * zf * (3 - 2 * zf);
+  const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
+  const c = (dx: number, dy: number, dz: number): number => uhash(xi + dx, yi + dy, zi + dz);
+  return lerp(
+    lerp(lerp(c(0, 0, 0), c(1, 0, 0), u), lerp(c(0, 1, 0), c(1, 1, 0), u), v),
+    lerp(lerp(c(0, 0, 1), c(1, 0, 1), u), lerp(c(0, 1, 1), c(1, 1, 1), u), v),
+    w,
+  );
+}
+/** 4-octave fBm of the shared coast noise, centred to ~[-0.5,0.5]. */
+function coastFbm(dir: Vec3, freq: number): number {
+  let f = 0, amp = 0.5, fr = freq;
+  for (let i = 0; i < 4; i++) {
+    f += amp * coastNoise(dir[0] * fr + 19.1, dir[1] * fr + 47.7, dir[2] * fr + 83.3);
+    fr *= 2; amp *= 0.5;
+  }
+  return f - 0.47; // fBm sum mean ≈ 0.47 → roughly zero-centred
 }
 
 /**
@@ -159,11 +202,19 @@ export function generatePlates(seed: number, type: PlanetVisualType): PlateField
  * shader / bake, not here — this is the smooth master.)
  */
 export function macroHeight(f: PlateField, dir: Vec3): number {
+  // NB: the live shader passes an isotropic-simplex-warped `dir`; the bake passes
+  // it unwarped (the known baked/unbaked parity gap — fixed later with a CPU
+  // simplex port, NOT the value-noise warp that faceted the plate boundaries).
   // ── continents: base land/ocean shape ──
+  // The cap edge is FRACTURED by a shared multi-octave value-noise so the
+  // shoreline is an iso-contour of a fractal field (bays/peninsulas/near-shore
+  // islands) rather than a smooth radial disc. Without this, a cap is a circle
+  // and warp only wobbles it — the "glob" failure mode (ledger P-01/P-02/P-03).
+  const cn = coastFbm(dir, f.coastFreq) * f.coastAmp; // radians the coast meanders
   let base = OCEAN_FLOOR;
   for (let i = 0; i < f.continentCount; i++) {
     const d = Math.acos(Math.min(1, Math.max(-1, dot(dir, f.contSeeds[i]))));
-    const land = smoothstep(f.contSize[i], f.contSize[i] * 0.5, d); // 1 inside → 0 at cap edge
+    const land = smoothstep(f.contSize[i], f.contSize[i] * 0.5, d + cn); // fractal shoreline
     base = Math.max(base, OCEAN_FLOOR + (LAND_HEIGHT - OCEAN_FLOOR) * land);
   }
 
@@ -177,8 +228,12 @@ export function macroHeight(f: PlateField, dir: Vec3): number {
   const range01 = Math.exp(-(d1 - d2) / f.rangeWidth); // 1 at boundary → 0 inland
   const axis = norm(sub(f.plateSeeds[i2], f.plateSeeds[i1]));
   const conv = dot(f.plateMotion[i1], axis) - dot(f.plateMotion[i2], axis); // >0 converging
+  // P-04: vary uplift ALONG the boundary (higher-freq shared noise) so ranges
+  // break into peaks and rise/fall along their length instead of a uniform wall.
+  // Mean-preserving (rv≈1 on average) so archetype uplift stays calibrated.
+  const rv = Math.min(2, Math.max(0.1, 1 + f.rangeVar * (2 * coastFbm(dir, 5.5))));
   // convergent → mountains (full uplift); divergent → shallower rift
-  base += range01 * conv * f.uplift * (conv > 0 ? 1 : 0.5);
+  base += range01 * conv * f.uplift * (conv > 0 ? 1 : 0.5) * rv;
 
   return Math.min(1, Math.max(0, base));
 }

@@ -143,7 +143,10 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
         macroSlider('Size variety', 'sizeVariety', 0, 1, 0.01),
         macroSlider('Range uplift', 'uplift', 0, 0.6, 0.01),
         macroSlider('Range width', 'rangeWidth', 0.02, 0.2, 0.005),
+        macroSlider('Range variation', 'rangeVar', 0, 1, 0.01),
         slider('Terrain warp', 'warp', 0, 1.5, 0.01),
+        macroSlider('Coastline rough', 'coastAmp', 0, 0.8, 0.01),
+        macroSlider('Coastline scale', 'coastFreq', 0.5, 6, 0.1),
       ],
     }, {
       title: 'Terrain', key: 'lab-terrain', ctrls: [
@@ -225,6 +228,12 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
       globes.clear();
       panel.destroy();
     },
+  };
+  // Dev hook (matches the __cam/__VP dev globals): bake the selected globe with
+  // light, erosion-free params to A/B the baked/unbaked MACRO parity (simplex.ts).
+  (window as unknown as { __labBake?: (on: boolean) => void }).__labBake = (on: boolean) => {
+    baked[selected] = on;
+    globes.get(selected)?.setBaked(on, on ? { res: 128, droplets: 0, thermalIters: 0 } : bakeParams);
   };
   return handle;
 }

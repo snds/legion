@@ -102,17 +102,59 @@ uniform vec3  uPlateSeed[MAX_PLATES];      // unit plate-centre directions
 uniform vec3  uPlateMotion[MAX_PLATES];    // per-plate tangent drift
 uniform float uPlateUplift;                // convergent-range height gain
 uniform float uRangeWidth;                 // inland spread of ranges (dot-space)
+uniform float uCoastAmp;                    // coastline-fracture amplitude (radians)
+uniform float uCoastFreq;                   // coastline-fracture frequency (bay scale)
+uniform float uRangeVar;                    // along-boundary uplift variation (broken peaks)
 
 const float OCEAN_FLOOR = 0.20;
 const float LAND_HEIGHT  = 0.68;
 
+// Shared coastline value-noise — MUST match coastFbm() in plates.ts (CPU) so a
+// baked coast and a live coast agree. uint hashing mirrors the CPU Math.imul/>>>
+// exactly (integer-identical; only the final float division differs by float32
+// rounding, <<1 texel). A MACRO term — a function of direction, continuous across
+// cube faces — so it decides WHERE the shoreline is, shared by both paths.
+float uhashf(int X, int Y, int Z){
+  uint h = uint(X)*374761393u + uint(Y)*668265263u + uint(Z)*1274126177u;
+  h = (h ^ (h >> 13u)) * 1274126177u;
+  h = h ^ (h >> 16u);
+  return float(h) / 4294967295.0;
+}
+float coastNoise(vec3 p){
+  vec3 i = floor(p), f = p - i;
+  vec3 u = f * f * (3.0 - 2.0 * f);
+  ivec3 b = ivec3(i);
+  float c000 = uhashf(b.x,   b.y,   b.z),   c100 = uhashf(b.x+1, b.y,   b.z);
+  float c010 = uhashf(b.x,   b.y+1, b.z),   c110 = uhashf(b.x+1, b.y+1, b.z);
+  float c001 = uhashf(b.x,   b.y,   b.z+1), c101 = uhashf(b.x+1, b.y,   b.z+1);
+  float c011 = uhashf(b.x,   b.y+1, b.z+1), c111 = uhashf(b.x+1, b.y+1, b.z+1);
+  return mix(mix(mix(c000,c100,u.x), mix(c010,c110,u.x), u.y),
+             mix(mix(c001,c101,u.x), mix(c011,c111,u.x), u.y), u.z);
+}
+float coastFbm(vec3 dir, float freq){
+  float f = 0.0, amp = 0.5, fr = freq;
+  for (int i = 0; i < 4; i++){
+    f += amp * coastNoise(vec3(dir.x*fr + 19.1, dir.y*fr + 47.7, dir.z*fr + 83.3));
+    fr *= 2.0; amp *= 0.5;
+  }
+  return f - 0.47; // roughly zero-centred (fBm sum mean ≈ 0.47)
+}
+
 float plateMacro(vec3 dir){
+  // NB: dir arrives already domain-warped by terrainHeight (live) — the warp is
+  // isotropic simplex there. The bake path currently samples this unwarped (the
+  // known baked/unbaked parity gap; the fix is a CPU simplex port, not the
+  // anisotropic value-noise warp that reintroduced faceted plate creases).
   // ── continents: base land/ocean shape ──
+  // The cap edge is FRACTURED by the shared coast noise so the shoreline is a
+  // fractal iso-contour (bays/peninsulas/near-shore islands), not a smooth disc
+  // that warp only wobbles — the "glob" failure mode (ledger P-01/P-02/P-03).
+  float cn = coastFbm(dir, uCoastFreq) * uCoastAmp; // radians the coast meanders
   float base = OCEAN_FLOOR;
   for (int i = 0; i < MAX_CONTINENTS; i++){
     if (i >= uContCount) break;
     float d = acos(clamp(dot(dir, uContSeed[i]), -1.0, 1.0));
-    float land = smoothstep(uContSize[i], uContSize[i] * 0.5, d); // 1 inside → 0 at edge
+    float land = smoothstep(uContSize[i], uContSize[i] * 0.5, d + cn); // fractal shoreline
     base = max(base, OCEAN_FLOOR + (LAND_HEIGHT - OCEAN_FLOOR) * land);
   }
   // ── plates: nearest two → boundary landform (range / rift) ──
@@ -128,7 +170,10 @@ float plateMacro(vec3 dir){
   float range = exp(-(d1 - d2) / uRangeWidth);   // 1 at boundary → 0 inland
   vec3 axis = normalize(s2 - s1);
   float conv = dot(m1, axis) - dot(m2, axis);     // >0 converging
-  base += range * conv * uPlateUplift * (conv > 0.0 ? 1.0 : 0.5);
+  // P-04: vary uplift ALONG the boundary so ranges break into peaks / rise-fall
+  // along their length, not a uniform wall. Mean-preserving (rv ≈ 1 average).
+  float rv = clamp(1.0 + uRangeVar * (2.0 * coastFbm(dir, 5.5)), 0.1, 2.0);
+  base += range * conv * uPlateUplift * (conv > 0.0 ? 1.0 : 0.5) * rv;
   return clamp(base, 0.0, 1.0);
 }
 `;
@@ -141,8 +186,10 @@ export const GLSL_TERRAIN = /* glsl */ `
 uniform float uDetailScale;   // detail-noise frequency multiplier (fine vs lumpy)
 float terrainHeight(vec3 dir){
   vec3 p = dir * 1.7 + uNoiseSeed;
-  // Two-scale domain warp: a broad warp bends coastlines, a finer warp crenellates
-  // them. uWarp (Orogen "Terrain Warp") scales both — strong enough to break cells.
+  // Isotropic simplex domain warp (a broad bend + a finer crenellation) so
+  // continent/plate edges dissolve into organic coastlines rather than straight
+  // Voronoi cells. (Sharing THIS warp with the CPU bake for baked/unbaked parity
+  // needs a CPU simplex port — a follow-up; value noise here is anisotropic.)
   vec3 wLo = vec3(fbm(p * 0.6 + 11.3), fbm(p * 0.6 + 47.7), fbm(p * 0.6 + 83.1));
   vec3 wHi = vec3(fbm(p * 2.3 + 5.1), fbm(p * 2.3 + 27.9), fbm(p * 2.3 + 61.4));
   vec3 wdir = normalize(dir + uWarp * (0.55 * wLo + 0.18 * wHi));

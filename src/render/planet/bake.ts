@@ -15,6 +15,7 @@
 import type { PlanetVisualType } from '../../data/system-gen';
 import { CUBE_FACES, facePoint, cubeToSphere, type Vec3 } from './cube-sphere';
 import { generatePlates, macroHeight, type PlateField } from './plates';
+import { warpDir } from './simplex';
 import { seedFrom, mulberry32 } from './rng';
 
 // ── CPU value-noise fBm (detail on top of the macro master) ──
@@ -45,8 +46,11 @@ function fbmC(x: number, y: number, z: number, octaves: number): number {
 }
 
 /** Full analytic master height at a unit direction (macro tectonics + detail). */
-export function sampleMaster(field: PlateField, dir: Vec3, detailScale: number, detailAmp: number): number {
-  const h = macroHeight(field, dir);
+export function sampleMaster(field: PlateField, dir: Vec3, detailScale: number, detailAmp: number, warp = 0, seed: Vec3 = [0, 0, 0]): number {
+  // Warp the MACRO lookup with the SAME isotropic simplex the live shader uses
+  // (baked/unbaked parity). Detail below stays on the raw dir — it's shader-only
+  // fine relief and needn't match (erosion reworks it anyway).
+  const h = macroHeight(field, warpDir(dir, warp, seed));
   const d = fbmC(dir[0] * 1.7 * detailScale + 11.3, dir[1] * 1.7 * detailScale + 47.7, dir[2] * 1.7 * detailScale + 83.1, 5);
   return Math.min(1, Math.max(0, h + (d - 0.5) * detailAmp));
 }
@@ -79,7 +83,7 @@ function faceDir(faceId: number, u: number, v: number): Vec3 {
 }
 
 /** Sample the analytic master onto all six cube faces (pre-erosion). */
-export function bakeFaces(field: PlateField, p: BakeParams): Float32Array[] {
+export function bakeFaces(field: PlateField, p: BakeParams, warp = 0, seed: Vec3 = [0, 0, 0]): Float32Array[] {
   const { res } = p;
   const faces: Float32Array[] = [];
   for (let f = 0; f < 6; f++) {
@@ -88,7 +92,7 @@ export function bakeFaces(field: PlateField, p: BakeParams): Float32Array[] {
       const v = (j + 0.5) / res;
       for (let i = 0; i < res; i++) {
         const u = (i + 0.5) / res;
-        grid[j * res + i] = sampleMaster(field, faceDir(f, u, v), p.detailScale, p.detailAmp);
+        grid[j * res + i] = sampleMaster(field, faceDir(f, u, v), p.detailScale, p.detailAmp, warp, seed);
       }
     }
     faces.push(grid);
@@ -201,10 +205,10 @@ export function thermalErode(g: Float32Array, res: number, p: BakeParams): void 
 }
 
 /** Full bake: sample the master, then erode each face (thermal then hydraulic). */
-export function bakeCube(seed: number, type: PlanetVisualType, params: Partial<BakeParams> = {}): BakedCube {
+export function bakeCube(seed: number, type: PlanetVisualType, params: Partial<BakeParams> = {}, warp = 0, noiseSeed: Vec3 = [0, 0, 0]): BakedCube {
   const p: BakeParams = { ...DEFAULT_BAKE, ...params };
   const field = generatePlates(seed, type);
-  const faces = bakeFaces(field, p);
+  const faces = bakeFaces(field, p, warp, noiseSeed);
   faces.forEach((g, f) => {
     thermalErode(g, p.res, p);
     hydraulicErode(g, p.res, (seedFrom('erode') ^ (seed >>> 0) ^ (f * 2654435761)) >>> 0, p);
