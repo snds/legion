@@ -208,7 +208,12 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
         return navigator.clipboard?.writeText(json).then(() => 'Copied ✓', () => 'Copy failed') ?? 'No clipboard';
       } },
     ],
-  }, { anchor: 'right:16px;top:64px' });
+  }, {
+    // A flyout on the single LAB button (bottom-right), with the shared shell's
+    // docked header (collapse-all) + docked footer. One lab surface per context.
+    anchor: 'right:16px;bottom:64px',
+    toggle: { label: '🪐 LAB', title: 'Planet Lab — archetype tuning' },
+  });
 
   const _root = new Vector3();
   const _sun = new Vector3();

@@ -77,7 +77,20 @@ export interface ControlPanelHandle {
   refresh(): void;
   /** Re-sync input values/labels to the current get() results (no re-render). */
   sync(): void;
+  /** Swap the ENTIRE schema (title + sections + actions + collapseKey) — the
+   *  context switch for the unified lab flyout (galaxy → planet → black hole …). */
+  setContext(schema: LabSchema): void;
+  /** Show / hide the flyout (no-op if it has no toggle button). */
+  setOpen(open: boolean): void;
+  isOpen(): boolean;
   destroy(): void;
+}
+
+export interface ControlPanelOpts {
+  anchor?: string;
+  /** When set, the panel is a flyout: it starts hidden and a toggle button is
+   *  mounted (bottom-right) that shows/hides it. This is the single LAB button. */
+  toggle?: { label: string; title?: string };
 }
 
 const linToHex = (c: readonly [number, number, number]): string => {
@@ -96,36 +109,55 @@ const hexToLin = (hex: string): [number, number, number] => {
 /** Mount a control panel driven by `schema` at a fixed screen anchor. */
 export function mountControlPanel(
   schema: LabSchema,
-  opts: { anchor?: string } = {},
+  opts: ControlPanelOpts = {},
 ): ControlPanelHandle {
+  // Mutable so setContext() can swap the whole lab context in-place.
+  let activeSchema = schema;
+
   const panel = document.createElement('div');
   panel.className = 'gen-lab-panel';
+  // Flex COLUMN so the header docks to the top and the footer docks to the
+  // bottom while only the middle (body) scrolls — the footer never scrolls away.
   panel.style.cssText = [
     'position:fixed', opts.anchor ?? 'right:16px;top:64px', 'z-index:9998',
-    'width:250px', 'max-height:calc(100vh - 96px)', 'overflow:auto',
-    'padding:10px 12px', 'background:rgba(12,15,20,0.95)',
+    'width:250px', 'max-height:calc(100vh - 96px)',
+    'display:flex', 'flex-direction:column',
+    'background:rgba(12,15,20,0.95)',
     'border:1px solid #2a3340', 'border-radius:8px', 'color:#cfd8e3',
     'font:12px/1.5 ui-monospace,SFMono-Regular,monospace', 'letter-spacing:0.02em',
     'user-select:none', 'box-shadow:0 8px 32px rgba(0,0,0,0.6)',
   ].join(';');
 
+  // ── Docked header: title + collapse-all glyph ──
   const title = document.createElement('div');
-  title.style.cssText = 'position:sticky;top:0;z-index:2;margin:-10px -12px 6px;padding:9px 12px 7px;'
-    + 'background:rgba(12,15,20,0.98);border-bottom:1px solid #2a3340;font-weight:600;'
-    + 'letter-spacing:0.08em;color:#eaf0f7';
-  title.textContent = schema.title;
+  title.style.cssText = 'flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;gap:8px;'
+    + 'padding:9px 12px 7px;background:rgba(12,15,20,0.98);border-bottom:1px solid #2a3340;'
+    + 'border-radius:8px 8px 0 0;font-weight:600;letter-spacing:0.08em;color:#eaf0f7';
+  const titleLabel = document.createElement('span');
+  titleLabel.textContent = activeSchema.title;
+  const collapseAll = document.createElement('span');
+  collapseAll.title = 'Collapse / expand all sections';
+  collapseAll.style.cssText = 'cursor:pointer;font-weight:400;color:#9fb0c3;font-size:13px;line-height:1;'
+    + 'padding:2px 5px;border-radius:4px;user-select:none';
+  title.append(titleLabel, collapseAll);
   panel.appendChild(title);
 
-  const collapsed = new Set<string>((() => {
-    try { return JSON.parse(localStorage.getItem(schema.collapseKey) ?? '[]') as string[]; } catch { return []; }
-  })());
+  let collapsed = new Set<string>();
+  const loadCollapse = (): void => {
+    try { collapsed = new Set(JSON.parse(localStorage.getItem(activeSchema.collapseKey) ?? '[]') as string[]); }
+    catch { collapsed = new Set(); }
+  };
+  loadCollapse();
   const persistCollapse = (): void => {
-    try { localStorage.setItem(schema.collapseKey, JSON.stringify([...collapsed])); } catch { /* ignore */ }
+    try { localStorage.setItem(activeSchema.collapseKey, JSON.stringify([...collapsed])); } catch { /* ignore */ }
   };
 
+  // Body scrolls; header/footer stay docked (flex-none).
   const body = document.createElement('div');
+  body.style.cssText = 'flex:1 1 auto;overflow-y:auto;overflow-x:hidden;padding:0 12px 4px;min-height:0';
   panel.appendChild(body);
   const footer = document.createElement('div');
+  footer.style.cssText = 'flex:0 0 auto';
   panel.appendChild(footer);
 
   const syncers: Array<() => void> = [];
@@ -136,7 +168,7 @@ export function mountControlPanel(
     return `${s}${c.unit ?? ''}`;
   };
 
-  const changed = (): void => { schema.onChange?.(); };
+  const changed = (): void => { activeSchema.onChange?.(); };
 
   const addSlider = (host: HTMLElement, c: SliderCtrl): void => {
     const row = document.createElement('div');
@@ -199,11 +231,19 @@ export function mountControlPanel(
     syncers.push(sync);
   };
 
+  const sectionKeys: string[] = [];
+  const updateCollapseAllGlyph = (): void => {
+    const allClosed = sectionKeys.length > 0 && sectionKeys.every((k) => collapsed.has(k));
+    collapseAll.textContent = allClosed ? '⊞' : '⊟';
+  };
+
   const renderSections = (): void => {
     body.innerHTML = '';
     syncers.length = 0;
-    const sections = typeof schema.sections === 'function' ? schema.sections() : schema.sections;
+    sectionKeys.length = 0;
+    const sections = typeof activeSchema.sections === 'function' ? activeSchema.sections() : activeSchema.sections;
     for (const sec of sections) {
+      sectionKeys.push(sec.key);
       const header = document.createElement('div');
       header.style.cssText = 'margin-top:9px;padding-top:6px;border-top:1px solid #222b36;cursor:pointer;'
         + 'display:flex;justify-content:space-between;color:#9fb0c3;font-size:11px;letter-spacing:0.06em';
@@ -218,6 +258,7 @@ export function mountControlPanel(
         setOpen(open);
         if (open) collapsed.delete(sec.key); else collapsed.add(sec.key);
         persistCollapse();
+        updateCollapseAllGlyph();
       });
       body.append(header, secBody);
       for (const c of sec.ctrls) {
@@ -227,13 +268,26 @@ export function mountControlPanel(
         else addSlider(secBody, c as SliderCtrl);
       }
     }
+    updateCollapseAllGlyph();
   };
+
+  // Collapse-all toggle: if anything is open, close everything; else open all.
+  collapseAll.addEventListener('click', () => {
+    const anyOpen = sectionKeys.some((k) => !collapsed.has(k));
+    if (anyOpen) sectionKeys.forEach((k) => collapsed.add(k));
+    else collapsed.clear();
+    persistCollapse();
+    renderSections();
+  });
 
   const renderFooter = (): void => {
     footer.innerHTML = '';
-    if (!schema.actions?.length) return;
-    footer.style.cssText = 'margin-top:11px;border-top:1px solid #2a3340;padding-top:8px;display:flex;flex-wrap:wrap;gap:5px';
-    for (const a of schema.actions) {
+    if (!activeSchema.actions?.length) { footer.style.cssText = 'flex:0 0 auto'; return; }
+    // Docked at the bottom of the flyout — its own opaque strip so buttons stay
+    // reachable while the body scrolls.
+    footer.style.cssText = 'flex:0 0 auto;border-top:1px solid #2a3340;padding:8px 12px;'
+      + 'background:rgba(12,15,20,0.98);border-radius:0 0 8px 8px;display:flex;flex-wrap:wrap;gap:5px';
+    for (const a of activeSchema.actions) {
       const b = document.createElement('button');
       b.textContent = a.label;
       b.style.cssText = `flex:${a.minor ? '1 1 100%' : '1'};padding:6px 2px;background:#1c2530;color:#cfd8e3;`
@@ -255,11 +309,40 @@ export function mountControlPanel(
   renderFooter();
   document.body.appendChild(panel);
 
+  // ── Optional flyout toggle button (the single LAB button) ──
+  let btn: HTMLButtonElement | null = null;
+  if (opts.toggle) {
+    panel.style.display = 'none';
+    btn = document.createElement('button');
+    btn.className = 'gen-lab-toggle';
+    btn.textContent = opts.toggle.label;
+    if (opts.toggle.title) btn.title = opts.toggle.title;
+    btn.style.cssText = [
+      'position:fixed', 'right:16px', 'bottom:16px', 'z-index:9999',
+      'font:11px/1 ui-monospace,Menlo,monospace', 'letter-spacing:1px', 'padding:7px 12px',
+      'cursor:pointer', 'background:rgba(8,10,18,0.9)', 'color:#aab8e8',
+      'border:1px solid rgba(120,150,220,0.4)', 'border-radius:6px',
+      'box-shadow:0 4px 16px rgba(0,0,0,0.5)',
+    ].join(';');
+    btn.addEventListener('click', () => setOpen(panel.style.display === 'none'));
+    document.body.appendChild(btn);
+  }
+  function setOpen(open: boolean): void { panel.style.display = open ? 'flex' : 'none'; }
+
   const sync = (): void => { for (const s of syncers) s(); };
   return {
     el: panel,
     refresh: () => { renderSections(); renderFooter(); },
     sync,
-    destroy: () => { panel.remove(); },
+    setContext: (next: LabSchema) => {
+      activeSchema = next;
+      titleLabel.textContent = next.title;
+      loadCollapse();          // per-context collapse state
+      renderSections();
+      renderFooter();
+    },
+    setOpen,
+    isOpen: () => panel.style.display !== 'none',
+    destroy: () => { panel.remove(); btn?.remove(); },
   };
 }

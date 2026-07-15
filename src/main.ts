@@ -289,8 +289,9 @@ async function boot(): Promise<void> {
   setCatalogPicking(worldExtras.catalogSystems);
 
   // Galaxy LAB panel — the in-game tuning surface, driven by the physical galaxy's control schema. Null under
-  // ?proto-buildout (no physical galaxy) → the panel/button simply don't mount.
-  initGalaxyLabPanel(worldExtras.physGalaxy?.controls ?? null);
+  // ?proto-buildout (no physical galaxy) → the panel/button simply don't mount. Also suppressed while a ?lab=<id>
+  // generator lab is active, so that context owns the single LAB flyout (one lab surface per context).
+  initGalaxyLabPanel(activeLabId() ? null : (worldExtras.physGalaxy?.controls ?? null));
 
   // Review-builds selector — the "🚩 REVIEW BUILDS" dropdown (bottom-left) that
   // jumps the camera to each shipped subsystem via ?demo=<id> (src/ui/demo-menu.ts).
