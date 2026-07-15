@@ -35,6 +35,16 @@ export interface InfoCtrl {
   label: string;
   get(): string;
 }
+/** A segmented example picker — a row of highlighted buttons for choosing WHICH
+ *  single example a "gallery" lab shows in isolation (planet archetype, star
+ *  spectral type, nebula kind…). Reusable across every generator lab. */
+export interface PickerCtrl {
+  kind: 'picker';
+  label?: string;
+  options: readonly { value: string; label: string; icon?: string }[];
+  get(): string;
+  set(v: string): void;
+}
 export interface ToggleCtrl {
   kind: 'toggle';
   label: string;
@@ -55,7 +65,7 @@ export interface ColorCtrl {
   get(): readonly [number, number, number];
   set(v: [number, number, number]): void;
 }
-export type LabCtrl = SliderCtrl | ToggleCtrl | SelectCtrl | ColorCtrl | InfoCtrl;
+export type LabCtrl = SliderCtrl | ToggleCtrl | SelectCtrl | ColorCtrl | InfoCtrl | PickerCtrl;
 
 export interface LabSection {
   title: string;
@@ -198,6 +208,38 @@ export function mountControlPanel(
     syncers.push(sync);
   };
 
+  const addPicker = (host: HTMLElement, c: PickerCtrl): void => {
+    if (c.label) {
+      const l = document.createElement('div');
+      l.style.cssText = 'margin-top:6px;color:#9fb0c3;font-size:11px';
+      l.textContent = c.label;
+      host.appendChild(l);
+    }
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'margin-top:5px;display:flex;flex-wrap:wrap;gap:4px';
+    const btns: Array<{ b: HTMLButtonElement; v: string }> = [];
+    const paint = (): void => {
+      const cur = c.get();
+      for (const { b, v } of btns) {
+        const on = v === cur;
+        b.style.background = on ? '#26405c' : '#1c2530';
+        b.style.borderColor = on ? '#5a86b8' : '#34404e';
+        b.style.color = on ? '#eaf0f7' : '#cfd8e3';
+      }
+    };
+    for (const o of c.options) {
+      const b = document.createElement('button');
+      b.textContent = o.icon ? `${o.icon} ${o.label}` : o.label;
+      b.style.cssText = 'flex:1 1 auto;padding:5px 6px;border:1px solid #34404e;border-radius:5px;'
+        + 'background:#1c2530;color:#cfd8e3;font:inherit;font-size:10.5px;cursor:pointer;white-space:nowrap';
+      b.addEventListener('click', () => { c.set(o.value); paint(); changed(); });
+      wrap.appendChild(b); btns.push({ b, v: o.value });
+    }
+    paint();
+    host.appendChild(wrap);
+    syncers.push(paint);
+  };
+
   const addInfo = (host: HTMLElement, c: InfoCtrl): void => {
     const row = document.createElement('div');
     row.style.cssText = 'margin-top:6px;display:flex;justify-content:space-between;align-items:center';
@@ -289,6 +331,7 @@ export function mountControlPanel(
         else if ('kind' in c && c.kind === 'select') addSelect(secBody, c);
         else if ('kind' in c && c.kind === 'color') addColor(secBody, c);
         else if ('kind' in c && c.kind === 'info') addInfo(secBody, c);
+        else if ('kind' in c && c.kind === 'picker') addPicker(secBody, c);
         else addSlider(secBody, c as SliderCtrl);
       }
     }

@@ -13,7 +13,7 @@
 // the row, and pumps update() each frame.
 // ═══════════════════════════════════════════════════════════════════
 
-import { Vector3, Vector2, Raycaster, type Object3D, type Camera } from 'three';
+import { Vector3, type Object3D } from 'three';
 import type { GenPlanet, PlanetVisualType } from '../../data/system-gen';
 import { PlanetGlobe, type UpdateCtx } from './globe';
 import { visualRadius } from './index';
@@ -22,7 +22,6 @@ import { MACRO, type MacroParams } from './plates';
 import { DEFAULT_BAKE, type BakeParams } from './bake';
 import { mountControlPanel, type ControlPanelHandle, type LabCtrl, type LabSection } from '../../ui/control-panel';
 
-const SPACING = 5.5;              // authoring units between globe centres
 const FIXED_SUN_DIR = new Vector3(0.6, 0.35, 0.72).normalize(); // even, flattering light
 
 /** Representative example body per archetype (radius/insolation drive the look). */
@@ -43,28 +42,12 @@ export interface PlanetLabHandle {
   dispose(): void;
 }
 
-/** Build the planet lab into `parent` (the system-tier local group). `camera` is
- *  the real scene camera — used to raycast click-to-select against the globes. */
-export function createPlanetLab(parent: Object3D, camera: Camera): PlanetLabHandle {
+/** Build the planet lab into `parent` (the system-tier local group). */
+export function createPlanetLab(parent: Object3D): PlanetLabHandle {
   const seeds: Record<PlanetVisualType, number> = {
     rocky: 1001, ocean: 2002, desert: 3003, lava: 4004, ice: 5005, gas: 6006,
   };
   const globes = new Map<PlanetVisualType, PlanetGlobe>();
-  const posX = new Map<PlanetVisualType, number>();
-
-  const mid = (PLANET_TYPES.length - 1) / 2;
-  PLANET_TYPES.forEach((type, i) => { posX.set(type, (i - mid) * SPACING); });
-
-  const build = (type: PlanetVisualType): void => {
-    const old = globes.get(type);
-    if (old) { parent.remove(old.root); old.dispose(); }
-    const planet: GenPlanet = { ...EXEMPLARS[type], seed: seeds[type] };
-    const globe = new PlanetGlobe(planet, visualRadius(planet));
-    globe.root.position.set(posX.get(type)!, 0, 0);
-    globe.root.userData.labType = type; // click-to-select hit-testing tag
-    parent.add(globe.root);
-    globes.set(type, globe);
-  };
 
   let selected: PlanetVisualType = 'ocean';
 
@@ -74,6 +57,28 @@ export function createPlanetLab(parent: Object3D, camera: Camera): PlanetLabHand
     rocky: false, ocean: false, desert: false, lava: false, ice: false, gas: false,
   };
   const bakeParams: BakeParams = { ...DEFAULT_BAKE };
+
+  // ── Single-example gallery view ──────────────────────────────────────
+  // Only the SELECTED archetype is built + mounted, centred at the origin and
+  // normalised to a consistent display size so every world frames identically in
+  // isolation. Switching disposes the old globe and builds the new on demand —
+  // cheaper than the old 6-globe row, and the pattern the star / nebula labs reuse.
+  const LAB_VIEW_R = visualRadius({ ...EXEMPLARS.ocean, seed: 0 }) * 3; // reference display size (fills the isolated frame)
+  const build = (type: PlanetVisualType): void => {
+    const planet: GenPlanet = { ...EXEMPLARS[type], seed: seeds[type] };
+    const globe = new PlanetGlobe(planet, visualRadius(planet));
+    globe.root.position.set(0, 0, 0);
+    globe.root.scale.setScalar(LAB_VIEW_R / visualRadius(planet)); // normalise apparent size
+    globe.root.userData.labType = type;
+    parent.add(globe.root);
+    globes.set(type, globe);
+  };
+  const mountSelected = (): void => {
+    for (const [, g] of globes) { parent.remove(g.root); g.dispose(); }
+    globes.clear();
+    build(selected);
+    globes.get(selected)?.setBaked(baked[selected], bakeParams);
+  };
 
   // ── COMPLETE lab persistence ─────────────────────────────────────────
   // Save EVERY editable field — all archetypes, every parameter — across the
@@ -92,7 +97,7 @@ export function createPlanetLab(parent: Object3D, camera: Camera): PlanetLabHand
   };
   try { const raw = localStorage.getItem(LAB_STORE); if (raw) applyLab(JSON.parse(raw) as Partial<LabSnap>); } catch { /* ignore */ }
 
-  for (const t of PLANET_TYPES) build(t); // built AFTER saved tuning is applied
+  mountSelected(); // build the initial selected archetype (after saved tuning applied)
   const applyBake = (): void => { globes.get(selected)?.setBaked(baked[selected], bakeParams); };
 
   // ── Control schema (dynamic: editable fields differ surface vs giant) ──
@@ -130,13 +135,20 @@ export function createPlanetLab(parent: Object3D, camera: Camera): PlanetLabHand
 
   const sections = (): LabSection[] => {
     const giant = selected === 'gas' || selected === 'ice';
-    // Archetype is INFORMATIONAL — it reflects the world you clicked, not a
-    // dropdown. Click a globe in the row to select it and edit its archetype.
+    // Single-example gallery: pick which archetype to view + edit in isolation.
+    // Switching mounts only that world (mountSelected) and re-renders the panel
+    // (giant vs surface sections differ).
     const typeSel: LabSection = {
       title: 'Archetype', key: 'lab-archetype',
       ctrls: [{
-        kind: 'info', label: 'Editing',
-        get: () => `${EXEMPLARS[selected].isGasGiant ? '🪐' : '🌍'} ${selected[0].toUpperCase()}${selected.slice(1)}`,
+        kind: 'picker',
+        options: PLANET_TYPES.map((t) => ({
+          value: t,
+          label: `${t[0].toUpperCase()}${t.slice(1)}`,
+          icon: EXEMPLARS[t].isGasGiant ? '🪐' : '🌍',
+        })),
+        get: () => selected,
+        set: (v) => { selected = v as PlanetVisualType; mountSelected(); handle.panel.refresh(); },
       }],
     };
     if (giant) {
@@ -249,30 +261,11 @@ export function createPlanetLab(parent: Object3D, camera: Camera): PlanetLabHand
     toggle: { label: '🪐 LAB', title: 'Planet Lab — archetype tuning' },
   });
 
-  // ── Click-to-select: pick the world under the cursor and edit ITS archetype ──
-  // The archetype panel is read-only and follows this selection.
-  const raycaster = new Raycaster();
-  const ndc = new Vector2();
-  const canvas = document.querySelector('canvas');
-  const onPick = (e: MouseEvent): void => {
-    if (!(e.target instanceof HTMLCanvasElement)) return;
-    const rect = e.target.getBoundingClientRect();
-    ndc.set(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
-    raycaster.setFromCamera(ndc, camera);
-    const hits = raycaster.intersectObjects([...globes.values()].map((g) => g.root), true);
-    if (!hits.length) return;
-    let o: Object3D | null = hits[0].object;
-    while (o && o.userData?.labType === undefined) o = o.parent;
-    const t = o?.userData?.labType as PlanetVisualType | undefined;
-    if (t && t !== selected) { selected = t; handle.panel.refresh(); }
-  };
-  canvas?.addEventListener('click', onPick);
-
   const _root = new Vector3();
   const _sun = new Vector3();
   const handle: PlanetLabHandle = {
     panel,
-    framingZoom: 0.205,
+    framingZoom: 0.135, // pulled in to frame the single isolated globe
     update(ctx) {
       // Even, fixed-direction key light so archetypes are lit identically for
       // comparison (independent of the floating-origin shift).
@@ -282,7 +275,6 @@ export function createPlanetLab(parent: Object3D, camera: Camera): PlanetLabHand
       for (const g of globes.values()) g.update(full);
     },
     dispose() {
-      canvas?.removeEventListener('click', onPick);
       for (const g of globes.values()) { parent.remove(g.root); g.dispose(); }
       globes.clear();
       panel.destroy();
