@@ -211,7 +211,9 @@ export function mountControlPanel(
 
   const fmt = (c: SliderCtrl, v: number): string => {
     const shown = c.scale ? v / c.scale : v;
-    const s = Number.isInteger(c.step) && !c.scale ? String(shown) : shown.toFixed(2);
+    // Show the value at its real precision (trim trailing zeros) so sub-step
+    // manual entries like 0.005 read as themselves, not rounded to 0.01.
+    const s = Number.isInteger(shown) ? String(shown) : parseFloat(shown.toFixed(4)).toString();
     return `${s}${c.unit ?? ''}`;
   };
 
@@ -221,7 +223,11 @@ export function mountControlPanel(
     const row = document.createElement('div');
     row.style.cssText = 'margin-top:6px;display:flex;justify-content:space-between';
     const name = document.createElement('span'); name.textContent = c.label;
-    const val = document.createElement('span'); val.style.opacity = '0.8';
+    const val = document.createElement('span');
+    val.style.cssText = 'opacity:0.8;cursor:text;border-bottom:1px dotted transparent';
+    val.title = 'Click to type an exact value';
+    val.addEventListener('mouseenter', () => { val.style.borderBottomColor = '#5a6a7c'; });
+    val.addEventListener('mouseleave', () => { val.style.borderBottomColor = 'transparent'; });
     row.append(name, val);
     const input = document.createElement('input');
     input.type = 'range';
@@ -231,6 +237,37 @@ export function mountControlPanel(
     sync();
     input.addEventListener('input', () => { c.set(+input.value); val.textContent = fmt(c, +input.value); changed(); });
     if (c.commit) input.addEventListener('change', () => { c.commit!(); });
+
+    // Click the value to type an EXACT number — allows finer-than-step precision
+    // (e.g. 0.005 on a 0.01-step control). Enter/blur commits, Escape cancels.
+    val.addEventListener('click', () => {
+      const edit = document.createElement('input');
+      edit.type = 'text'; edit.inputMode = 'decimal';
+      edit.value = String(c.scale ? c.get() / c.scale : c.get());
+      edit.style.cssText = 'width:60px;text-align:right;background:#1c2530;color:#eaf0f7;'
+        + 'border:1px solid #5a86b8;border-radius:3px;font:inherit;padding:0 3px';
+      val.replaceWith(edit); edit.focus(); edit.select();
+      let done = false;
+      const restore = (commit: boolean): void => {
+        if (done) return; done = true;
+        if (commit) {
+          let n = parseFloat(edit.value);
+          if (Number.isFinite(n)) {
+            if (c.scale) n *= c.scale;
+            n = Math.min(c.max, Math.max(c.min, n));
+            c.set(n); input.value = String(n); changed(); c.commit?.();
+          }
+        }
+        val.textContent = fmt(c, c.get());
+        edit.replaceWith(val);
+      };
+      edit.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); restore(true); }
+        else if (e.key === 'Escape') { e.preventDefault(); restore(false); }
+      });
+      edit.addEventListener('blur', () => restore(true));
+    });
+
     host.append(row, input);
     syncers.push(sync);
   };
