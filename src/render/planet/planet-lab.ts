@@ -17,7 +17,7 @@ import { Vector3, Vector2, Raycaster, type Object3D, type Camera } from 'three';
 import type { GenPlanet, PlanetVisualType } from '../../data/system-gen';
 import { PlanetGlobe, type UpdateCtx } from './globe';
 import { visualRadius } from './index';
-import { PRESETS, PLANET_TYPES, snapshotPresets, type Preset } from './presets';
+import { PRESETS, PLANET_TYPES, type Preset } from './presets';
 import { MACRO, type MacroParams } from './plates';
 import { DEFAULT_BAKE, type BakeParams } from './bake';
 import { mountControlPanel, type ControlPanelHandle, type LabCtrl, type LabSection } from '../../ui/control-panel';
@@ -65,7 +65,6 @@ export function createPlanetLab(parent: Object3D, camera: Camera): PlanetLabHand
     parent.add(globe.root);
     globes.set(type, globe);
   };
-  for (const t of PLANET_TYPES) build(t);
 
   let selected: PlanetVisualType = 'ocean';
 
@@ -75,6 +74,25 @@ export function createPlanetLab(parent: Object3D, camera: Camera): PlanetLabHand
     rocky: false, ocean: false, desert: false, lava: false, ice: false, gas: false,
   };
   const bakeParams: BakeParams = { ...DEFAULT_BAKE };
+
+  // ── COMPLETE lab persistence ─────────────────────────────────────────
+  // Save EVERY editable field — all archetypes, every parameter — across the
+  // three sources the panel edits: PRESETS (presets.ts), MACRO tectonics
+  // (plates.ts) and the erosion bake config. Deep-cloning the whole objects makes
+  // this future-proof: new params/archetypes are captured automatically. Saved
+  // tuning is applied on boot BEFORE the globes build, so edits stick on reload.
+  const LAB_STORE = 'legion.planetLab.interim';
+  type LabSnap = { presets: typeof PRESETS; macro: typeof MACRO; bake: BakeParams };
+  const snapshotLab = (): LabSnap => JSON.parse(JSON.stringify({ presets: PRESETS, macro: MACRO, bake: bakeParams })) as LabSnap;
+  const CANONICAL = snapshotLab(); // captured before any saved overlay is applied
+  const applyLab = (s: Partial<LabSnap>): void => {
+    if (s.presets) for (const t of Object.keys(s.presets) as PlanetVisualType[]) if (PRESETS[t]) Object.assign(PRESETS[t], s.presets[t]);
+    if (s.macro) for (const t of Object.keys(s.macro) as PlanetVisualType[]) if (MACRO[t]) Object.assign(MACRO[t], s.macro[t]);
+    if (s.bake) Object.assign(bakeParams, s.bake);
+  };
+  try { const raw = localStorage.getItem(LAB_STORE); if (raw) applyLab(JSON.parse(raw) as Partial<LabSnap>); } catch { /* ignore */ }
+
+  for (const t of PLANET_TYPES) build(t); // built AFTER saved tuning is applied
   const applyBake = (): void => { globes.get(selected)?.setBaked(baked[selected], bakeParams); };
 
   // ── Control schema (dynamic: editable fields differ surface vs giant) ──
@@ -206,8 +224,21 @@ export function createPlanetLab(parent: Object3D, camera: Camera): PlanetLabHand
         globes.get(selected)?.reseed(seeds[selected]);
         applyBake();
       } },
-      { label: 'Copy JSON → presets.ts', minor: true, onClick: () => {
-        const json = JSON.stringify(snapshotPresets(), null, 2);
+      // Save → persist ALL tuning (presets + tectonics + bake) to localStorage so
+      // it sticks across reloads. Revert → clear it and restore the canonical look.
+      { label: 'Save', onClick: () => {
+        try { localStorage.setItem(LAB_STORE, JSON.stringify(snapshotLab())); return 'Saved ✓'; }
+        catch { return 'Save failed'; }
+      } },
+      { label: 'Revert', onClick: () => {
+        try { localStorage.removeItem(LAB_STORE); } catch { /* ignore */ }
+        applyLab(CANONICAL);
+        for (const t of PLANET_TYPES) globes.get(t)?.refreshParams();
+        handle.panel.sync();
+        return 'Canonical';
+      } },
+      { label: 'Copy JSON (full set → presets.ts + plates.ts + bake.ts)', minor: true, onClick: () => {
+        const json = JSON.stringify(snapshotLab(), null, 2);
         return navigator.clipboard?.writeText(json).then(() => 'Copied ✓', () => 'Copy failed') ?? 'No clipboard';
       } },
     ],
