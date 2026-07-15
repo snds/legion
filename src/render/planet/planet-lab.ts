@@ -255,10 +255,9 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
       } },
     ],
   }, {
-    // A flyout on the single LAB button (bottom-right), with the shared shell's
-    // docked header (collapse-all) + docked footer. One lab surface per context.
-    anchor: 'right:16px;bottom:64px',
-    toggle: { label: '🪐 LAB', title: 'Planet Lab — archetype tuning' },
+    // Docked to the right edge (full height), collapsible — the HUD reflows around
+    // it. Open by default since a ?lab= view is dedicated to tuning.
+    dock: { open: true, storeKey: 'legion.planetLab.dock' },
   });
 
   const _root = new Vector3();

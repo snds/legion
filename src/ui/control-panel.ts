@@ -111,6 +111,10 @@ export interface ControlPanelOpts {
   /** When set, the panel is a flyout: it starts hidden and a toggle button is
    *  mounted (bottom-right) that shows/hides it. This is the single LAB button. */
   toggle?: { label: string; title?: string };
+  /** When set, the panel is DOCKED to the right edge (full height) and collapses
+   *  to the right via a chevron, leaving a re-open tab. Its width is published as
+   *  the `--lab-dock-w` CSS variable so the HUD reflows around it. */
+  dock?: { width?: number; open?: boolean; storeKey?: string };
 }
 
 const linToHex = (c: readonly [number, number, number]): string => {
@@ -134,19 +138,30 @@ export function mountControlPanel(
   // Mutable so setContext() can swap the whole lab context in-place.
   let activeSchema = schema;
 
+  const dockW = opts.dock?.width ?? 264;
   const panel = document.createElement('div');
   panel.className = 'gen-lab-panel';
-  // Flex COLUMN so the header docks to the top and the footer docks to the
-  // bottom while only the middle (body) scrolls — the footer never scrolls away.
-  panel.style.cssText = [
-    'position:fixed', opts.anchor ?? 'right:16px;top:64px', 'z-index:9998',
-    'width:250px', 'max-height:calc(100vh - 96px)',
-    'display:flex', 'flex-direction:column',
-    'background:rgba(12,15,20,0.95)',
-    'border:1px solid #2a3340', 'border-radius:8px', 'color:#cfd8e3',
-    'font:12px/1.5 ui-monospace,SFMono-Regular,monospace', 'letter-spacing:0.02em',
-    'user-select:none', 'box-shadow:0 8px 32px rgba(0,0,0,0.6)',
-  ].join(';');
+  // Flex COLUMN so the header docks to the top and the footer docks to the bottom
+  // while only the middle (body) scrolls. Two layouts: a floating flyout, or a
+  // full-height panel DOCKED to the right edge (slides off to collapse).
+  panel.style.cssText = opts.dock
+    ? [
+        'position:fixed', 'top:0', 'right:0', 'height:100vh', `width:${dockW}px`, 'z-index:9998',
+        'display:flex', 'flex-direction:column', 'background:rgba(12,15,20,0.97)',
+        'border-left:1px solid #2a3340', 'color:#cfd8e3',
+        'font:12px/1.5 ui-monospace,SFMono-Regular,monospace', 'letter-spacing:0.02em',
+        'user-select:none', 'box-shadow:-8px 0 32px rgba(0,0,0,0.5)',
+        'transition:transform 0.18s ease', 'will-change:transform',
+      ].join(';')
+    : [
+        'position:fixed', opts.anchor ?? 'right:16px;top:64px', 'z-index:9998',
+        'width:250px', 'max-height:calc(100vh - 96px)',
+        'display:flex', 'flex-direction:column',
+        'background:rgba(12,15,20,0.95)',
+        'border:1px solid #2a3340', 'border-radius:8px', 'color:#cfd8e3',
+        'font:12px/1.5 ui-monospace,SFMono-Regular,monospace', 'letter-spacing:0.02em',
+        'user-select:none', 'box-shadow:0 8px 32px rgba(0,0,0,0.6)',
+      ].join(';');
 
   // ── Docked header: title + collapse-all glyph ──
   const title = document.createElement('div');
@@ -159,7 +174,19 @@ export function mountControlPanel(
   collapseAll.title = 'Collapse / expand all sections';
   collapseAll.style.cssText = 'cursor:pointer;font-weight:400;color:#9fb0c3;font-size:13px;line-height:1;'
     + 'padding:2px 5px;border-radius:4px;user-select:none';
-  title.append(titleLabel, collapseAll);
+  const headerRight = document.createElement('span');
+  headerRight.style.cssText = 'display:flex;align-items:center;gap:2px';
+  headerRight.appendChild(collapseAll);
+  let dockChevron: HTMLSpanElement | null = null;
+  if (opts.dock) {
+    dockChevron = document.createElement('span');
+    dockChevron.textContent = '»';
+    dockChevron.title = 'Collapse panel';
+    dockChevron.style.cssText = 'cursor:pointer;font-weight:400;color:#9fb0c3;font-size:16px;line-height:1;'
+      + 'padding:2px 6px;border-radius:4px;user-select:none';
+    headerRight.appendChild(dockChevron);
+  }
+  title.append(titleLabel, headerRight);
   panel.appendChild(title);
 
   let collapsed = new Set<string>();
@@ -376,9 +403,55 @@ export function mountControlPanel(
   renderFooter();
   document.body.appendChild(panel);
 
-  // ── Optional flyout toggle button (the single LAB button) ──
-  let btn: HTMLButtonElement | null = null;
-  if (opts.toggle) {
+  let btn: HTMLButtonElement | null = null;  // flyout toggle
+  let tab: HTMLDivElement | null = null;     // dock re-open handle
+  let dockOpen = true;
+
+  // Dock collapse: slide the panel off the right edge and drop --lab-dock-w to 0
+  // so the HUD reflows back; a thin tab at the edge re-opens it.
+  function setDockOpen(open: boolean): void {
+    dockOpen = open;
+    panel.style.transform = open ? 'translateX(0)' : 'translateX(100%)';
+    document.documentElement.style.setProperty('--lab-dock-w', open ? `${dockW}px` : '0px');
+    if (tab) tab.style.display = open ? 'none' : 'flex';
+    if (opts.dock?.storeKey) { try { localStorage.setItem(opts.dock.storeKey, open ? '1' : '0'); } catch { /* ignore */ } }
+  }
+  function setOpen(open: boolean): void {
+    if (opts.dock) { setDockOpen(open); return; }
+    panel.style.display = open ? 'flex' : 'none';
+  }
+
+  if (opts.dock) {
+    // Re-open handle: a prominent labelled tab on the right edge, shown only when
+    // the panel is collapsed. Reads as "« LAB" so it's obviously the way back.
+    tab = document.createElement('div');
+    tab.className = 'gen-lab-tab';
+    tab.title = 'Open lab panel';
+    tab.innerHTML = '<span style="font-size:16px;line-height:1">«</span>'
+      + '<span style="writing-mode:vertical-rl;text-orientation:upright;letter-spacing:1px;'
+      + 'font-size:10px;font-weight:600">LAB</span>';
+    tab.style.cssText = [
+      'position:fixed', 'right:0', 'top:50%', 'transform:translateY(-50%)', 'z-index:10000',
+      'display:none', 'flex-direction:column', 'align-items:center', 'justify-content:center', 'gap:8px',
+      'width:30px', 'padding:16px 0', 'cursor:pointer',
+      'background:rgba(20,40,64,0.96)', 'color:#cfe0ff',
+      'border:1px solid rgba(120,170,255,0.55)', 'border-right:none', 'border-radius:9px 0 0 9px',
+      'font-family:ui-monospace,Menlo,monospace', 'box-shadow:-5px 0 22px rgba(0,0,0,0.55)',
+      'transition:background 0.15s ease',
+    ].join(';');
+    tab.addEventListener('mouseenter', () => { tab!.style.background = 'rgba(30,56,86,0.98)'; });
+    tab.addEventListener('mouseleave', () => { tab!.style.background = 'rgba(20,40,64,0.96)'; });
+    tab.addEventListener('click', () => setDockOpen(true));
+    document.body.appendChild(tab);
+    dockChevron?.addEventListener('click', () => setDockOpen(false));
+
+    let initOpen = opts.dock.open ?? true;
+    if (opts.dock.storeKey) { try { const v = localStorage.getItem(opts.dock.storeKey); if (v !== null) initOpen = v === '1'; } catch { /* ignore */ } }
+    panel.style.transition = 'none';           // no slide on first paint
+    setDockOpen(initOpen);
+    requestAnimationFrame(() => { panel.style.transition = 'transform 0.18s ease'; });
+  } else if (opts.toggle) {
+    // ── Flyout toggle button (the single LAB button) ──
     panel.style.display = 'none';
     btn = document.createElement('button');
     btn.className = 'gen-lab-toggle';
@@ -394,7 +467,6 @@ export function mountControlPanel(
     btn.addEventListener('click', () => setOpen(panel.style.display === 'none'));
     document.body.appendChild(btn);
   }
-  function setOpen(open: boolean): void { panel.style.display = open ? 'flex' : 'none'; }
 
   const sync = (): void => { for (const s of syncers) s(); };
   return {
@@ -409,7 +481,10 @@ export function mountControlPanel(
       renderFooter();
     },
     setOpen,
-    isOpen: () => panel.style.display !== 'none',
-    destroy: () => { panel.remove(); btn?.remove(); },
+    isOpen: () => (opts.dock ? dockOpen : panel.style.display !== 'none'),
+    destroy: () => {
+      panel.remove(); btn?.remove(); tab?.remove();
+      if (opts.dock) document.documentElement.style.setProperty('--lab-dock-w', '0px');
+    },
   };
 }

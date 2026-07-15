@@ -185,7 +185,7 @@ export function initDemoMenu(): void {
   btn.textContent = activeLabel ? `🚩 ${activeLabel}` : '🚩 REVIEW BUILDS';
   btn.title = 'Review the shipped subsystems, or open a generator lab';
   btn.style.cssText = [
-    'position:fixed', 'right:16px', 'bottom:52px', 'z-index:9999',
+    'position:fixed', 'right:16px', 'bottom:16px', 'z-index:9999',
     'font-family:ui-monospace,Menlo,monospace', 'font-size:11px',
     'letter-spacing:1px', 'padding:7px 12px', 'cursor:pointer',
     'max-width:288px', 'overflow:hidden', 'text-overflow:ellipsis', 'white-space:nowrap',
@@ -198,6 +198,13 @@ export function initDemoMenu(): void {
     menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
   };
   document.body.appendChild(btn);
+
+  // Follow the docked lab panel: shift left by its width (--lab-dock-w) so the
+  // switcher button + menu clear the panel instead of hiding behind it.
+  btn.style.right = 'calc(16px + var(--lab-dock-w, 0px))';
+  btn.style.transition = 'right 0.18s ease';
+  menu.style.right = 'calc(16px + var(--lab-dock-w, 0px))';
+  menu.style.bottom = '52px';
 
   // Dismiss the menu on any outside click.
   document.addEventListener('click', (e) => {

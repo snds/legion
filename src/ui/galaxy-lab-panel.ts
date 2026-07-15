@@ -64,8 +64,9 @@ export function initGalaxyLabPanel(controls: GalaxyControls | null): void {
   // which exists after mount — the action only fires on a later click.
   let handle: ControlPanelHandle | null = null;
   handle = mountControlPanel(toSchema(controls, () => handle?.sync()), {
-    anchor: 'right:16px;bottom:64px',
-    toggle: { label: '🌌 LAB', title: 'Galaxy Lab — live galaxy tuning' },
+    // Docked, but COLLAPSED by default — normal play sees only the edge tab; open
+    // it to tune the live galaxy. (Persisted per browser.)
+    dock: { open: false, storeKey: 'legion.galaxyLab.dock' },
   });
   mounted = handle;
 }

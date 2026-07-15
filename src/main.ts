@@ -254,7 +254,9 @@ async function boot(): Promise<void> {
   initDock();
   initHUD();
   Tooltip.init();
-  initRaycast(camera, layers, renderCtx.canvas, scene);
+  // Object inspection (hover tooltip · click inspect · dbl-click focus) is a game
+  // interaction — skip it in the generator labs, which are a clean tuning room.
+  if (!activeLabId()) initRaycast(camera, layers, renderCtx.canvas, scene);
   Debug.init(renderCtx.renderer);
   initVisualEditor(); // ADMIN VISUAL EDITOR — REMOVE
 
