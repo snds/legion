@@ -544,7 +544,7 @@ async function boot(): Promise<void> {
   // star so the archetypes read cleanly under the lab's own fixed key light.
   let planetLab: PlanetLabHandle | null = null;
   if (activeLabId() === 'planet') {
-    planetLab = createPlanetLab(layers.local);
+    planetLab = createPlanetLab(layers.local, camera);
     // Clean room: the curated system + lab globes share layers.local, so hide
     // every local child that isn't a lab globe (star, planets, moons, orbits).
     for (const child of layers.local.children) {

@@ -24,19 +24,19 @@ export interface LabDef {
 export const LABS: readonly LabDef[] = [
   {
     id: 'planet', icon: '🪐', label: 'Planet Lab', available: true,
-    blurb: 'Tune the six archetype presets on live example worlds; Reseed to see the range, Copy-JSON to promote the canonical guidepost set.',
+    blurb: 'Tune the six planet archetype presets on live worlds.',
   },
   {
     id: 'star', icon: '☀️', label: 'Star Lab', available: false,
-    blurb: 'Coming soon — spectral type, activity, granulation, corona reach & coronal-loop tuning.',
+    blurb: 'Coming soon — spectral type, activity and corona tuning.',
   },
   {
     id: 'blackhole', icon: '🕳️', label: 'Black Hole Lab', available: false,
-    blurb: 'Coming soon — Schwarzschild radius, disk temperature / size / tilt, spin.',
+    blurb: 'Coming soon — disk, spin and horizon tuning.',
   },
   {
     id: 'nebula', icon: '🌫️', label: 'Nebula Lab', available: false,
-    blurb: 'Coming soon — shell count, [OIII]/Hα/dust mix, brightness, core fraction.',
+    blurb: 'Coming soon — shell, emission-line and dust tuning.',
   },
 ];
 

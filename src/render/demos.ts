@@ -53,8 +53,7 @@ export const DEMOS: readonly DemoDef[] = [
     icon: '☀️',
     label: 'Procedural star surface',
     source: 'PR #158 · procedural-star',
-    blurb: 'The live system star, re-skinned from its physical record — granulation, '
-      + 'limb darkening, spectral colour and corona. Warp time to watch it churn.',
+    blurb: 'The live system star — granulation, limb darkening, spectral colour and corona.',
     targetZoom: 0.11, // low-orbit: pulled in tight so the star fills the frame, surface detail resolves
     focusAbs: new Vector3(0, 0, 0), // star sits at the home local-tier root
   },
@@ -63,8 +62,7 @@ export const DEMOS: readonly DemoDef[] = [
     icon: '🪐',
     label: 'Procedural planet globes',
     source: 'PR #161 · planet-globes',
-    blurb: 'A showcase system: one of every biome preset (lava, desert, ocean, rocky, '
-      + 'gas & ice giants) plus two ring systems, on cube-sphere globes with quadtree LOD.',
+    blurb: 'One of every planet preset plus two ring systems, on cube-sphere globes.',
     targetZoom: 0.22, // orbit tier (~4 AU): the showcase globes read as distinct textured worlds
     focusAbs: new Vector3(0, 0, 0), // globes orbit the star at the local root
   },
@@ -73,8 +71,7 @@ export const DEMOS: readonly DemoDef[] = [
     icon: '🌫️',
     label: 'Nebula — Orion (M42)',
     source: 'PR #159 · phenomena-nebula',
-    blurb: 'Nested iso-density emission shells — hot [OIII] core → Hα → dust lanes — '
-      + 'placed at Orion’s real galactic position, ~412 pc out below the disc plane.',
+    blurb: 'Orion’s nested emission shells at its real galactic position.',
     targetZoom: 0.93, // galaxy tier: crossfade opens past camDist 6e5 WU
     focusAbs: nebulaCenterAbsWU(ORION_NEBULA_PARAMS.galPosPc),
   },
@@ -83,8 +80,7 @@ export const DEMOS: readonly DemoDef[] = [
     icon: '🕳️',
     label: 'Black hole set-piece',
     source: 'PR #162 · phenomena-blackhole',
-    blurb: 'A Schwarzschild geodesic renderer: the shadow, the photon ring, Einstein '
-      + 'lensing of the starfield, and a Doppler-beamed Novikov–Thorne accretion disk.',
+    blurb: 'A Schwarzschild black hole — photon ring, lensing and a beamed accretion disk.',
     targetZoom: 0.76, // ~1.3k WU orbit ≈ 4× the geodesic bounding radius (matches the standalone harness framing)
     focusAbs: HERO_BLACKHOLE_ABS.clone(),
   },
@@ -93,8 +89,7 @@ export const DEMOS: readonly DemoDef[] = [
     icon: '🌌',
     label: 'Galaxy arms + gas filaments',
     source: 'PR #160 · galaxy-arm-polish',
-    blurb: 'Full-disc framing: spiral-arm catalog-star highlights redistributed along '
-      + 'the arms, plus domain-warped gas-shell filament emission breaking up the banding.',
+    blurb: 'Full-disc spiral arms with domain-warped gas-filament emission.',
     targetZoom: 0.97, // near GALAXY tier: whole Milky Way disc in frame
     focusAbs: new Vector3(0, 0, 0),
   },

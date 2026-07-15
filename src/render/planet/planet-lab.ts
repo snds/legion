@@ -13,7 +13,7 @@
 // the row, and pumps update() each frame.
 // ═══════════════════════════════════════════════════════════════════
 
-import { Vector3, type Object3D } from 'three';
+import { Vector3, Vector2, Raycaster, type Object3D, type Camera } from 'three';
 import type { GenPlanet, PlanetVisualType } from '../../data/system-gen';
 import { PlanetGlobe, type UpdateCtx } from './globe';
 import { visualRadius } from './index';
@@ -43,8 +43,9 @@ export interface PlanetLabHandle {
   dispose(): void;
 }
 
-/** Build the planet lab into `parent` (the system-tier local group). */
-export function createPlanetLab(parent: Object3D): PlanetLabHandle {
+/** Build the planet lab into `parent` (the system-tier local group). `camera` is
+ *  the real scene camera — used to raycast click-to-select against the globes. */
+export function createPlanetLab(parent: Object3D, camera: Camera): PlanetLabHandle {
   const seeds: Record<PlanetVisualType, number> = {
     rocky: 1001, ocean: 2002, desert: 3003, lava: 4004, ice: 5005, gas: 6006,
   };
@@ -60,6 +61,7 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
     const planet: GenPlanet = { ...EXEMPLARS[type], seed: seeds[type] };
     const globe = new PlanetGlobe(planet, visualRadius(planet));
     globe.root.position.set(posX.get(type)!, 0, 0);
+    globe.root.userData.labType = type; // click-to-select hit-testing tag
     parent.add(globe.root);
     globes.set(type, globe);
   };
@@ -110,12 +112,13 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
 
   const sections = (): LabSection[] => {
     const giant = selected === 'gas' || selected === 'ice';
+    // Archetype is INFORMATIONAL — it reflects the world you clicked, not a
+    // dropdown. Click a globe in the row to select it and edit its archetype.
     const typeSel: LabSection = {
       title: 'Archetype', key: 'lab-archetype',
       ctrls: [{
-        kind: 'select', label: 'Editing', options: PLANET_TYPES as readonly string[],
-        get: () => selected,
-        set: (v) => { selected = v as PlanetVisualType; handle.panel.refresh(); },
+        kind: 'info', label: 'Editing',
+        get: () => `${EXEMPLARS[selected].isGasGiant ? '🪐' : '🌍'} ${selected[0].toUpperCase()}${selected.slice(1)}`,
       }],
     };
     if (giant) {
@@ -215,6 +218,25 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
     toggle: { label: '🪐 LAB', title: 'Planet Lab — archetype tuning' },
   });
 
+  // ── Click-to-select: pick the world under the cursor and edit ITS archetype ──
+  // The archetype panel is read-only and follows this selection.
+  const raycaster = new Raycaster();
+  const ndc = new Vector2();
+  const canvas = document.querySelector('canvas');
+  const onPick = (e: MouseEvent): void => {
+    if (!(e.target instanceof HTMLCanvasElement)) return;
+    const rect = e.target.getBoundingClientRect();
+    ndc.set(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
+    raycaster.setFromCamera(ndc, camera);
+    const hits = raycaster.intersectObjects([...globes.values()].map((g) => g.root), true);
+    if (!hits.length) return;
+    let o: Object3D | null = hits[0].object;
+    while (o && o.userData?.labType === undefined) o = o.parent;
+    const t = o?.userData?.labType as PlanetVisualType | undefined;
+    if (t && t !== selected) { selected = t; handle.panel.refresh(); }
+  };
+  canvas?.addEventListener('click', onPick);
+
   const _root = new Vector3();
   const _sun = new Vector3();
   const handle: PlanetLabHandle = {
@@ -229,6 +251,7 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
       for (const g of globes.values()) g.update(full);
     },
     dispose() {
+      canvas?.removeEventListener('click', onPick);
       for (const g of globes.values()) { parent.remove(g.root); g.dispose(); }
       globes.clear();
       panel.destroy();

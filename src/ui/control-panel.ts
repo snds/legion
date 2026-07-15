@@ -24,6 +24,16 @@ export interface SliderCtrl {
   unit?: string;
   get(): number;
   set(v: number): void;
+  /** Fired on release (the input's `change` event) — for expensive labs that
+   *  preview cheaply during drag (set) and commit a full rebuild on release. */
+  commit?(): void;
+}
+/** A read-only display row — a labelled value with no input (e.g. the planet
+ *  lab's archetype, which reflects the selected world rather than being edited). */
+export interface InfoCtrl {
+  kind: 'info';
+  label: string;
+  get(): string;
 }
 export interface ToggleCtrl {
   kind: 'toggle';
@@ -45,7 +55,7 @@ export interface ColorCtrl {
   get(): readonly [number, number, number];
   set(v: [number, number, number]): void;
 }
-export type LabCtrl = SliderCtrl | ToggleCtrl | SelectCtrl | ColorCtrl;
+export type LabCtrl = SliderCtrl | ToggleCtrl | SelectCtrl | ColorCtrl | InfoCtrl;
 
 export interface LabSection {
   title: string;
@@ -183,7 +193,20 @@ export function mountControlPanel(
     const sync = (): void => { const v = c.get(); input.value = String(v); val.textContent = fmt(c, v); };
     sync();
     input.addEventListener('input', () => { c.set(+input.value); val.textContent = fmt(c, +input.value); changed(); });
+    if (c.commit) input.addEventListener('change', () => { c.commit!(); });
     host.append(row, input);
+    syncers.push(sync);
+  };
+
+  const addInfo = (host: HTMLElement, c: InfoCtrl): void => {
+    const row = document.createElement('div');
+    row.style.cssText = 'margin-top:6px;display:flex;justify-content:space-between;align-items:center';
+    const name = document.createElement('span'); name.textContent = c.label;
+    const val = document.createElement('span');
+    val.style.cssText = 'color:#eaf0f7;font-weight:600;letter-spacing:0.04em';
+    const sync = (): void => { val.textContent = c.get(); };
+    sync();
+    row.append(name, val); host.appendChild(row);
     syncers.push(sync);
   };
 
@@ -265,6 +288,7 @@ export function mountControlPanel(
         if ('kind' in c && c.kind === 'toggle') addToggle(secBody, c);
         else if ('kind' in c && c.kind === 'select') addSelect(secBody, c);
         else if ('kind' in c && c.kind === 'color') addColor(secBody, c);
+        else if ('kind' in c && c.kind === 'info') addInfo(secBody, c);
         else addSlider(secBody, c as SliderCtrl);
       }
     }
