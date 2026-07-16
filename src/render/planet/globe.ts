@@ -28,8 +28,10 @@ import {
 } from './cube-sphere';
 import { derivePlanetParams, type PlanetRenderParams } from './presets';
 import {
-  generatePlates, macroParams, packContSeeds, packContSize, packPlateSeeds, packPlateMotion,
+  generatePlates, macroParams, macroHeight, packContSeeds, packContSize, packPlateSeeds, packPlateMotion,
+  type PlateField,
 } from './plates';
+import { warpDir } from './simplex';
 import { bakeCube, type BakeParams } from './bake';
 import { generateRings, densityLUT, type RingSystem } from './rings';
 import { channel, range } from './rng';
@@ -90,6 +92,12 @@ export class PlanetGlobe {
   private atlasTex: DataTexture | null = null; // stacked 6-face eroded height atlas
   private useBake = false;
   private seed: number; // mutable so the lab can reseed IN PLACE (keep the root)
+
+  // ── CPU weather: cyclone placement/lifecycle (ocean-gated, respawning) ──
+  private cloudClock = 0;                       // raw seconds; shader scales by uCloudSpeed
+  private plateField: PlateField | null = null; // cached exact land field for storm gating
+  private cycRng: (() => number) | null = null;
+  private cycStorms: { lon: number; lat: number; drift: number; born: number }[] = [];
 
   constructor(
     readonly planet: GenPlanet,
@@ -175,9 +183,14 @@ export class PlanetGlobe {
         uCloudShadow: { value: p.cloudShadow },
         uCloudFlow: { value: p.cloudFlow },
         uCloudTurb: { value: p.cloudTurb },
-        uCyclones: { value: p.cyclones },
         uCloudTerrain: { value: p.cloudTerrain },
         uCloudDetail: { value: p.cloudDetail },
+        uCloudSpeed: { value: p.cloudSpeed },
+        uCloudWisp: { value: p.cloudWisp },
+        uCloudRegion: { value: p.cloudRegion },
+        uCycSize: { value: p.cycloneSize },
+        uCycPos: { value: [new Vector3(0, 0, 1), new Vector3(0, 0, 1), new Vector3(0, 0, 1)] },
+        uCycStr: { value: [0, 0, 0] },
         uCloudTime: { value: 0 },
         uSunDirObj: { value: new Vector3(0, 0, 1) },
         // Baked master (Phase 3): ONE stacked atlas (res × 6·res); the leaf picks
@@ -220,6 +233,96 @@ export class PlanetGlobe {
       uRangeWidth: { value: f.rangeWidth },
     };
   }
+
+  // ── CPU cyclone engine ─────────────────────────────────────────────
+  // Storms are placed and gated HERE (not per-fragment): the CPU has the exact
+  // macroHeight land field + the live simplex warp, so it can test the storm's
+  // whole footprint (eye + a ring) against open water — a storm never spawns
+  // squeezed between nearby landmasses, decays on landfall as it drifts, and a
+  // spent storm respawns over fresh ocean (weather comes and goes).
+
+  /** Ocean-ness 0..1 of the LIVE (warped) terrain at an object-space direction. */
+  private oceanAt(dir: Vec3): number {
+    if (!this.plateField) this.plateField = generatePlates(this.seed, this.params.type);
+    const m = macroHeight(this.plateField, warpDir(dir, this.params.warp, this.params.noiseSeed as Vec3));
+    const sea = this.params.seaLevel;
+    const t = Math.min(1, Math.max(0, (m - (sea - 0.04)) / 0.1)); // smoothstep band
+    return 1 - t * t * (3 - 2 * t);
+  }
+
+  /** Min ocean-ness over the storm's footprint: the eye + 6 ring samples at
+   *  1.35× the storm radius — the whole body must sit over open water. */
+  private stormGate(lon: number, la: number): number {
+    const cl = Math.sqrt(Math.max(1 - la * la, 0));
+    const c: Vec3 = [Math.cos(lon) * cl, la, Math.sin(lon) * cl];
+    const up: Vec3 = Math.abs(c[1]) < 0.99 ? [0, 1, 0] : [1, 0, 0];
+    let ux = up[1] * c[2] - up[2] * c[1], uy = up[2] * c[0] - up[0] * c[2], uz = up[0] * c[1] - up[1] * c[0];
+    const ul = Math.hypot(ux, uy, uz) || 1; ux /= ul; uy /= ul; uz /= ul;
+    const vx = c[1] * uz - c[2] * uy, vy = c[2] * ux - c[0] * uz, vz = c[0] * uy - c[1] * ux;
+    const R = 1.35 * this.params.cycloneSize, cR = Math.cos(R), sR = Math.sin(R);
+    let gate = this.oceanAt(c);
+    for (let k = 0; k < 6 && gate > 0; k++) {
+      const a = (k / 6) * Math.PI * 2, ca = Math.cos(a), sa = Math.sin(a);
+      const d: Vec3 = [
+        c[0] * cR + (ux * ca + vx * sa) * sR,
+        c[1] * cR + (uy * ca + vy * sa) * sR,
+        c[2] * cR + (uz * ca + vz * sa) * sR,
+      ];
+      gate = Math.min(gate, this.oceanAt(d));
+    }
+    return gate;
+  }
+
+  /** Roll storm candidates (slot parity fixes the hemisphere) until one sits over
+   *  open water; keep the wettest candidate if none fully clears. */
+  private spawnStorm(slot: number, bornT: number): { lon: number; lat: number; drift: number; born: number } {
+    const rng = this.cycRng!;
+    let best = { lon: 0, lat: 0.3, drift: 1, g: -1 };
+    for (let k = 0; k < 12; k++) {
+      const lon = rng() * Math.PI * 2;
+      const lat = (0.12 + 0.38 * rng()) * (slot % 2 === 0 ? 1 : -1);
+      const drift = 0.7 + 0.6 * rng();
+      const g = this.stormGate(lon, lat);
+      if (g > best.g) best = { lon, lat, drift, g };
+      if (g >= 0.6) break;
+    }
+    return { lon: best.lon, lat: best.lat, drift: best.drift, born: bornT };
+  }
+
+  /** Per-frame: drift each storm westward, gate it against the live coastline,
+   *  respawn it once it has fully died over land. Pushes uCycPos/uCycStr. */
+  private updateStorms(): void {
+    const p = this.params;
+    const mats = [this.surfaceMat, this.cloudMesh ? (this.cloudMesh.material as ShaderMaterial) : null];
+    const T = this.cloudClock * p.cloudSpeed;
+    if (!this.cycRng) this.cycRng = channel(this.seed >>> 0, 'cyclones');
+    if (this.cycStorms.length === 0) for (let i = 0; i < 3; i++) this.cycStorms.push(this.spawnStorm(i, T));
+    for (let i = 0; i < 3; i++) {
+      let str = 0, x = 0, y = 0, z = 1;
+      if (p.cyclones > 0) {
+        let s = this.cycStorms[i];
+        let lon = s.lon - (T - s.born) * 0.03 * s.drift; // westward drift on the weather clock
+        let gate = this.stormGate(lon, s.lat);
+        if (gate < 0.03 && T - s.born > 2) { // fully dead over land → respawn over fresh ocean
+          s = this.cycStorms[i] = this.spawnStorm(i, T);
+          lon = s.lon; gate = this.stormGate(lon, s.lat);
+        }
+        const fadeIn = Math.min(1, (T - s.born) * 0.25);
+        str = p.cyclones * gate * fadeIn * Math.sign(s.lat);
+        const cl = Math.sqrt(Math.max(1 - s.lat * s.lat, 0));
+        x = Math.cos(lon) * cl; y = s.lat; z = Math.sin(lon) * cl;
+      }
+      for (const m of mats) {
+        if (!m) continue;
+        ((m.uniforms.uCycPos.value as Vector3[])[i]).set(x, y, z);
+        (m.uniforms.uCycStr.value as number[])[i] = str;
+      }
+    }
+  }
+
+  /** Dev/verification hook: age every live storm past its fade-in so it renders at
+   *  full strength immediately (the lab's __labStorms global). */
+  stormsMature(): void { for (const s of this.cycStorms) s.born = -999; }
 
   /** Bake the eroded height master into 6 face textures (Phase 3). Heavy — run on
    *  demand (the lab's Bake / Rebuild), never per-frame. Disposes any prior set. */
@@ -288,20 +391,28 @@ export class PlanetGlobe {
       u.uCloudShadow.value = p.cloudShadow;
       u.uCloudFlow.value = p.cloudFlow;
       u.uCloudTurb.value = p.cloudTurb;
-      u.uCyclones.value = p.cyclones;
       u.uCloudTerrain.value = p.cloudTerrain;
       u.uCloudDetail.value = p.cloudDetail;
+      u.uCloudSpeed.value = p.cloudSpeed;
+      u.uCloudWisp.value = p.cloudWisp;
+      u.uCloudRegion.value = p.cloudRegion;
+      u.uCycSize.value = p.cycloneSize;
       if (this.cloudMesh) {
         const cm = (this.cloudMesh.material as ShaderMaterial).uniforms;
         cm.uCloudCover.value = p.cloudCover;
         cm.uCloudFlow.value = p.cloudFlow;
         cm.uCloudTurb.value = p.cloudTurb;
-        cm.uCyclones.value = p.cyclones;
         cm.uCloudTerrain.value = p.cloudTerrain;
         cm.uCloudDetail.value = p.cloudDetail;
-        cm.uSeaLevel.value = p.seaLevel;
+        cm.uCloudSpeed.value = p.cloudSpeed;
+        cm.uCloudWisp.value = p.cloudWisp;
+        cm.uCloudRegion.value = p.cloudRegion;
+        cm.uCycSize.value = p.cycloneSize;
         (cm.uNoiseSeed.value as Vector3).set(...p.noiseSeed);
       }
+      // Storm placement depends on the (possibly retuned) terrain and seed —
+      // drop the cached field, storms, and rng so everything re-derives fresh.
+      this.plateField = null; this.cycStorms = []; this.cycRng = null;
       u.uSeaLevel.value = p.seaLevel;
       (u.uOceanShallow.value as Vector3).set(...p.oceanShallow);
       (u.uOceanDeep.value as Vector3).set(...p.oceanDeep);
@@ -377,11 +488,15 @@ export class PlanetGlobe {
         uCloudCover: { value: p.cloudCover },
         uCloudFlow: { value: p.cloudFlow },
         uCloudTurb: { value: p.cloudTurb },
-        uCyclones: { value: p.cyclones },
         uCloudTerrain: { value: p.cloudTerrain },
         uCloudDetail: { value: p.cloudDetail },
+        uCloudSpeed: { value: p.cloudSpeed },
+        uCloudWisp: { value: p.cloudWisp },
+        uCloudRegion: { value: p.cloudRegion },
+        uCycSize: { value: p.cycloneSize },
+        uCycPos: { value: [new Vector3(0, 0, 1), new Vector3(0, 0, 1), new Vector3(0, 0, 1)] },
+        uCycStr: { value: [0, 0, 0] },
         uCloudTime: { value: 0 },
-        uSeaLevel: { value: p.seaLevel }, // cyclone ocean gate
         // plateMacro inputs (orographic/climate coupling samples the real terrain)
         ...this.plateUniforms(),
         uCoastAmp: { value: macroParams(p.type).coastAmp },
@@ -514,10 +629,14 @@ export class PlanetGlobe {
       }
       if (this.giantMesh) { const m = this.giantMesh.material as ShaderMaterial; setSun(m, sunDir); m.uniforms.uTime.value = (m.uniforms.uTime.value + ctx.dt) % 1000; }
       if (this.atmosMesh) setSun(this.atmosMesh.material as ShaderMaterial, sunDir);
+      // ONE weather clock (both materials + CPU storms). Wraps to keep f32 uniform
+      // precision; storms reset on wrap so (T - born) never goes negative.
+      this.cloudClock += ctx.dt;
+      if (this.cloudClock >= 10000) { this.cloudClock %= 10000; this.cycStorms = []; }
       if (this.cloudMesh) {
         const m = this.cloudMesh.material as ShaderMaterial;
         setSun(m, sunDir);
-        m.uniforms.uCloudTime.value = (m.uniforms.uCloudTime.value + ctx.dt) % 10000;
+        m.uniforms.uCloudTime.value = this.cloudClock;
       }
       if (this.surfaceMat) {
         // Sun in the surface's OBJECT space (cloud-shadow shell ray) + the shared
@@ -525,8 +644,9 @@ export class PlanetGlobe {
         const su = this.surfaceMat.uniforms;
         this.surfaceGroup.getWorldQuaternion(_qTmp);
         (su.uSunDirObj.value as Vector3).copy(sunDir).applyQuaternion(_qTmp.invert());
-        su.uCloudTime.value = (su.uCloudTime.value + ctx.dt) % 10000;
+        su.uCloudTime.value = this.cloudClock;
       }
+      if (!this.params.isGiant && this.params.cloudCover > 0) this.updateStorms();
       if (this.ringMesh) {
         const m = this.ringMesh.material as ShaderMaterial;
         setSun(m, sunDir);

@@ -244,7 +244,6 @@ export const CLOUD_FRAG = /* glsl */ `
 ${GLSL_SIMPLEX}
 ${GLSL_FBM}
 ${GLSL_PLATES}
-uniform float uSeaLevel; // cyclone ocean gate (SURFACE_FRAG gets this from GLSL_TERRAIN)
 ${GLSL_CLOUDS}
 uniform vec3  uSunDir;
 uniform float uTerminator;

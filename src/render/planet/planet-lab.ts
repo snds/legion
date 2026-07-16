@@ -87,13 +87,14 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
   // this future-proof: new params/archetypes are captured automatically. Saved
   // tuning is applied on boot BEFORE the globes build, so edits stick on reload.
   const LAB_STORE = 'legion.planetLab.interim';
-  type LabSnap = { presets: typeof PRESETS; macro: typeof MACRO; bake: BakeParams };
-  const snapshotLab = (): LabSnap => JSON.parse(JSON.stringify({ presets: PRESETS, macro: MACRO, bake: bakeParams })) as LabSnap;
+  type LabSnap = { presets: typeof PRESETS; macro: typeof MACRO; bake: BakeParams; baked?: Record<PlanetVisualType, boolean> };
+  const snapshotLab = (): LabSnap => JSON.parse(JSON.stringify({ presets: PRESETS, macro: MACRO, bake: bakeParams, baked })) as LabSnap;
   const CANONICAL = snapshotLab(); // captured before any saved overlay is applied
   const applyLab = (s: Partial<LabSnap>): void => {
     if (s.presets) for (const t of Object.keys(s.presets) as PlanetVisualType[]) if (PRESETS[t]) Object.assign(PRESETS[t], s.presets[t]);
     if (s.macro) for (const t of Object.keys(s.macro) as PlanetVisualType[]) if (MACRO[t]) Object.assign(MACRO[t], s.macro[t]);
     if (s.bake) Object.assign(bakeParams, s.bake);
+    if (s.baked) Object.assign(baked, s.baked); // per-type 'Baked + eroded' toggles persist too
   };
   try { const raw = localStorage.getItem(LAB_STORE); if (raw) applyLab(JSON.parse(raw) as Partial<LabSnap>); } catch { /* ignore */ }
 
@@ -224,8 +225,12 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
         slider('Circulation', 'cloudFlow', 0, 2, 0.01),
         slider('Turbulence', 'cloudTurb', 0, 1.5, 0.01),
         slider('Cyclones', 'cyclones', 0, 1, 0.01),
+        slider('Storm size', 'cycloneSize', 0.04, 0.4, 0.005),
         slider('Terrain coupling', 'cloudTerrain', 0, 1, 0.01),
         slider('Detail scale', 'cloudDetail', 0.5, 4, 0.05),
+        slider('Weather speed', 'cloudSpeed', 0, 1, 0.005),
+        slider('Wispiness', 'cloudWisp', 0, 1, 0.01),
+        slider('Clear regions', 'cloudRegion', 0, 1, 0.01),
       ],
     }, {
       title: 'Atmosphere', key: 'lab-atmos', ctrls: [
@@ -304,5 +309,8 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
     baked[selected] = on;
     globes.get(selected)?.setBaked(on, on ? { res: 128, droplets: 0, thermalIters: 0 } : bakeParams);
   };
+  // Dev hook: age the selected globe's storms past fade-in (verify full-strength
+  // cyclones without waiting out the ramp — see globe.stormsMature).
+  (window as unknown as { __labStorms?: () => void }).__labStorms = () => { globes.get(selected)?.stormsMature(); };
   return handle;
 }
