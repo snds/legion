@@ -125,6 +125,12 @@ float cloudDensity(vec3 d0){
 
   // ── Cyclones: seeded vortices in the storm belts — hemisphere-correct spin
   // (Coriolis: CCW north, CW south), tightest at the eye, drifting westward.
+  // Cyclones are OCEAN creatures — warm surface water powers them, so they never
+  // spin up over land and they decay on landfall. The vortex is gated by
+  // ocean-ness at the storm CENTRE: plateMacro vs sea level (the detail term is
+  // mean-centred, so the macro field is the right coarse land test at storm
+  // scale). A storm seeded over a continent simply never materializes; a
+  // drifting one fades smoothly as its eye crosses the coast.
   if (uCyclones > 0.0){
     for (int i = 0; i < 3; i++){
       float fi = float(i);
@@ -135,7 +141,9 @@ float cloudDensity(vec3 d0){
                      -uCloudTime * 0.004 * (0.7 + 0.6 * hash13(uNoiseSeed + fi + 29.0)));
       float ang = acos(clamp(dot(d, cc), -1.0, 1.0));
       float w = exp(-pow(ang / 0.26, 2.0));                       // vortex influence
-      float spin = uCyclones * 5.0 * w * sign(la);                // Coriolis handedness
+      if (w < 0.004) continue;                                    // skip the land test far from the eye
+      float sea = 1.0 - smoothstep(uSeaLevel - 0.05, uSeaLevel + 0.05, plateMacro(cc));
+      float spin = uCyclones * 5.0 * w * sign(la) * sea;          // Coriolis handedness, ocean-fed
       float cs = cos(spin), sn = sin(spin);
       d = d * cs + cross(cc, d) * sn + cc * dot(cc, d) * (1.0 - cs); // Rodrigues twist
     }

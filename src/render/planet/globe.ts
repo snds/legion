@@ -296,6 +296,7 @@ export class PlanetGlobe {
         cm.uCloudTurb.value = p.cloudTurb;
         cm.uCyclones.value = p.cyclones;
         cm.uCloudTerrain.value = p.cloudTerrain;
+        cm.uSeaLevel.value = p.seaLevel;
         (cm.uNoiseSeed.value as Vector3).set(...p.noiseSeed);
       }
       u.uSeaLevel.value = p.seaLevel;
@@ -376,6 +377,7 @@ export class PlanetGlobe {
         uCyclones: { value: p.cyclones },
         uCloudTerrain: { value: p.cloudTerrain },
         uCloudTime: { value: 0 },
+        uSeaLevel: { value: p.seaLevel }, // cyclone ocean gate
         // plateMacro inputs (orographic/climate coupling samples the real terrain)
         ...this.plateUniforms(),
         uCoastAmp: { value: macroParams(p.type).coastAmp },
