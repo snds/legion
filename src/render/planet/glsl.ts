@@ -303,6 +303,9 @@ uniform float uDetailScale;   // detail-noise frequency multiplier (fine vs lump
 uniform float uCraters;       // impact-crater coverage 0..1 (0 = off) — Mercury/Mars ephemera
 uniform float uCraterFreq;    // crater cell density (also sets size scale)
 uniform float uCraterDepth;   // bowl depth / rim height
+uniform float uCanyons;       // rift-canyon coverage 0..1 (0 = off) — Valles Marineris ephemera
+uniform float uCanyonFreq;    // rift-system scale (higher = more, smaller systems)
+uniform float uCanyonDepth;   // trough depth
 uniform float uSeaLevel;      // waterline (shared: flat-ocean vertex + bathymetry + ice shelf)
 uniform float uLatitudeIce;   // polar-cap EXTENT — drives the cap MASS below + its colour
 
@@ -347,6 +350,36 @@ float craterField(vec3 dir){
   return h * uCraterDepth;
 }
 
+// Rift canyons (Valles Marineris / Venusian chasmata): carve along ISO-CONTOURS
+// of a low-frequency fbm. A contour of a smooth field is a naturally LONG,
+// sinuous curve — never a straight great-circle groove (the geometric-trench
+// failure mode). A second mask noise breaks the contour's closed loops into
+// sparse arcs (an un-masked iso-contour is a perfect ring — the visible tell),
+// and a third varies depth along the rift so it reads as rifting/erosion, not
+// a uniform extruded path. Profile: flat floor walled by steep sides.
+float canyonField(vec3 dir){
+  if (uCanyons <= 0.0) return 0.0;
+  vec3 p = dir * uCanyonFreq + uNoiseSeed * 1.7;
+  // The contour field must be SMOOTH (2 octaves, low-frequency): a full 6-octave
+  // fbm crosses the iso band constantly at fine scales, shattering the "canyon"
+  // into fractal cliff-speckle everywhere (caught in review). Meander comes from
+  // the low octaves; the iso level sits near the field MEAN, where contours of a
+  // random field are at their longest (percolation), not closed rings.
+  float n = snoise(p) + 0.35 * snoise(p * 2.6 + 17.0);
+  float band = abs(n - 0.08);                         // distance to the rift contour
+  float w = 0.05;                                     // trough half-width (field units)
+  if (band > w) return 0.0;                           // early-out: skip the mask fbm off-rift
+  // Sparsity mask: breaks the contour's closed loops into arcs. The 0.75 factor
+  // caps the pass-band so breakage survives even at coverage 1.0 — un-broken
+  // loops read as perfect rings (verified live at max settings).
+  float mask = smoothstep(1.0 - uCanyons * 0.75, 1.12 - uCanyons * 0.75,
+                          fbm(p * 0.55 + 31.7) * 0.5 + 0.5);
+  if (mask <= 0.001) return 0.0;
+  float carve = 1.0 - smoothstep(w * 0.35, w, band);  // flat floor -> steep walls
+  float dv = 0.55 + 0.9 * (fbm(p * 1.3 + 53.1) * 0.5 + 0.5); // depth varies along-rift
+  return -carve * mask * dv * uCanyonDepth;
+}
+
 float terrainHeight(vec3 dir){
   vec3 p = dir * 1.7 + uNoiseSeed;
   // Isotropic simplex domain warp (a broad bend + a finer crenellation) so
@@ -365,7 +398,7 @@ float terrainHeight(vec3 dir){
   float mts   = clamp(ridged(dp), 0.0, 1.0);
   float detail = mix(hills, mts, uRidged);
   float relief = mix(0.16, 0.32, smoothstep(0.55, 0.85, macro)); // rougher up high
-  float h = macro + (detail - 0.5) * relief + craterField(dir);
+  float h = macro + (detail - 0.5) * relief + craterField(dir) + canyonField(dir);
   // Polar ice-cap MASS: beyond the (noise-broken) cap line the surface rises to a
   // solid shelf plateau above sea level — frozen ocean kilometres deep forming a
   // land-like mass, not just a white tint. Land under the cap keeps its relief.

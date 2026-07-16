@@ -200,6 +200,9 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
         macroSlider('Craters', 'craters', 0, 1, 0.01),
         macroSlider('Crater density', 'craterFreq', 6, 32, 0.5),
         macroSlider('Crater depth', 'craterDepth', 0, 0.2, 0.005),
+        macroSlider('Canyons', 'canyons', 0, 1, 0.01),
+        macroSlider('Canyon scale', 'canyonFreq', 1, 6, 0.1),
+        macroSlider('Canyon depth', 'canyonDepth', 0, 0.25, 0.005),
       ],
     }, {
       title: 'Master bake (erosion)', key: 'lab-bake', ctrls: [

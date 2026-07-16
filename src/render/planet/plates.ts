@@ -46,6 +46,9 @@ export interface MacroParams {
   craters: number;        // impact-crater coverage 0..1 (0 = off)
   craterFreq: number;     // crater density / size scale
   craterDepth: number;    // crater bowl depth / rim height
+  canyons: number;        // rift-canyon coverage 0..1 (0 = off)
+  canyonFreq: number;     // rift-system scale (higher = more, smaller systems)
+  canyonDepth: number;    // trough depth
 }
 
 /** Editable macro defaults per archetype. The lab mutates these and rebuilds; the
@@ -53,12 +56,12 @@ export interface MacroParams {
  *  land with a few continents; desert/rocky are land-dominant; lava is broken up
  *  into many plates (vigorous tectonics). Giants never call terrainHeight. */
 export const MACRO: Record<PlanetVisualType, MacroParams> = {
-  rocky:  { plateCount: 22, continents: 5, landCoverage: 0.82, sizeVariety: 0.4, uplift: 0.30, rangeWidth: 0.05, detailScale: 3.0, normalStrength: 0.22, coastAmp: 0.35, coastFreq: 2.2, rangeVar: 0.6, craters: 0.5, craterFreq: 16, craterDepth: 0.09 },
-  ocean:  { plateCount: 26, continents: 4, landCoverage: 0.30, sizeVariety: 0.35, uplift: 0.26, rangeWidth: 0.055, detailScale: 3.0, normalStrength: 0.20, coastAmp: 0.40, coastFreq: 2.4, rangeVar: 0.55, craters: 0.15, craterFreq: 20, craterDepth: 0.05 },
-  desert: { plateCount: 18, continents: 3, landCoverage: 0.92, sizeVariety: 0.5, uplift: 0.32, rangeWidth: 0.05, detailScale: 3.2, normalStrength: 0.24, coastAmp: 0.30, coastFreq: 2.0, rangeVar: 0.65, craters: 0.55, craterFreq: 14, craterDepth: 0.08 },
-  lava:   { plateCount: 30, continents: 6, landCoverage: 0.68, sizeVariety: 0.45, uplift: 0.36, rangeWidth: 0.045, detailScale: 3.5, normalStrength: 0.26, coastAmp: 0.38, coastFreq: 2.6, rangeVar: 0.7, craters: 0.25, craterFreq: 18, craterDepth: 0.05 },
-  ice:    { plateCount: 8, continents: 3, landCoverage: 0.5, sizeVariety: 0.3, uplift: 0.2, rangeWidth: 0.06, detailScale: 3.0, normalStrength: 0.2, coastAmp: 0.32, coastFreq: 2.2, rangeVar: 0.5, craters: 0, craterFreq: 16, craterDepth: 0.06 },
-  gas:    { plateCount: 8, continents: 3, landCoverage: 0.5, sizeVariety: 0.3, uplift: 0.2, rangeWidth: 0.06, detailScale: 3.0, normalStrength: 0.2, coastAmp: 0, coastFreq: 2.2, rangeVar: 0, craters: 0, craterFreq: 16, craterDepth: 0.06 },
+  rocky:  { plateCount: 22, continents: 5, landCoverage: 0.82, sizeVariety: 0.4, uplift: 0.30, rangeWidth: 0.05, detailScale: 3.0, normalStrength: 0.22, coastAmp: 0.35, coastFreq: 2.2, rangeVar: 0.6, craters: 0.5, craterFreq: 16, craterDepth: 0.09 , canyons: 0.3, canyonFreq: 2.6, canyonDepth: 0.10 },
+  ocean:  { plateCount: 26, continents: 4, landCoverage: 0.30, sizeVariety: 0.35, uplift: 0.26, rangeWidth: 0.055, detailScale: 3.0, normalStrength: 0.20, coastAmp: 0.40, coastFreq: 2.4, rangeVar: 0.55, craters: 0.15, craterFreq: 20, craterDepth: 0.05 , canyons: 0.15, canyonFreq: 2.6, canyonDepth: 0.08 },
+  desert: { plateCount: 18, continents: 3, landCoverage: 0.92, sizeVariety: 0.5, uplift: 0.32, rangeWidth: 0.05, detailScale: 3.2, normalStrength: 0.24, coastAmp: 0.30, coastFreq: 2.0, rangeVar: 0.65, craters: 0.55, craterFreq: 14, craterDepth: 0.08 , canyons: 0.45, canyonFreq: 2.4, canyonDepth: 0.12 },
+  lava:   { plateCount: 30, continents: 6, landCoverage: 0.68, sizeVariety: 0.45, uplift: 0.36, rangeWidth: 0.045, detailScale: 3.5, normalStrength: 0.26, coastAmp: 0.38, coastFreq: 2.6, rangeVar: 0.7, craters: 0.25, craterFreq: 18, craterDepth: 0.05 , canyons: 0.3, canyonFreq: 3.0, canyonDepth: 0.08 },
+  ice:    { plateCount: 8, continents: 3, landCoverage: 0.5, sizeVariety: 0.3, uplift: 0.2, rangeWidth: 0.06, detailScale: 3.0, normalStrength: 0.2, coastAmp: 0.32, coastFreq: 2.2, rangeVar: 0.5, craters: 0, craterFreq: 16, craterDepth: 0.06 , canyons: 0.2, canyonFreq: 2.8, canyonDepth: 0.06 },
+  gas:    { plateCount: 8, continents: 3, landCoverage: 0.5, sizeVariety: 0.3, uplift: 0.2, rangeWidth: 0.06, detailScale: 3.0, normalStrength: 0.2, coastAmp: 0, coastFreq: 2.2, rangeVar: 0, craters: 0, craterFreq: 16, craterDepth: 0.06 , canyons: 0, canyonFreq: 2.6, canyonDepth: 0 },
 };
 
 /** Base elevations (normalised) the continent field ramps between. Ranges rise
