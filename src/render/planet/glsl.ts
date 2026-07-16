@@ -380,6 +380,20 @@ float canyonField(vec3 dir){
   return -carve * mask * dv * uCanyonDepth;
 }
 
+// Surface EPHEMERA + polar cap mass over any BASE height — analytic macro+detail
+// OR the baked erosion master. ONE code path finishes both, so toggling the bake
+// can never add/remove craters, canyons, or the ice shelf (the old parity gap:
+// the atlas REPLACED terrainHeight, silently erasing every ephemeral feature).
+float finishHeight(float base, vec3 dir){
+  float h = base + craterField(dir) + canyonField(dir);
+  // Polar ice-cap MASS: beyond the (noise-broken) cap line the surface rises to a
+  // solid shelf plateau above sea level — frozen ocean kilometres deep forming a
+  // land-like mass, not just a white tint. Land under the cap keeps its relief.
+  float cap = iceCap(dir);
+  if (cap > 0.0) h = mix(h, max(h, uSeaLevel + 0.14), cap);
+  return clamp(h, 0.0, 1.0);
+}
+
 float terrainHeight(vec3 dir){
   vec3 p = dir * 1.7 + uNoiseSeed;
   // Isotropic simplex domain warp (a broad bend + a finer crenellation) so
@@ -398,13 +412,7 @@ float terrainHeight(vec3 dir){
   float mts   = clamp(ridged(dp), 0.0, 1.0);
   float detail = mix(hills, mts, uRidged);
   float relief = mix(0.16, 0.32, smoothstep(0.55, 0.85, macro)); // rougher up high
-  float h = macro + (detail - 0.5) * relief + craterField(dir) + canyonField(dir);
-  // Polar ice-cap MASS: beyond the (noise-broken) cap line the surface rises to a
-  // solid shelf plateau above sea level — frozen ocean kilometres deep forming a
-  // land-like mass, not just a white tint. Land under the cap keeps its relief.
-  float cap = iceCap(dir);
-  if (cap > 0.0) h = mix(h, max(h, uSeaLevel + 0.14), cap);
-  return clamp(h, 0.0, 1.0);
+  return finishHeight(macro + (detail - 0.5) * relief, dir);
 }
 `;
 

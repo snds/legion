@@ -66,8 +66,10 @@ void main(){
   vWB = normalize(m3 * bt);
   vFU = normalize(m3 * aFaceU);
   vFV = normalize(m3 * aFaceV);
-  // Height: baked master (atlas) or live analytic terrain.
-  float h = uUseBake > 0.5 ? atlasHeight(uHeightAtlas, aFace, faceUV, uHeightRes) : terrainHeight(dir);
+  // Height: baked master (atlas) or live analytic terrain. Either way the SAME
+  // finishHeight() lays craters/canyons/ice-shelf mass on top (bake parity).
+  float h = uUseBake > 0.5 ? finishHeight(atlasHeight(uHeightAtlas, aFace, faceUV, uHeightRes), dir)
+                           : terrainHeight(dir);
   // Water fills the basins: the ocean SURFACE is flat at sea level (the seafloor
   // no longer bumps the water geometry — it shows through the bathymetry colour).
   float hs = uSeaLevel > 0.0 ? max(h, uSeaLevel) : h;
@@ -125,13 +127,25 @@ void main(){
   float vHeight;
   vec3 N;
   if (uUseBake > 0.5) {
-    // Baked master: height + relief normal from the eroded atlas. The gradient is
-    // taken in face-UV and oriented by the world face tangents.
-    vHeight = atlasHeight(uHeightAtlas, vFace, vFaceUV, uHeightRes);
+    // Baked master + live ephemera (finishHeight — bake parity). Relief normal =
+    // the atlas gradient (erosion relief, face-UV frame) PLUS the ephemera
+    // gradient (crater/canyon/cap, analytic tangent frame with the base held
+    // fixed — decouples the two frames cleanly). Under the ice cap the atlas
+    // relief flattens with the shelf plateau, matching the analytic path.
+    float b0 = atlasHeight(uHeightAtlas, vFace, vFaceUV, uHeightRes);
+    vHeight = finishHeight(b0, dir);
     float e = 1.5 / uHeightRes;
     float hu = atlasHeight(uHeightAtlas, vFace, vFaceUV + vec2(e, 0.0), uHeightRes);
     float hv = atlasHeight(uHeightAtlas, vFace, vFaceUV + vec2(0.0, e), uHeightRes);
-    vec3 grad = ((hu - vHeight) / e) * normalize(vFU) + ((hv - vHeight) / e) * normalize(vFV);
+    vec3 grad = ((hu - b0) / e) * normalize(vFU) + ((hv - b0) / e) * normalize(vFV);
+    grad *= (1.0 - iceCap(dir)); // shelf plateau flattens the eroded relief
+    vec3 up = abs(dir.y) < 0.99 ? vec3(0.0,1.0,0.0) : vec3(1.0,0.0,0.0);
+    vec3 t = normalize(cross(up, dir));
+    vec3 b = cross(dir, t);
+    float eps = 0.0035;
+    float gex = (finishHeight(b0, normalize(dir + t*eps)) - vHeight) / eps;
+    float gey = (finishHeight(b0, normalize(dir + b*eps)) - vHeight) / eps;
+    grad += gex * normalize(vWT) + gey * normalize(vWB);
     N = normalize(vWN - uNormalStrength * grad);
   } else {
     // Live analytic: per-fragment height + gradient (tessellation-independent).
