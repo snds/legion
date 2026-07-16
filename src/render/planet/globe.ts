@@ -17,8 +17,9 @@
 import {
   Group, Mesh, BufferGeometry, BufferAttribute, ShaderMaterial,
   IcosahedronGeometry, RingGeometry, PlaneGeometry, DataTexture,
-  Vector3, BackSide, DoubleSide, AdditiveBlending, RedFormat, FloatType,
-  type Object3D,
+  Vector3, Quaternion, BackSide, DoubleSide, AdditiveBlending, RedFormat, FloatType,
+  LinearFilter, ClampToEdgeWrapping,
+  type Object3D, type Texture,
 } from 'three';
 import type { GenPlanet } from '../../data/system-gen';
 import {
@@ -26,11 +27,17 @@ import {
   type QuadNode, type Vec3,
 } from './cube-sphere';
 import { derivePlanetParams, type PlanetRenderParams } from './presets';
+import {
+  generatePlates, macroParams, macroHeight, packContSeeds, packContSize, packPlateSeeds, packPlateMotion,
+  type PlateField,
+} from './plates';
+import { warpDir } from './simplex';
+import { bakeCube, type BakeParams } from './bake';
 import { generateRings, densityLUT, type RingSystem } from './rings';
 import { channel, range } from './rng';
 import { stageForPx, apparentRadiusPx, dotBrightness, LodStage } from './lod';
 import {
-  SURFACE_VERT, SURFACE_FRAG, GIANT_VERT, GIANT_FRAG,
+  SURFACE_VERT, SURFACE_FRAG, GIANT_VERT, GIANT_FRAG, CLOUD_VERT, CLOUD_FRAG,
   ATMOS_VERT, ATMOS_FRAG, RING_VERT, RING_FRAG, IMPOSTOR_VERT, IMPOSTOR_FRAG,
 } from './shaders';
 
@@ -43,9 +50,16 @@ export interface UpdateCtx {
   viewportH: number;
 }
 
-const NODE_RES = 16;   // grid resolution per quadtree leaf
-const MAX_LEVEL = 4;   // system-zoom never needs a deeper tree
-const DETAIL = 1.1;    // split threshold (see cube-sphere.selectFace)
+const NODE_RES = 16;    // grid resolution per quadtree leaf
+// Planet v2 Phase 1: subdivide by SCREEN error, deep near the camera. DETAIL is
+// the target on-screen angular size of a leaf (radians) — 0.02 ≈ 1.1°. Only
+// camera-facing leaves reach MAX_LEVEL, so total count stays bounded by screen
+// coverage. (The "missing faces" that looked like LOD cracks were actually
+// inverted winding on the ±Y cube faces — see buildNodeGeometry — not
+// under-sampling, so no need for heavy over-tessellation here.)
+const MAX_LEVEL = 9;
+const DETAIL = 0.02;
+const MAX_LEAF_CACHE = 1400; // evict beyond this so deep dives don't grow unbounded
 const RING_SEGMENTS = 96;
 const LUT_N = 128;
 
@@ -53,11 +67,12 @@ const _camRight = new Vector3();
 const _camUp = new Vector3();
 const _planetWorld = new Vector3();
 const _camLocal = new Vector3();
+const _qTmp = new Quaternion();
 const _worldScale = new Vector3();
 
 export class PlanetGlobe {
   readonly root = new Group();
-  readonly params: PlanetRenderParams;
+  params: PlanetRenderParams; // mutable: the lab re-derives + refreshes uniforms live
   readonly rings: RingSystem | null;
 
   private readonly tiltGroup = new Group();
@@ -66,6 +81,7 @@ export class PlanetGlobe {
   private readonly surfaceMat: ShaderMaterial | null = null;
   private readonly giantMesh: Mesh | null = null;
   private readonly atmosMesh: Mesh | null = null;
+  private cloudMesh: Mesh | null = null;
   private readonly ringMesh: Mesh | null = null;
   private readonly impostorMesh: Mesh;
   private readonly impostorMat: ShaderMaterial;
@@ -73,17 +89,28 @@ export class PlanetGlobe {
   private readonly spinRate: number;
   private activeIds = '';
   private readonly nodeGeoCache = new Map<string, BufferGeometry>();
+  private atlasTex: DataTexture | null = null; // stacked 6-face eroded height atlas
+  private useBake = false;
+  private seed: number; // mutable so the lab can reseed IN PLACE (keep the root)
+
+  // ── CPU weather: cyclone placement/lifecycle (ocean-gated, respawning) ──
+  private cloudClock = 0;                       // raw seconds; shader scales by uCloudSpeed
+  private plateField: PlateField | null = null; // cached exact land field for storm gating
+  private cycRng: (() => number) | null = null;
+  private cycStorms: { lon: number; lat: number; drift: number; born: number }[] = [];
 
   constructor(
     readonly planet: GenPlanet,
     /** Visual radius in local-tier AUTHORING units (before SYSTEM_TIER_SCALE). */
     readonly radius: number,
   ) {
+    this.seed = planet.seed;
     this.params = derivePlanetParams(planet);
     this.root.name = `globe-${planet.seed}`;
     this.root.userData.type = 'planet-globe';
     this.root.userData.seed = planet.seed;
     this.root.userData.planetType = planet.type;
+    this.root.userData.bodyRadius = radius; // lets the camera focus/approach frame this globe
 
     // tilt → spin → surface
     const rng = channel(planet.seed >>> 0, 'orient');
@@ -112,8 +139,14 @@ export class PlanetGlobe {
 
     // Atmosphere shell (P2).
     if (this.params.hasAtmosphere) {
-      this.atmosMesh = new Mesh(new IcosahedronGeometry(radius * 1.035, 4), this.buildAtmosMat());
+      this.atmosMesh = new Mesh(new IcosahedronGeometry(radius * 1.035, 6), this.buildAtmosMat());
       this.root.add(this.atmosMesh);
+    }
+    // Cloud shell (surface worlds): lives in the SPIN frame — the same object
+    // space the surface samples for its cloud shadows, so they always align.
+    if (!this.params.isGiant) {
+      this.cloudMesh = new Mesh(new IcosahedronGeometry(radius * 1.03, 5), this.buildCloudMat());
+      this.spinGroup.add(this.cloudMesh);
     }
 
     // Distant impostor (analytic ray-sphere billboard).
@@ -138,6 +171,34 @@ export class PlanetGlobe {
         uNoiseSeed: { value: new Vector3(...p.noiseSeed) },
         uRidged: { value: p.ridged }, uWarp: { value: p.warp },
         uDisplacement: { value: p.displacement },
+        uNormalStrength: { value: macroParams(p.type).normalStrength },
+        uDetailScale: { value: macroParams(p.type).detailScale },
+        uCoastAmp: { value: macroParams(p.type).coastAmp },
+        uCoastFreq: { value: macroParams(p.type).coastFreq },
+        uRangeVar: { value: macroParams(p.type).rangeVar },
+        uCraters: { value: macroParams(p.type).craters },
+        uCraterFreq: { value: macroParams(p.type).craterFreq },
+        uCraterDepth: { value: macroParams(p.type).craterDepth },
+        uCloudCover: { value: p.cloudCover },
+        uCloudShadow: { value: p.cloudShadow },
+        uCloudFlow: { value: p.cloudFlow },
+        uCloudTurb: { value: p.cloudTurb },
+        uCloudTerrain: { value: p.cloudTerrain },
+        uCloudDetail: { value: p.cloudDetail },
+        uCloudSpeed: { value: p.cloudSpeed },
+        uCloudWisp: { value: p.cloudWisp },
+        uCloudRegion: { value: p.cloudRegion },
+        uCycSize: { value: p.cycloneSize },
+        uCycPos: { value: [new Vector3(0, 0, 1), new Vector3(0, 0, 1), new Vector3(0, 0, 1)] },
+        uCycStr: { value: [0, 0, 0] },
+        uCloudTime: { value: 0 },
+        uSunDirObj: { value: new Vector3(0, 0, 1) },
+        // Baked master (Phase 3): ONE stacked atlas (res × 6·res); the leaf picks
+        // its face row via the per-vertex aFace attribute (no per-leaf uniforms).
+        uUseBake: { value: 0 },
+        uHeightAtlas: { value: null as Texture | null },
+        uHeightRes: { value: 256 },
+        ...this.plateUniforms(),
         uSunDir: { value: new Vector3(0, 0, 1) },
         uSeaLevel: { value: p.seaLevel },
         uOceanShallow: { value: new Vector3(...p.oceanShallow) },
@@ -155,6 +216,231 @@ export class PlanetGlobe {
         uRampColor: { value: col },
       },
     });
+  }
+
+  /** Tectonic uniforms for the surface material — the continent + plate macro
+   *  structure, deterministic from the body seed (plates.ts). */
+  private plateUniforms(): Record<string, { value: unknown }> {
+    const f = generatePlates(this.seed, this.params.type);
+    return {
+      uContCount: { value: f.continentCount },
+      uContSeed: { value: packContSeeds(f) },
+      uContSize: { value: packContSize(f) },
+      uPlateCount: { value: f.plateCount },
+      uPlateSeed: { value: packPlateSeeds(f) },
+      uPlateMotion: { value: packPlateMotion(f) },
+      uPlateUplift: { value: f.uplift },
+      uRangeWidth: { value: f.rangeWidth },
+    };
+  }
+
+  // ── CPU cyclone engine ─────────────────────────────────────────────
+  // Storms are placed and gated HERE (not per-fragment): the CPU has the exact
+  // macroHeight land field + the live simplex warp, so it can test the storm's
+  // whole footprint (eye + a ring) against open water — a storm never spawns
+  // squeezed between nearby landmasses, decays on landfall as it drifts, and a
+  // spent storm respawns over fresh ocean (weather comes and goes).
+
+  /** Ocean-ness 0..1 of the LIVE (warped) terrain at an object-space direction. */
+  private oceanAt(dir: Vec3): number {
+    if (!this.plateField) this.plateField = generatePlates(this.seed, this.params.type);
+    const m = macroHeight(this.plateField, warpDir(dir, this.params.warp, this.params.noiseSeed as Vec3));
+    const sea = this.params.seaLevel;
+    const t = Math.min(1, Math.max(0, (m - (sea - 0.04)) / 0.1)); // smoothstep band
+    return 1 - t * t * (3 - 2 * t);
+  }
+
+  /** Min ocean-ness over the storm's footprint: the eye + 6 ring samples at
+   *  1.35× the storm radius — the whole body must sit over open water. */
+  private stormGate(lon: number, la: number): number {
+    const cl = Math.sqrt(Math.max(1 - la * la, 0));
+    const c: Vec3 = [Math.cos(lon) * cl, la, Math.sin(lon) * cl];
+    const up: Vec3 = Math.abs(c[1]) < 0.99 ? [0, 1, 0] : [1, 0, 0];
+    let ux = up[1] * c[2] - up[2] * c[1], uy = up[2] * c[0] - up[0] * c[2], uz = up[0] * c[1] - up[1] * c[0];
+    const ul = Math.hypot(ux, uy, uz) || 1; ux /= ul; uy /= ul; uz /= ul;
+    const vx = c[1] * uz - c[2] * uy, vy = c[2] * ux - c[0] * uz, vz = c[0] * uy - c[1] * ux;
+    const R = 1.35 * this.params.cycloneSize, cR = Math.cos(R), sR = Math.sin(R);
+    let gate = this.oceanAt(c);
+    for (let k = 0; k < 6 && gate > 0; k++) {
+      const a = (k / 6) * Math.PI * 2, ca = Math.cos(a), sa = Math.sin(a);
+      const d: Vec3 = [
+        c[0] * cR + (ux * ca + vx * sa) * sR,
+        c[1] * cR + (uy * ca + vy * sa) * sR,
+        c[2] * cR + (uz * ca + vz * sa) * sR,
+      ];
+      gate = Math.min(gate, this.oceanAt(d));
+    }
+    return gate;
+  }
+
+  /** Roll storm candidates (slot parity fixes the hemisphere) until one sits over
+   *  open water; keep the wettest candidate if none fully clears. */
+  private spawnStorm(slot: number, bornT: number): { lon: number; lat: number; drift: number; born: number } {
+    const rng = this.cycRng!;
+    let best = { lon: 0, lat: 0.3, drift: 1, g: -1 };
+    for (let k = 0; k < 12; k++) {
+      const lon = rng() * Math.PI * 2;
+      const lat = (0.12 + 0.38 * rng()) * (slot % 2 === 0 ? 1 : -1);
+      const drift = 0.7 + 0.6 * rng();
+      const g = this.stormGate(lon, lat);
+      if (g > best.g) best = { lon, lat, drift, g };
+      if (g >= 0.6) break;
+    }
+    return { lon: best.lon, lat: best.lat, drift: best.drift, born: bornT };
+  }
+
+  /** Per-frame: drift each storm westward, gate it against the live coastline,
+   *  respawn it once it has fully died over land. Pushes uCycPos/uCycStr. */
+  private updateStorms(): void {
+    const p = this.params;
+    const mats = [this.surfaceMat, this.cloudMesh ? (this.cloudMesh.material as ShaderMaterial) : null];
+    const T = this.cloudClock * p.cloudSpeed;
+    if (!this.cycRng) this.cycRng = channel(this.seed >>> 0, 'cyclones');
+    if (this.cycStorms.length === 0) for (let i = 0; i < 3; i++) this.cycStorms.push(this.spawnStorm(i, T));
+    for (let i = 0; i < 3; i++) {
+      let str = 0, x = 0, y = 0, z = 1;
+      if (p.cyclones > 0) {
+        let s = this.cycStorms[i];
+        let lon = s.lon - (T - s.born) * 0.03 * s.drift; // westward drift on the weather clock
+        let gate = this.stormGate(lon, s.lat);
+        if (gate < 0.03 && T - s.born > 2) { // fully dead over land → respawn over fresh ocean
+          s = this.cycStorms[i] = this.spawnStorm(i, T);
+          lon = s.lon; gate = this.stormGate(lon, s.lat);
+        }
+        const fadeIn = Math.min(1, (T - s.born) * 0.25);
+        str = p.cyclones * gate * fadeIn * Math.sign(s.lat);
+        const cl = Math.sqrt(Math.max(1 - s.lat * s.lat, 0));
+        x = Math.cos(lon) * cl; y = s.lat; z = Math.sin(lon) * cl;
+      }
+      for (const m of mats) {
+        if (!m) continue;
+        ((m.uniforms.uCycPos.value as Vector3[])[i]).set(x, y, z);
+        (m.uniforms.uCycStr.value as number[])[i] = str;
+      }
+    }
+  }
+
+  /** Dev/verification hook: age every live storm past its fade-in so it renders at
+   *  full strength immediately (the lab's __labStorms global). */
+  stormsMature(): void { for (const s of this.cycStorms) s.born = -999; }
+
+  /** Bake the eroded height master into 6 face textures (Phase 3). Heavy — run on
+   *  demand (the lab's Bake / Rebuild), never per-frame. Disposes any prior set. */
+  bake(params: Partial<BakeParams> = {}): void {
+    if (this.params.isGiant || !this.surfaceMat) return;
+    // Warp the bake with the SAME simplex + noiseSeed the live shader uses, so a
+    // baked world's coasts/ranges land exactly where the live view drew them.
+    const cube = bakeCube(this.seed, this.params.type, params, this.params.warp, this.params.noiseSeed);
+    const res = cube.res;
+    // Stack the 6 faces vertically into one atlas (res wide × 6·res tall); face f
+    // owns rows [f·res, (f+1)·res). The shader maps (aFace, faceUV) into it.
+    const atlas = new Float32Array(res * res * 6);
+    for (let f = 0; f < 6; f++) atlas.set(cube.faces[f], f * res * res);
+    this.atlasTex?.dispose();
+    const tex = new DataTexture(atlas as Float32Array<ArrayBuffer>, res, res * 6, RedFormat, FloatType);
+    tex.minFilter = tex.magFilter = LinearFilter;
+    tex.wrapS = tex.wrapT = ClampToEdgeWrapping;
+    tex.needsUpdate = true;
+    this.atlasTex = tex;
+    this.surfaceMat.uniforms.uHeightAtlas.value = tex;
+    this.surfaceMat.uniforms.uHeightRes.value = res;
+    this.useBake = true;
+    this.surfaceMat.uniforms.uUseBake.value = 1;
+  }
+
+  /** Toggle between the baked master and the live analytic terrain. */
+  setBaked(on: boolean, params: Partial<BakeParams> = {}): void {
+    if (on) { this.bake(params); return; }
+    this.useBake = false;
+    if (this.surfaceMat) this.surfaceMat.uniforms.uUseBake.value = 0;
+  }
+
+  /** Re-jitter the terrain from a new seed IN PLACE (keeps the root, so a camera
+   *  tracking this globe isn't stranded). Geometry is seed-independent, so only
+   *  the shader params + plate field change; callers re-apply the bake if active. */
+  reseed(seed: number): void {
+    this.seed = seed >>> 0;
+    this.refreshParams();
+  }
+
+  /**
+   * Re-derive params (presets + live MACRO) and push them into the EXISTING
+   * materials' uniforms — no teardown, no shader recompile. Terrain + tectonics
+   * are entirely GPU-uniform-driven and the cube-sphere geometry is independent
+   * of them, so the lab can tune live without rebuilding the globe (which caused
+   * a vanish + a heavy per-fragment recompile on every slider tick). Structural
+   * changes (planet type, atmosphere on/off) still need a full rebuild.
+   */
+  refreshParams(): void {
+    this.params = derivePlanetParams({ ...this.planet, seed: this.seed });
+    const p = this.params;
+    if (this.surfaceMat) {
+      const u = this.surfaceMat.uniforms;
+      (u.uNoiseSeed.value as Vector3).set(...p.noiseSeed);
+      u.uRidged.value = p.ridged; u.uWarp.value = p.warp;
+      u.uDisplacement.value = p.displacement;
+      u.uNormalStrength.value = macroParams(p.type).normalStrength;
+      u.uDetailScale.value = macroParams(p.type).detailScale;
+      u.uCoastAmp.value = macroParams(p.type).coastAmp;
+      u.uCoastFreq.value = macroParams(p.type).coastFreq;
+      u.uRangeVar.value = macroParams(p.type).rangeVar;
+      u.uCraters.value = macroParams(p.type).craters;
+      u.uCraterFreq.value = macroParams(p.type).craterFreq;
+      u.uCraterDepth.value = macroParams(p.type).craterDepth;
+      u.uCloudCover.value = p.cloudCover;
+      u.uCloudShadow.value = p.cloudShadow;
+      u.uCloudFlow.value = p.cloudFlow;
+      u.uCloudTurb.value = p.cloudTurb;
+      u.uCloudTerrain.value = p.cloudTerrain;
+      u.uCloudDetail.value = p.cloudDetail;
+      u.uCloudSpeed.value = p.cloudSpeed;
+      u.uCloudWisp.value = p.cloudWisp;
+      u.uCloudRegion.value = p.cloudRegion;
+      u.uCycSize.value = p.cycloneSize;
+      if (this.cloudMesh) {
+        const cm = (this.cloudMesh.material as ShaderMaterial).uniforms;
+        cm.uCloudCover.value = p.cloudCover;
+        cm.uCloudFlow.value = p.cloudFlow;
+        cm.uCloudTurb.value = p.cloudTurb;
+        cm.uCloudTerrain.value = p.cloudTerrain;
+        cm.uCloudDetail.value = p.cloudDetail;
+        cm.uCloudSpeed.value = p.cloudSpeed;
+        cm.uCloudWisp.value = p.cloudWisp;
+        cm.uCloudRegion.value = p.cloudRegion;
+        cm.uCycSize.value = p.cycloneSize;
+        (cm.uNoiseSeed.value as Vector3).set(...p.noiseSeed);
+      }
+      // Storm placement depends on the (possibly retuned) terrain and seed —
+      // drop the cached field, storms, and rng so everything re-derives fresh.
+      this.plateField = null; this.cycStorms = []; this.cycRng = null;
+      u.uSeaLevel.value = p.seaLevel;
+      (u.uOceanShallow.value as Vector3).set(...p.oceanShallow);
+      (u.uOceanDeep.value as Vector3).set(...p.oceanDeep);
+      u.uLatitudeIce.value = p.latitudeIce; u.uMoisture.value = p.moisture; u.uRoughness.value = p.roughness;
+      (u.uEmissive.value as Vector3).set(...p.emissive); u.uEmissiveStrength.value = p.emissiveStrength;
+      u.uNightLights.value = p.nightLights; u.uTerminator.value = p.hasAtmosphere ? 0.1 : 0.03;
+      (u.uAtmosTint.value as Vector3).set(...p.atmosphere);
+      const at = u.uRampAt.value as Float32Array;
+      const col = u.uRampColor.value as Float32Array;
+      at.fill(0); col.fill(0);
+      p.ramp.slice(0, 6).forEach((s, i) => { at[i] = s.at; col[i * 3] = s.color[0]; col[i * 3 + 1] = s.color[1]; col[i * 3 + 2] = s.color[2]; });
+      u.uRampCount.value = Math.min(6, p.ramp.length);
+      Object.assign(u, this.plateUniforms());
+    }
+    if (this.giantMesh) {
+      const u = (this.giantMesh.material as ShaderMaterial).uniforms;
+      (u.uBandA.value as Vector3).set(...p.bandColorA);
+      (u.uBandB.value as Vector3).set(...p.bandColorB);
+      u.uBandCount.value = Math.max(1, p.bandCount);
+      u.uTurbulence.value = p.bandTurbulence;
+    }
+    if (this.atmosMesh) {
+      const u = (this.atmosMesh.material as ShaderMaterial).uniforms;
+      (u.uColor.value as Vector3).set(...p.atmosphere);
+      u.uDensity.value = p.atmosphereDensity;
+    }
+    const c = this.baseColor();
+    (this.impostorMat.uniforms.uColor.value as Vector3).set(c[0], c[1], c[2]);
   }
 
   private buildGiantMat(): ShaderMaterial {
@@ -186,6 +472,36 @@ export class PlanetGlobe {
         uSunDir: { value: new Vector3(0, 0, 1) },
         uColor: { value: new Vector3(...p.atmosphere) },
         uDensity: { value: p.atmosphereDensity },
+      },
+    });
+  }
+
+  private buildCloudMat(): ShaderMaterial {
+    const p = this.params;
+    return new ShaderMaterial({
+      vertexShader: CLOUD_VERT, fragmentShader: CLOUD_FRAG,
+      transparent: true, depthWrite: false,
+      uniforms: {
+        uSunDir: { value: new Vector3(0, 0, 1) },
+        uTerminator: { value: 0.08 },
+        uNoiseSeed: { value: new Vector3(...p.noiseSeed) },
+        uCloudCover: { value: p.cloudCover },
+        uCloudFlow: { value: p.cloudFlow },
+        uCloudTurb: { value: p.cloudTurb },
+        uCloudTerrain: { value: p.cloudTerrain },
+        uCloudDetail: { value: p.cloudDetail },
+        uCloudSpeed: { value: p.cloudSpeed },
+        uCloudWisp: { value: p.cloudWisp },
+        uCloudRegion: { value: p.cloudRegion },
+        uCycSize: { value: p.cycloneSize },
+        uCycPos: { value: [new Vector3(0, 0, 1), new Vector3(0, 0, 1), new Vector3(0, 0, 1)] },
+        uCycStr: { value: [0, 0, 0] },
+        uCloudTime: { value: 0 },
+        // plateMacro inputs (orographic/climate coupling samples the real terrain)
+        ...this.plateUniforms(),
+        uCoastAmp: { value: macroParams(p.type).coastAmp },
+        uCoastFreq: { value: macroParams(p.type).coastFreq },
+        uRangeVar: { value: macroParams(p.type).rangeVar },
       },
     });
   }
@@ -260,7 +576,21 @@ export class PlanetGlobe {
     for (const n of nodes) {
       let geo = this.nodeGeoCache.get(nodeId(n));
       if (!geo) { geo = buildNodeGeometry(n, this.radius, NODE_RES); this.nodeGeoCache.set(nodeId(n), geo); }
-      this.surfaceGroup.add(new Mesh(geo, this.surfaceMat));
+      const leaf = new Mesh(geo, this.surfaceMat);
+      // The leaf's undisplaced bounding sphere doesn't include the vertex-shader
+      // displacement; at true scale + deep transforms that mis-cull can drop
+      // whole patches ("missing faces"). The globe as a whole is culled by its
+      // LOD stage, so per-leaf frustum culling only costs correctness here.
+      leaf.frustumCulled = false;
+      this.surfaceGroup.add(leaf);
+    }
+    // Evict cold cached leaves beyond the cap (never the active set).
+    if (this.nodeGeoCache.size > MAX_LEAF_CACHE) {
+      const active = new Set(nodes.map(nodeId));
+      for (const [id, geo] of this.nodeGeoCache) {
+        if (this.nodeGeoCache.size <= MAX_LEAF_CACHE) break;
+        if (!active.has(id)) { geo.dispose(); this.nodeGeoCache.delete(id); }
+      }
     }
   }
 
@@ -282,6 +612,7 @@ export class PlanetGlobe {
     this.surfaceGroup.visible = near;
     if (this.giantMesh) this.giantMesh.visible = near;
     if (this.atmosMesh) this.atmosMesh.visible = near;
+    if (this.cloudMesh) this.cloudMesh.visible = near;
     if (this.ringMesh) this.ringMesh.visible = near;
     this.impostorMesh.visible = !near;
 
@@ -298,6 +629,24 @@ export class PlanetGlobe {
       }
       if (this.giantMesh) { const m = this.giantMesh.material as ShaderMaterial; setSun(m, sunDir); m.uniforms.uTime.value = (m.uniforms.uTime.value + ctx.dt) % 1000; }
       if (this.atmosMesh) setSun(this.atmosMesh.material as ShaderMaterial, sunDir);
+      // ONE weather clock (both materials + CPU storms). Wraps to keep f32 uniform
+      // precision; storms reset on wrap so (T - born) never goes negative.
+      this.cloudClock += ctx.dt;
+      if (this.cloudClock >= 10000) { this.cloudClock %= 10000; this.cycStorms = []; }
+      if (this.cloudMesh) {
+        const m = this.cloudMesh.material as ShaderMaterial;
+        setSun(m, sunDir);
+        m.uniforms.uCloudTime.value = this.cloudClock;
+      }
+      if (this.surfaceMat) {
+        // Sun in the surface's OBJECT space (cloud-shadow shell ray) + the shared
+        // drift clock, so the ground shadow moves with the cloud overhead.
+        const su = this.surfaceMat.uniforms;
+        this.surfaceGroup.getWorldQuaternion(_qTmp);
+        (su.uSunDirObj.value as Vector3).copy(sunDir).applyQuaternion(_qTmp.invert());
+        su.uCloudTime.value = this.cloudClock;
+      }
+      if (!this.params.isGiant && this.params.cloudCover > 0) this.updateStorms();
       if (this.ringMesh) {
         const m = this.ringMesh.material as ShaderMaterial;
         setSun(m, sunDir);
@@ -324,11 +673,14 @@ export class PlanetGlobe {
     this.root.removeFromParent();
     for (const g of this.nodeGeoCache.values()) g.dispose();
     this.nodeGeoCache.clear();
+    this.atlasTex?.dispose();
     this.surfaceMat?.dispose();
     this.giantMesh?.geometry.dispose();
     (this.giantMesh?.material as ShaderMaterial | undefined)?.dispose();
     this.atmosMesh?.geometry.dispose();
     (this.atmosMesh?.material as ShaderMaterial | undefined)?.dispose();
+    this.cloudMesh?.geometry.dispose();
+    (this.cloudMesh?.material as ShaderMaterial | undefined)?.dispose();
     if (this.ringMesh) {
       this.ringMesh.geometry.dispose();
       const m = this.ringMesh.material as ShaderMaterial;
@@ -352,7 +704,13 @@ export function buildNodeGeometry(node: QuadNode, radius: number, res: number): 
   const dim = res + 1;
   const positions = new Float32Array(dim * dim * 3);
   const normals = new Float32Array(dim * dim * 3);
-  let k = 0;
+  const faceUV = new Float32Array(dim * dim * 2); // face-local (u,v) ∈ [0,1] → bake lookup
+  // Per-vertex (constant per leaf) so the baked path never depends on a shared-
+  // material per-leaf uniform — the leaf carries its own face index + axes.
+  const aFace = new Float32Array(dim * dim);
+  const aFaceU = new Float32Array(dim * dim * 3);
+  const aFaceV = new Float32Array(dim * dim * 3);
+  let k = 0, k2 = 0, k1 = 0;
   for (let iy = 0; iy <= res; iy++) {
     for (let ix = 0; ix <= res; ix++) {
       const u = node.u0 + node.size * (ix / res);
@@ -360,19 +718,44 @@ export function buildNodeGeometry(node: QuadNode, radius: number, res: number): 
       const s = cubeToSphere(facePoint(face, u, v));
       positions[k] = s[0] * radius; positions[k + 1] = s[1] * radius; positions[k + 2] = s[2] * radius;
       normals[k] = s[0]; normals[k + 1] = s[1]; normals[k + 2] = s[2];
-      k += 3;
+      faceUV[k2] = u; faceUV[k2 + 1] = v;
+      aFace[k1] = node.face;
+      aFaceU[k] = face.axisU[0]; aFaceU[k + 1] = face.axisU[1]; aFaceU[k + 2] = face.axisU[2];
+      aFaceV[k] = face.axisV[0]; aFaceV[k + 1] = face.axisV[1]; aFaceV[k + 2] = face.axisV[2];
+      k += 3; k2 += 2; k1 += 1;
     }
   }
+  // Wind triangles so the FRONT face points OUTWARD on every cube face. Half the
+  // cube faces parametrise with opposite handedness, so a fixed winding faces
+  // INWARD on them → a FrontSide material culls those patches: they vanish and
+  // you see the interior through the gap (the "transparent/missing faces" bug).
+  // Decide the flip from the ACTUAL built geometry (robust to the cube→sphere
+  // warp): does the first triangle's face normal point inward from the centre?
+  const facesIn = (i0: number, i1: number, i2: number): boolean => {
+    const ax = positions[i0 * 3], ay = positions[i0 * 3 + 1], az = positions[i0 * 3 + 2];
+    const bx = positions[i1 * 3], by = positions[i1 * 3 + 1], bz = positions[i1 * 3 + 2];
+    const cx = positions[i2 * 3], cy = positions[i2 * 3 + 1], cz = positions[i2 * 3 + 2];
+    const ux = bx - ax, uy = by - ay, uz = bz - az;
+    const vx = cx - ax, vy = cy - ay, vz = cz - az;
+    const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+    return nx * (ax + bx + cx) + ny * (ay + by + cy) + nz * (az + bz + cz) < 0;
+  };
+  const flip = facesIn(0, dim, 1); // default winding of the first quad = (a, c, b)
   const indices: number[] = [];
   for (let iy = 0; iy < res; iy++) {
     for (let ix = 0; ix < res; ix++) {
       const a = iy * dim + ix, b = a + 1, c = a + dim, d = c + 1;
-      indices.push(a, c, b, b, c, d);
+      if (flip) indices.push(a, b, c, b, d, c);
+      else indices.push(a, c, b, b, c, d);
     }
   }
   const geo = new BufferGeometry();
   geo.setAttribute('position', new BufferAttribute(positions, 3));
   geo.setAttribute('normal', new BufferAttribute(normals, 3));
+  geo.setAttribute('faceUV', new BufferAttribute(faceUV, 2));
+  geo.setAttribute('aFace', new BufferAttribute(aFace, 1));
+  geo.setAttribute('aFaceU', new BufferAttribute(aFaceU, 3));
+  geo.setAttribute('aFaceV', new BufferAttribute(aFaceV, 3));
   geo.setIndex(indices);
   return geo;
 }

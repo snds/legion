@@ -57,9 +57,8 @@ float snoise(vec3 v){
 }
 `;
 
-/** fBm, ridged multifractal, domain warp + the combined terrain height field.
- *  `terrainHeight(dir)` returns a normalised height in ~[0,1] for a unit-sphere
- *  direction, blending smooth fBm and sharp ridges by uRidged, warped by uWarp. */
+/** fBm + ridged multifractal noise — the detail vocabulary. `uNoiseSeed` offsets
+ *  the domain per body; `uRidged`/`uWarp` steer the combined terrain field below. */
 export const GLSL_FBM = /* glsl */ `
 uniform vec3  uNoiseSeed;   // per-body domain offset (determinism)
 uniform float uRidged;      // 0 = fBm hills, 1 = ridged mountains
@@ -86,14 +85,293 @@ float ridged(vec3 p){
   return f; // ~[0,1.x]
 }
 
+// Dave Hoskins hashes (cheap, decorrelated) — crater cells, cyclone seeds, etc.
+float hash13(vec3 p3){ p3 = fract(p3 * 0.1031); p3 += dot(p3, p3.zyx + 31.32); return fract((p3.x + p3.y) * p3.z); }
+vec3  hash33(vec3 p3){ p3 = fract(p3 * vec3(0.1031, 0.1030, 0.0973)); p3 += dot(p3, p3.yxz + 33.33); return fract((p3.xxy + p3.yzz) * p3.zyx); }
+`;
+
+/** Cloud coverage field — ONE source shared by the cloud-shell material and the
+ *  surface shader's self-shadow sampling, so the shadow on the ground always
+ *  matches the cloud overhead. A LIVING circulation, not a static deck: zonal
+ *  wind bands advect by latitude, seeded cyclones spin (hemisphere-correct
+ *  Coriolis), a time-morphing warp shears the field, and the REAL macro terrain
+ *  couples in (wet/dry climate belts breed or starve cloud; high ranges impede
+ *  the deck). Requires GLSL_FBM and GLSL_PLATES (plateMacro) — include BOTH
+ *  before this chunk. */
+export const GLSL_CLOUDS = /* glsl */ `
+uniform float uCloudCover;    // 0..1 sky coverage (0 = clear)
+uniform float uCloudTime;     // raw clock (seconds) — scaled by uCloudSpeed below
+uniform float uCloudSpeed;    // weather-clock scale (default near-imperceptible)
+uniform float uCloudFlow;     // zonal circulation strength (trade winds / jets)
+uniform float uCloudTurb;     // evolving shear / morph turbulence
+uniform float uCloudTerrain;  // terrain/climate coupling (orographic + wet-dry)
+uniform float uCloudDetail;   // formation scale: >1 = smaller systems + finer billow texture
+uniform float uCloudWisp;     // shear-thinning: stretched cloud evaporates into wisps
+uniform float uCloudRegion;   // synoptic regionality: whole regions clear or fill
+uniform float uCycSize;       // storm angular radius (radians)
+uniform vec3  uCycPos[3];     // storm centres (object space) — CPU-placed, ocean-gated
+uniform float uCycStr[3];     // signed storm strength (sign = hemisphere spin; 0 = dormant)
+
+vec3 rotY(vec3 d, float a){ float c = cos(a), s = sin(a); return vec3(c*d.x + s*d.z, d.y, -s*d.x + c*d.z); }
+float fbm2(vec3 p){ return snoise(p) * 0.6 + snoise(p * 2.3) * 0.3; } // cheap 2-octave
+
+float cloudDensity(vec3 d0){
+  if (uCloudCover <= 0.0) return 0.0;
+  float lat = d0.y; // sin(latitude)
+  float T = uCloudTime * uCloudSpeed; // ONE weather clock for deck + storms + regions
+
+  // ── Cyclones: CPU-placed vortices (globe.ts spawns them over OPEN WATER via the
+  // exact macroHeight land test, decays them on landfall, and respawns spent ones)
+  // — the shader only applies the spin. The twist runs in OBJECT space (d0) so the
+  // visible eye sits exactly where the CPU gated it; the advected deck then flows
+  // THROUGH the vortex. \`stretch\` accumulates how hard each sample was sheared by
+  // storm arms — the wisp pass below thins stretched cloud instead of letting it
+  // smear into pulled pixels.
+  vec3 dv = d0;
+  float stretch = 0.0;
+  float storm = 0.0;
+  float csize = max(uCycSize, 0.01);
+  for (int i = 0; i < 3; i++){
+    float str = uCycStr[i];
+    if (str == 0.0) continue;
+    vec3 cc = uCycPos[i];
+    float ang = acos(clamp(dot(dv, cc), -1.0, 1.0)) / csize;      // 0 eye → 1 wall
+    float w = exp(-ang * ang);                                    // vortex influence
+    float spin = str * 5.0 * w;                                   // sign = Coriolis handedness
+    float cs = cos(spin), sn = sin(spin);
+    dv = dv * cs + cross(cc, dv) * sn + cc * dot(cc, dv) * (1.0 - cs); // Rodrigues twist
+    stretch += abs(spin) * smoothstep(0.25, 1.1, ang);            // arms shear; the eye doesn't
+    storm += w;
+  }
+
+  // ── Zonal circulation: a uniform deck drift plus a BOUNDED, slowly-reversing
+  // differential shear (trades / jets). Bounded oscillation, not accumulation —
+  // unbounded latitude-differential rotation smears the deck into ribbons (P-06).
+  float zonal = 0.6 * cos(lat * 4.712) + 0.15 * cos(lat * 12.566);
+  float tphase = T * 0.02; // uCloudSpeed=1 ≈ the old rate; the 0.12 default is ~8x slower
+  float adv = 0.35 * tphase + 0.35 * zonal * sin(tphase * 0.22);
+  vec3 d = rotY(dv, uCloudFlow * adv);
+
+  // ── Evolving turbulence: a time-morphing warp — formations grow, shear and
+  // decay instead of sliding around as a frozen pattern. uCloudDetail scales the
+  // whole spectrum (smaller formations, finer billows). The morph warp displaces
+  // in p-SPACE, so its distortion stays proportional to feature size at any
+  // detail setting.
+  float det = max(uCloudDetail, 0.25);
+  vec3 p = d * 3.2 * det + uNoiseSeed * 0.31;
+  if (uCloudTurb > 0.0){
+    float tt = T * 0.02;
+    p += uCloudTurb * 0.55 * vec3(fbm2(d * 1.6 + vec3(tt, 7.0, 0.0)),
+                                  fbm2(d * 1.6 + vec3(0.0, tt + 23.0, 5.0)),
+                                  fbm2(d * 1.6 + vec3(11.0, 0.0, tt + 41.0)));
+  }
+  float f = fbm(p) * 0.5 + 0.5;                        // broad weather systems
+  f += 0.4  * (fbm(p * 3.6 + 17.3) * 0.5 + 0.5);       // billow detail
+  f += 0.22 * (fbm(p * 8.8 + 31.7) * 0.5 + 0.5);       // fine cauliflower texture
+  f /= 1.62;
+
+  // ── Terrain / climate coupling: the wet equator and mid-latitude belts breed
+  // cloud and the dry subtropics clear it (the SAME belts as the surface biomes);
+  // high ranges impede the deck / poke above it (orographic clearing).
+  if (uCloudTerrain > 0.0){
+    float al = abs(lat);
+    float latB = 1.0 - 0.7 * smoothstep(0.22, 0.42, al) * (1.0 - smoothstep(0.5, 0.72, al));
+    float macroH = plateMacro(d0);
+    f += uCloudTerrain * 0.16 * (latB - 0.5);
+    f -= uCloudTerrain * 0.35 * smoothstep(0.72, 0.92, macroH);
+  }
+
+  // ── Synoptic regionality: an ultra-low-frequency moisture field pushes whole
+  // regions to fully CLEAR sky or dense overcast (weather is not uniform) — the
+  // regions drift/morph on the slow weather clock, so cover comes and goes.
+  if (uCloudRegion > 0.0){
+    float rg = fbm(d0 * 1.15 + uNoiseSeed * 0.53 + vec3(T * 0.008, 0.0, -T * 0.005));
+    f += uCloudRegion * 0.5 * rg;
+  }
+  f += 0.3 * clamp(storm, 0.0, 1.0);                   // a storm IS dense cloud
+
+  // ── Wisp pass: cloud that the storm arms stretched hard gets thinner and
+  // shredded by fine noise — spiral extremes evaporate into translucent wisps
+  // (widening the upper smoothstep edge caps their alpha) instead of stretching
+  // like pulled pixels.
+  float ws = clamp(stretch * 0.5, 0.0, 1.0) * uCloudWisp;
+  if (ws > 0.0) f -= ws * (0.08 + 0.14 * (snoise(d * 14.0 + uNoiseSeed) * 0.5 + 0.5));
+
+  float c0 = 1.0 - uCloudCover * 0.85;                 // coverage remap
+  return smoothstep(c0 - 0.12, c0 + 0.18 + 0.4 * ws, f);
+}
+`;
+
+/** Tectonic MACRO field — the GLSL mirror of plates.ts `macroHeight()`. Two
+ *  layers: a CONTINENT field (few big landmasses) and PLATE boundaries (many
+ *  cells whose edges make ranges/rifts). MUST stay in step with the CPU reference
+ *  (the Phase-3 bake caches it). Only loop-index array access, so it is safe in
+ *  both vertex and fragment shaders. MAX_* must equal plates.ts. */
+export const GLSL_PLATES = /* glsl */ `
+const int MAX_PLATES = 48;
+const int MAX_CONTINENTS = 8;
+uniform int   uContCount;
+uniform vec3  uContSeed[MAX_CONTINENTS];  // unit continent-centre directions
+uniform float uContSize[MAX_CONTINENTS];  // per-continent cap radius (radians)
+uniform int   uPlateCount;
+uniform vec3  uPlateSeed[MAX_PLATES];      // unit plate-centre directions
+uniform vec3  uPlateMotion[MAX_PLATES];    // per-plate tangent drift
+uniform float uPlateUplift;                // convergent-range height gain
+uniform float uRangeWidth;                 // inland spread of ranges (dot-space)
+uniform float uCoastAmp;                    // coastline-fracture amplitude (radians)
+uniform float uCoastFreq;                   // coastline-fracture frequency (bay scale)
+uniform float uRangeVar;                    // along-boundary uplift variation (broken peaks)
+
+const float OCEAN_FLOOR = 0.20;
+const float LAND_HEIGHT  = 0.68;
+
+// Shared coastline value-noise — MUST match coastFbm() in plates.ts (CPU) so a
+// baked coast and a live coast agree. uint hashing mirrors the CPU Math.imul/>>>
+// exactly (integer-identical; only the final float division differs by float32
+// rounding, <<1 texel). A MACRO term — a function of direction, continuous across
+// cube faces — so it decides WHERE the shoreline is, shared by both paths.
+float uhashf(int X, int Y, int Z){
+  uint h = uint(X)*374761393u + uint(Y)*668265263u + uint(Z)*1274126177u;
+  h = (h ^ (h >> 13u)) * 1274126177u;
+  h = h ^ (h >> 16u);
+  return float(h) / 4294967295.0;
+}
+float coastNoise(vec3 p){
+  vec3 i = floor(p), f = p - i;
+  vec3 u = f * f * (3.0 - 2.0 * f);
+  ivec3 b = ivec3(i);
+  float c000 = uhashf(b.x,   b.y,   b.z),   c100 = uhashf(b.x+1, b.y,   b.z);
+  float c010 = uhashf(b.x,   b.y+1, b.z),   c110 = uhashf(b.x+1, b.y+1, b.z);
+  float c001 = uhashf(b.x,   b.y,   b.z+1), c101 = uhashf(b.x+1, b.y,   b.z+1);
+  float c011 = uhashf(b.x,   b.y+1, b.z+1), c111 = uhashf(b.x+1, b.y+1, b.z+1);
+  return mix(mix(mix(c000,c100,u.x), mix(c010,c110,u.x), u.y),
+             mix(mix(c001,c101,u.x), mix(c011,c111,u.x), u.y), u.z);
+}
+float coastFbm(vec3 dir, float freq){
+  float f = 0.0, amp = 0.5, fr = freq;
+  for (int i = 0; i < 4; i++){
+    f += amp * coastNoise(vec3(dir.x*fr + 19.1, dir.y*fr + 47.7, dir.z*fr + 83.3));
+    fr *= 2.0; amp *= 0.5;
+  }
+  return f - 0.47; // roughly zero-centred (fBm sum mean ≈ 0.47)
+}
+
+float plateMacro(vec3 dir){
+  // NB: dir arrives already domain-warped by terrainHeight (live) — the warp is
+  // isotropic simplex there. The bake path currently samples this unwarped (the
+  // known baked/unbaked parity gap; the fix is a CPU simplex port, not the
+  // anisotropic value-noise warp that reintroduced faceted plate creases).
+  // ── continents: base land/ocean shape ──
+  // The cap edge is FRACTURED by the shared coast noise so the shoreline is a
+  // fractal iso-contour (bays/peninsulas/near-shore islands), not a smooth disc
+  // that warp only wobbles — the "glob" failure mode (ledger P-01/P-02/P-03).
+  float cn = coastFbm(dir, uCoastFreq) * uCoastAmp; // radians the coast meanders
+  float base = OCEAN_FLOOR;
+  for (int i = 0; i < MAX_CONTINENTS; i++){
+    if (i >= uContCount) break;
+    float d = acos(clamp(dot(dir, uContSeed[i]), -1.0, 1.0));
+    float land = smoothstep(uContSize[i], uContSize[i] * 0.5, d + cn); // fractal shoreline
+    base = max(base, OCEAN_FLOOR + (LAND_HEIGHT - OCEAN_FLOOR) * land);
+  }
+  // ── plates: nearest two → boundary landform (range / rift) ──
+  float d1 = -1e9, d2 = -1e9;
+  vec3  s1 = vec3(0.0), s2 = vec3(0.0), m1 = vec3(0.0), m2 = vec3(0.0);
+  for (int i = 0; i < MAX_PLATES; i++){
+    if (i >= uPlateCount) break;
+    vec3 s = uPlateSeed[i];
+    float dp = dot(dir, s);
+    if (dp > d1){ d2 = d1; s2 = s1; m2 = m1; d1 = dp; s1 = s; m1 = uPlateMotion[i]; }
+    else if (dp > d2){ d2 = dp; s2 = s; m2 = uPlateMotion[i]; }
+  }
+  float range = exp(-(d1 - d2) / uRangeWidth);   // 1 at boundary → 0 inland
+  vec3 axis = normalize(s2 - s1);
+  float conv = dot(m1, axis) - dot(m2, axis);     // >0 converging
+  // P-04: vary uplift ALONG the boundary so ranges break into peaks / rise-fall
+  // along their length, not a uniform wall. Mean-preserving (rv ≈ 1 average).
+  float rv = clamp(1.0 + uRangeVar * (2.0 * coastFbm(dir, 5.5)), 0.1, 2.0);
+  base += range * conv * uPlateUplift * (conv > 0.0 ? 1.0 : 0.5) * rv;
+  return clamp(base, 0.0, 1.0);
+}
+`;
+
+/** Combined terrain height: tectonic MACRO (continents + ranges) roughened by
+ *  fBm/ridged DETAIL, with the macro lookup HEAVILY domain-warped (multi-scale)
+ *  so continent/plate edges dissolve into organic coastlines rather than cells.
+ *  Returns a normalised height in [0,1]. Requires GLSL_FBM + GLSL_PLATES. */
+export const GLSL_TERRAIN = /* glsl */ `
+uniform float uDetailScale;   // detail-noise frequency multiplier (fine vs lumpy)
+uniform float uCraters;       // impact-crater coverage 0..1 (0 = off) — Mercury/Mars ephemera
+uniform float uCraterFreq;    // crater cell density (also sets size scale)
+uniform float uCraterDepth;   // bowl depth / rim height
+uniform float uSeaLevel;      // waterline (shared: flat-ocean vertex + bathymetry + ice shelf)
+uniform float uLatitudeIce;   // polar-cap EXTENT — drives the cap MASS below + its colour
+
+// Polar cap coverage 0..1 for a direction — ONE source for both the ice MASS in
+// terrainHeight and the ice COLOUR in the fragment, so they can never disagree.
+// The edge is noise-broken (jagged shelf margin, not a ruled latitude circle).
+float iceCap(vec3 dir){
+  if (uLatitudeIce <= 0.0) return 0.0;
+  float edgeNoise = fbm(dir * 5.0 + uNoiseSeed) * 0.07;
+  return smoothstep(0.0, 0.12, abs(dir.y) + edgeNoise - (1.0 - uLatitudeIce * 0.55));
+}
+
+
+// Overlapping impact craters: a jittered cell grid on the sphere shell. Each cell
+// may host a crater (hash gate → coverage), its centre jittered (no lattice), its
+// radius randomised (size variety). Profile = parabolic BOWL (down) + thin gaussian
+// RIM (up) + soft ejecta fade — reads as impacts, not bumps. Contributions SUM, so
+// craters overlap and deepen where they cross (basins-in-basins).
+float craterField(vec3 dir){
+  if (uCraters <= 0.0) return 0.0;
+  vec3 ip = floor(dir * uCraterFreq);
+  float h = 0.0;
+  for (int x = -1; x <= 1; x++)
+  for (int y = -1; y <= 1; y++)
+  for (int z = -1; z <= 1; z++){
+    vec3 cell = ip + vec3(float(x), float(y), float(z));
+    if (hash13(cell + 3.7) > uCraters) continue;            // sparsity ← coverage
+    vec3 j = hash33(cell + 1.9);
+    vec3 c = normalize(cell + (j - 0.5) * 1.6);              // jittered centre on the shell
+    float sizeF = mix(0.35, 1.9, j.x);                       // crater size factor (~1)
+    float rad = sizeF / uCraterFreq;                        // varied angular radius
+    float t = acos(clamp(dot(dir, c), -1.0, 1.0)) / rad;    // 0 centre → 1 rim
+    if (t > 1.7) continue;
+    // Mercury/Mars profile: a FLAT depressed floor that walls up to a SHARP raised
+    // rim, then ejecta fades out — reads as a crisp impact, not a soft dimple.
+    float floor = -(1.0 - smoothstep(0.55, 1.0, t));        // flat floor → 0 at rim
+    float rim   = exp(-pow((t - 1.0) * 4.5, 2.0));          // sharp rim ring at t=1
+    // depth scales with the crater's SIZE FACTOR (~1), not the tiny angular radius
+    // (radians) — scaling by rad shrank craters ~10x below the terrain relief.
+    h += (0.95 * floor + 0.6 * rim) * sizeF * smoothstep(1.7, 1.02, t);
+  }
+  return h * uCraterDepth;
+}
+
 float terrainHeight(vec3 dir){
   vec3 p = dir * 1.7 + uNoiseSeed;
-  // domain warp for organic coastlines
-  vec3 w = vec3(fbm(p + 11.3), fbm(p + 47.7), fbm(p + 83.1));
-  p += uWarp * w;
-  float hills = fbm(p) * 0.5 + 0.5;      // [0,1]
-  float mts   = clamp(ridged(p), 0.0, 1.0);
-  return mix(hills, mts, uRidged);
+  // Isotropic simplex domain warp (a broad bend + a finer crenellation) so
+  // continent/plate edges dissolve into organic coastlines rather than straight
+  // Voronoi cells. (Sharing THIS warp with the CPU bake for baked/unbaked parity
+  // needs a CPU simplex port — a follow-up; value noise here is anisotropic.)
+  vec3 wLo = vec3(fbm(p * 0.6 + 11.3), fbm(p * 0.6 + 47.7), fbm(p * 0.6 + 83.1));
+  vec3 wHi = vec3(fbm(p * 2.3 + 5.1), fbm(p * 2.3 + 27.9), fbm(p * 2.3 + 61.4));
+  vec3 wdir = normalize(dir + uWarp * (0.55 * wLo + 0.18 * wHi));
+  float macro = plateMacro(wdir);
+  // Detail sampled at a HIGHER base frequency (uDetailScale) so relief is fine and
+  // planet-scale, not lumpy; centred so it roughens without shifting the mean
+  // (keeps sea level meaningful). Ridged near ranges = rugged peaks; fBm elsewhere.
+  vec3 dp = (p + uWarp * wLo) * uDetailScale;
+  float hills = fbm(dp) * 0.5 + 0.5;
+  float mts   = clamp(ridged(dp), 0.0, 1.0);
+  float detail = mix(hills, mts, uRidged);
+  float relief = mix(0.16, 0.32, smoothstep(0.55, 0.85, macro)); // rougher up high
+  float h = macro + (detail - 0.5) * relief + craterField(dir);
+  // Polar ice-cap MASS: beyond the (noise-broken) cap line the surface rises to a
+  // solid shelf plateau above sea level — frozen ocean kilometres deep forming a
+  // land-like mass, not just a white tint. Land under the cap keeps its relief.
+  float cap = iceCap(dir);
+  if (cap > 0.0) h = mix(h, max(h, uSeaLevel + 0.14), cap);
+  return clamp(h, 0.0, 1.0);
 }
 `;
 

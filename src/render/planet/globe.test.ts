@@ -26,6 +26,27 @@ describe('buildNodeGeometry', () => {
     }
     expect(geo.getIndex()!.count).toBe(8 * 8 * 6); // res² quads × 2 tris × 3
   });
+
+  it('winds every cube face OUTWARD (no inward/culled patches — the ±Y bug)', () => {
+    for (let f = 0; f < 6; f++) {
+      const geo = buildNodeGeometry(rootNode(f), 1, 4);
+      const pos = geo.getAttribute('position');
+      const idx = geo.getIndex()!;
+      for (let t = 0; t < idx.count; t += 3) {
+        const i0 = idx.getX(t), i1 = idx.getX(t + 1), i2 = idx.getX(t + 2);
+        const ax = pos.getX(i0), ay = pos.getY(i0), az = pos.getZ(i0);
+        const bx = pos.getX(i1), by = pos.getY(i1), bz = pos.getZ(i1);
+        const cx = pos.getX(i2), cy = pos.getY(i2), cz = pos.getZ(i2);
+        // face normal (cross of edges) must point the same way as the centroid
+        // (outward from the sphere centre) — i.e. front face outward.
+        const ux = bx - ax, uy = by - ay, uz = bz - az;
+        const vx = cx - ax, vy = cy - ay, vz = cz - az;
+        const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+        const dot = nx * (ax + bx + cx) + ny * (ay + by + cy) + nz * (az + bz + cz);
+        expect(dot).toBeGreaterThan(0);
+      }
+    }
+  });
 });
 
 describe('visual calibration', () => {

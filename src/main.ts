@@ -44,7 +44,7 @@ import {
 import { updateSystemStar } from './render/star';
 import { CameraController } from './core/camera';
 import { InputManager } from './core/input';
-import { Game } from './core/state';
+import { Game, getCamDist } from './core/state';
 import { Events } from './core/events';
 import { world, createSystemEntity } from './core/world';
 import { runSystems, type FrameContext } from './core/systems';
@@ -98,6 +98,11 @@ import { STAR_SYSTEMS } from './data/star-catalog';
 import { COSMIC_OBJECTS } from './data/cosmic-objects';
 import { LY_TO_WU, KPC_TO_WU, SOL_GAL_PC, SYSTEM_TIER_SCALE } from './core/metrics';
 import { PlanetGlobes, showcaseSystem } from './render/planet';
+import { activeDemoId, demoById, HERO_BLACKHOLE_ABS } from './render/demos';
+import { activeLabId } from './ui/labs';
+import { createPlanetLab, type PlanetLabHandle } from './render/planet/planet-lab';
+import { createApproachPlanet, type ApproachPlanet } from './render/planet/approach';
+import { initDemoMenu } from './ui/demo-menu';
 import { PlanetState, Identity, EntityType, BobState, Personality, StarSystem } from './core/components';
 
 // ── HMR State ──
@@ -249,7 +254,9 @@ async function boot(): Promise<void> {
   initDock();
   initHUD();
   Tooltip.init();
-  initRaycast(camera, layers, renderCtx.canvas, scene);
+  // Object inspection (hover tooltip · click inspect · dbl-click focus) is a game
+  // interaction — skip it in the generator labs, which are a clean tuning room.
+  if (!activeLabId()) initRaycast(camera, layers, renderCtx.canvas, scene);
   Debug.init(renderCtx.renderer);
   initVisualEditor(); // ADMIN VISUAL EDITOR — REMOVE
 
@@ -278,14 +285,22 @@ async function boot(): Promise<void> {
   const params = new URLSearchParams(window.location.search);
   const systemId = (params.get('system') === 'sol' ? 'sol' : 'ee') as 'ee' | 'sol';
   const worldExtras = populateWorld(sceneCtx, systemId, renderCtx.renderer);
+  // A generator lab (?lab=<id>) is a clean room: the game world is suppressed so
+  // only the lab content renders (perf) — see the isolation block below.
+  const inLab = activeLabId() !== null;
 
   // Catalog Points picking — raycast resolves a Points-hit index back to the
   // CatalogStar record through this handle (single-click info panel).
   setCatalogPicking(worldExtras.catalogSystems);
 
   // Galaxy LAB panel — the in-game tuning surface, driven by the physical galaxy's control schema. Null under
-  // ?proto-buildout (no physical galaxy) → the panel/button simply don't mount.
-  initGalaxyLabPanel(worldExtras.physGalaxy?.controls ?? null);
+  // ?proto-buildout (no physical galaxy) → the panel/button simply don't mount. Also suppressed while a ?lab=<id>
+  // generator lab is active, so that context owns the single LAB flyout (one lab surface per context).
+  initGalaxyLabPanel(activeLabId() ? null : (worldExtras.physGalaxy?.controls ?? null));
+
+  // Review-builds selector — the "🚩 REVIEW BUILDS" dropdown (bottom-left) that
+  // jumps the camera to each shipped subsystem via ?demo=<id> (src/ui/demo-menu.ts).
+  initDemoMenu();
 
   // Sector tour (Inc 6) — flag-gated node-to-node fly-through. __sectorTour.start() flies
   // the camera between the sector's systems in nearest-neighbour order (looping), so you
@@ -381,7 +396,7 @@ async function boot(): Promise<void> {
   // src/render/blackhole/ + docs/black-hole-simulation-research.md.
   const blackHole = createBlackHole({
     rsWorld: 12,
-    absPos: new Vector3(46_000, 9_000, -32_000),
+    absPos: HERO_BLACKHOLE_ABS.clone(), // shared with the ?demo=blackhole destination (render/demos.ts)
     background: galaxyBackdrop,
     diskOuter: 12,
     diskTempK: 13_000,
@@ -453,6 +468,34 @@ async function boot(): Promise<void> {
     }
   });
 
+  // ── 8e. Review-builds demo director (?demo=<id>) ──
+  // Overrides the default home-planet focus when a demo flag is present: flies
+  // the camera to the subsystem's destination so each shipped build can be
+  // evaluated directly. Planet globes only exist when mounted at init, so
+  // ?demo=planet mounts them (see the PlanetGlobes block below). Destinations
+  // (tier + absolute focus) live in the registry: src/render/demos.ts.
+  const demo = demoById(activeDemoId());
+  if (demo && !demo.hidden) { // hidden demos (approach) mount + navigate specially below
+    camCtrl.trackObject(null); // release the home-planet lock — the demo drives focus
+    // flyTo() is wall-clock timed (≤5 s real, ease-in-out Bezier) — unlike the
+    // per-frame focus/zoom lerps, it arrives regardless of frame-rate, so a
+    // heavy destination (the black hole's full-res geodesic march) can't stall
+    // the approach. It lands at targetCamDist and sets zoomLevel = targetZoomLevel.
+    // flyTo treats its arg as a RESIDUAL render-frame point (adds R internally),
+    // so convert the absolute destination by subtracting the current rebase.
+    const rebase = Broker.getSceneRebase(new Vector3());
+    camCtrl.flyTo(
+      new Vector3(demo.focusAbs.x - rebase.x, demo.focusAbs.y - rebase.y, demo.focusAbs.z - rebase.z),
+      { targetZoomLevel: demo.targetZoom, targetCamDist: getCamDist(demo.targetZoom) },
+    );
+    Events.emit('ui:notification', {
+      title: `DEMO — ${demo.label.toUpperCase()}`,
+      desc: demo.blurb,
+      color: '#6aa3ff',
+      duration: 7000,
+    });
+  }
+
   // ── 9. Star Graph ──
   const systemEids: number[] = [];
   // Collect all system entity IDs from the ECS
@@ -496,8 +539,59 @@ async function boot(): Promise<void> {
   // ?planetGlobes so the curated Sol view is untouched by default. The showcase
   // system covers every preset + a ringed gas giant for the browser check.
   const planetGlobes = new PlanetGlobes();
-  if (new URLSearchParams(location.search).has('planetGlobes')) {
+  if (new URLSearchParams(location.search).has('planetGlobes') || activeDemoId() === 'planet') {
     planetGlobes.mount(showcaseSystem(), layers.local);
+  }
+
+  // Generator Lab (?lab=planet): a row of the six archetype worlds + a control
+  // panel that tunes their canonical presets live (src/render/planet/planet-lab).
+  // Mounted into the same local tier; hides the curated system + suppresses the
+  // star so the archetypes read cleanly under the lab's own fixed key light.
+  let planetLab: PlanetLabHandle | null = null;
+  if (activeLabId() === 'planet') {
+    planetLab = createPlanetLab(layers.local);
+    // Clean room: the curated system + lab globes share layers.local, so hide
+    // every local child that isn't a lab globe (star, planets, moons, orbits).
+    for (const child of layers.local.children) {
+      if (child.userData?.type !== 'planet-globe') child.visible = false;
+    }
+    camCtrl.trackObject(null);
+    Game.data.zoomLevel = planetLab.framingZoom;
+    Game.data.targetZoom = planetLab.framingZoom;
+    Game.data.camFocusTarget = { x: 0, y: 0, z: 0 }; // archetype row is centred on the local origin
+  }
+
+  // ── Lab clean-room isolation ──────────────────────────────────────────────
+  // Suppress the ENTIRE game world behind any generator lab so only the lab
+  // content renders — the galaxy/sector/catalog/nebula/black-hole background is
+  // pure overhead here and was tanking the lab's frame rate. The heavy per-frame
+  // galaxy/sector UPDATES are already camDist-gated (off at the lab's close
+  // framing); this drops their DRAW cost, and the black-hole geodesic update is
+  // gated below (`!inLab`). Backdrop skybox draw is skipped too.
+  if (inLab) {
+    for (const o of [
+      worldExtras.galaxyArms, worldExtras.catalogSystems.group, worldExtras.starShells.group,
+      worldExtras.sectorOrb, worldExtras.oortCloud, worldExtras.eclipticGrid,
+      worldExtras.sectorMgr?.group, worldExtras.regionMgr?.group, worldExtras.testNebula.group,
+      worldExtras.protoSector?.group, worldExtras.galaxyBuildout?.group, blackHole.group,
+    ]) { if (o) o.visible = false; }
+    // Keep scene.background (the baked Milky-Way skybox) — it's a cheap cubemap
+    // and useful visual reference; only the live particle systems/models are culled.
+  }
+
+  // 1:1 Approach (?demo=approach): one true-scale Earth-radius world at the local
+  // origin that the camera TRACKS (so focusScale frames its true radius) and dives
+  // into at low orbit — the one-click review of the scale/FOV phase.
+  let approach: ApproachPlanet | null = null;
+  if (activeDemoId() === 'approach') {
+    approach = createApproachPlanet(layers.local);
+    (window as unknown as { __approach?: ApproachPlanet }).__approach = approach; // debug
+    for (const child of layers.local.children) {
+      if (child.userData?.type !== 'planet-globe') child.visible = false;
+    }
+    camCtrl.trackObject(approach.root); // focusScale = trueRadius/ref → camera closes to the true size
+    Game.data.zoomLevel = 0.085;        // low orbit
+    Game.data.targetZoom = 0.085;
   }
 
   // One deterministic simulation tick.
@@ -729,7 +823,9 @@ async function boot(): Promise<void> {
     // active star it REPLACES the legacy sun mesh (hides the sun-system
     // subgroup); the legacy updater runs only as a fallback when no procedural
     // star is installed (e.g. no local system).
-    if (!updateSystemStar(getActiveSystemHandle()?.groups, frameTime, camera, Game.data.camDist)) {
+    // Suppressed in the planet lab / 1:1 approach (they use their own key light).
+    if (!planetLab && !approach
+      && !updateSystemStar(getActiveSystemHandle()?.groups, frameTime, camera, Game.data.camDist, Game.getTimeSpeed().tc)) {
       updateSunSystem(renderCtx.renderer, frameTime);
     }
 
@@ -751,10 +847,29 @@ async function boot(): Promise<void> {
       });
     }
 
+    // 9b-ter. Planet Lab archetype row (?lab=planet) — same LOD/lighting pump,
+    // but a fixed key light (rootWorld) so the archetypes are lit identically.
+    if (planetLab) {
+      camera.updateMatrixWorld();
+      layers.local.updateWorldMatrix(true, true);
+      planetLab.update({
+        camera, rootWorld: _localRoot, dt: frameTime,
+        fovYRad: (camera.fov * Math.PI) / 180, viewportH: window.innerHeight,
+      });
+    }
+    if (approach) {
+      camera.updateMatrixWorld();
+      layers.local.updateWorldMatrix(true, true);
+      approach.update({
+        camera, rootWorld: _localRoot, dt: frameTime,
+        fovYRad: (camera.fov * Math.PI) / 180, viewportH: window.innerHeight,
+      });
+    }
+
     // 9c. Lens flare update (star position → screen space)
     // Star world position = the local-tier root (the sun sits at the local-tier
     // origin), so the flare stays glued to the sun once the floating origin floats.
-    lensFlare.update(_localRoot, camera, frameTime);
+    if (!planetLab && !approach) lensFlare.update(_localRoot, camera, frameTime);
 
     // 9d. Galaxy animations (dashed lines, chevron pulses) — bounded shader clock
     updateGalaxyAnimations(shaderTime);
@@ -776,7 +891,7 @@ async function boot(): Promise<void> {
     // LOD by distance. Runs after the broker/camera update (so its residual is
     // current) and before the post chain (which composites the billboard). Rides
     // the galactic tier's floating origin like the streamed sectors.
-    blackHole.update(renderCtx.renderer, camera, renderCtx.renderer.domElement.height);
+    if (!inLab) blackHole.update(renderCtx.renderer, camera, renderCtx.renderer.domElement.height);
 
     // 10. Render (post-processing pipeline) — bounded shader clock
     postCtx.render(shaderTime);
