@@ -173,6 +173,10 @@ export class PlanetGlobe {
         uCraterDepth: { value: macroParams(p.type).craterDepth },
         uCloudCover: { value: p.cloudCover },
         uCloudShadow: { value: p.cloudShadow },
+        uCloudFlow: { value: p.cloudFlow },
+        uCloudTurb: { value: p.cloudTurb },
+        uCyclones: { value: p.cyclones },
+        uCloudTerrain: { value: p.cloudTerrain },
         uCloudTime: { value: 0 },
         uSunDirObj: { value: new Vector3(0, 0, 1) },
         // Baked master (Phase 3): ONE stacked atlas (res × 6·res); the leaf picks
@@ -281,9 +285,17 @@ export class PlanetGlobe {
       u.uCraterDepth.value = macroParams(p.type).craterDepth;
       u.uCloudCover.value = p.cloudCover;
       u.uCloudShadow.value = p.cloudShadow;
+      u.uCloudFlow.value = p.cloudFlow;
+      u.uCloudTurb.value = p.cloudTurb;
+      u.uCyclones.value = p.cyclones;
+      u.uCloudTerrain.value = p.cloudTerrain;
       if (this.cloudMesh) {
         const cm = (this.cloudMesh.material as ShaderMaterial).uniforms;
         cm.uCloudCover.value = p.cloudCover;
+        cm.uCloudFlow.value = p.cloudFlow;
+        cm.uCloudTurb.value = p.cloudTurb;
+        cm.uCyclones.value = p.cyclones;
+        cm.uCloudTerrain.value = p.cloudTerrain;
         (cm.uNoiseSeed.value as Vector3).set(...p.noiseSeed);
       }
       u.uSeaLevel.value = p.seaLevel;
@@ -359,7 +371,16 @@ export class PlanetGlobe {
         uTerminator: { value: 0.08 },
         uNoiseSeed: { value: new Vector3(...p.noiseSeed) },
         uCloudCover: { value: p.cloudCover },
+        uCloudFlow: { value: p.cloudFlow },
+        uCloudTurb: { value: p.cloudTurb },
+        uCyclones: { value: p.cyclones },
+        uCloudTerrain: { value: p.cloudTerrain },
         uCloudTime: { value: 0 },
+        // plateMacro inputs (orographic/climate coupling samples the real terrain)
+        ...this.plateUniforms(),
+        uCoastAmp: { value: macroParams(p.type).coastAmp },
+        uCoastFreq: { value: macroParams(p.type).coastFreq },
+        uRangeVar: { value: macroParams(p.type).rangeVar },
       },
     });
   }

@@ -243,6 +243,7 @@ void main(){
 export const CLOUD_FRAG = /* glsl */ `
 ${GLSL_SIMPLEX}
 ${GLSL_FBM}
+${GLSL_PLATES}
 ${GLSL_CLOUDS}
 uniform vec3  uSunDir;
 uniform float uTerminator;

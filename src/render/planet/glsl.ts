@@ -84,22 +84,89 @@ float ridged(vec3 p){
   }
   return f; // ~[0,1.x]
 }
+
+// Dave Hoskins hashes (cheap, decorrelated) — crater cells, cyclone seeds, etc.
+float hash13(vec3 p3){ p3 = fract(p3 * 0.1031); p3 += dot(p3, p3.zyx + 31.32); return fract((p3.x + p3.y) * p3.z); }
+vec3  hash33(vec3 p3){ p3 = fract(p3 * vec3(0.1031, 0.1030, 0.0973)); p3 += dot(p3, p3.yxz + 33.33); return fract((p3.xxy + p3.yzz) * p3.zyx); }
 `;
 
 /** Cloud coverage field — ONE source shared by the cloud-shell material and the
  *  surface shader's self-shadow sampling, so the shadow on the ground always
- *  matches the cloud overhead. Requires GLSL_FBM (fbm + uNoiseSeed). */
+ *  matches the cloud overhead. A LIVING circulation, not a static deck: zonal
+ *  wind bands advect by latitude, seeded cyclones spin (hemisphere-correct
+ *  Coriolis), a time-morphing warp shears the field, and the REAL macro terrain
+ *  couples in (wet/dry climate belts breed or starve cloud; high ranges impede
+ *  the deck). Requires GLSL_FBM and GLSL_PLATES (plateMacro) — include BOTH
+ *  before this chunk. */
 export const GLSL_CLOUDS = /* glsl */ `
-uniform float uCloudCover;   // 0..1 sky coverage (0 = clear)
-uniform float uCloudTime;    // drift clock (seconds)
-float cloudDensity(vec3 d){
+uniform float uCloudCover;    // 0..1 sky coverage (0 = clear)
+uniform float uCloudTime;     // weather clock (seconds)
+uniform float uCloudFlow;     // zonal circulation speed (trade winds / jets)
+uniform float uCloudTurb;     // evolving shear / morph turbulence
+uniform float uCyclones;      // cyclone strength (0 = none)
+uniform float uCloudTerrain;  // terrain/climate coupling (orographic + wet-dry)
+
+vec3 rotY(vec3 d, float a){ float c = cos(a), s = sin(a); return vec3(c*d.x + s*d.z, d.y, -s*d.x + c*d.z); }
+float fbm2(vec3 p){ return snoise(p) * 0.6 + snoise(p * 2.3) * 0.3; } // cheap 2-octave
+
+float cloudDensity(vec3 d0){
   if (uCloudCover <= 0.0) return 0.0;
-  vec3 p = d * 3.2 + uNoiseSeed * 0.31 + vec3(uCloudTime * 0.012, 0.0, uCloudTime * 0.007);
-  float f = fbm(p) * 0.5 + 0.5;                       // broad weather systems
-  f += 0.4 * (fbm(p * 3.6 + 17.3) * 0.5 + 0.5);       // billow detail
+  float lat = d0.y; // sin(latitude)
+
+  // ── Zonal circulation: a uniform deck drift plus a BOUNDED, slowly-reversing
+  // differential shear (trades / jets). The differential term OSCILLATES instead
+  // of accumulating with time — unbounded latitude-differential rotation winds
+  // the deck into smeared ribbons after minutes. The turbulence morph below
+  // keeps the slow reversal imperceptible.
+  float zonal = 0.6 * cos(lat * 4.712) + 0.15 * cos(lat * 12.566);
+  float tphase = uCloudTime * 0.02;
+  float adv = 0.35 * tphase + 0.35 * zonal * sin(tphase * 0.22);
+  vec3 d = rotY(d0, uCloudFlow * adv);
+
+  // ── Cyclones: seeded vortices in the storm belts — hemisphere-correct spin
+  // (Coriolis: CCW north, CW south), tightest at the eye, drifting westward.
+  if (uCyclones > 0.0){
+    for (int i = 0; i < 3; i++){
+      float fi = float(i);
+      float lo = hash13(uNoiseSeed + fi * 7.31) * 6.2832;
+      float la = mix(0.12, 0.5, hash13(uNoiseSeed + fi * 3.77 + 13.0)) * (mod(fi, 2.0) < 0.5 ? 1.0 : -1.0);
+      float cl = sqrt(max(1.0 - la * la, 0.0));
+      vec3 cc = rotY(vec3(cos(lo) * cl, la, sin(lo) * cl),
+                     -uCloudTime * 0.004 * (0.7 + 0.6 * hash13(uNoiseSeed + fi + 29.0)));
+      float ang = acos(clamp(dot(d, cc), -1.0, 1.0));
+      float w = exp(-pow(ang / 0.26, 2.0));                       // vortex influence
+      float spin = uCyclones * 5.0 * w * sign(la);                // Coriolis handedness
+      float cs = cos(spin), sn = sin(spin);
+      d = d * cs + cross(cc, d) * sn + cc * dot(cc, d) * (1.0 - cs); // Rodrigues twist
+    }
+  }
+
+  // ── Evolving turbulence: a time-morphing warp — formations grow, shear and
+  // decay instead of sliding around as a frozen pattern.
+  vec3 p = d * 3.2 + uNoiseSeed * 0.31;
+  if (uCloudTurb > 0.0){
+    float tt = uCloudTime * 0.02;
+    p += uCloudTurb * 0.55 * vec3(fbm2(d * 1.6 + vec3(tt, 7.0, 0.0)),
+                                  fbm2(d * 1.6 + vec3(0.0, tt + 23.0, 5.0)),
+                                  fbm2(d * 1.6 + vec3(11.0, 0.0, tt + 41.0)));
+  }
+  float f = fbm(p) * 0.5 + 0.5;                        // broad weather systems
+  f += 0.4 * (fbm(p * 3.6 + 17.3) * 0.5 + 0.5);        // billow detail
   f /= 1.4;
-  float d0 = 1.0 - uCloudCover * 0.85;                // coverage remap
-  return smoothstep(d0 - 0.12, d0 + 0.18, f);
+
+  // ── Terrain / climate coupling: the wet equator and mid-latitude belts breed
+  // cloud and the dry subtropics clear it (the SAME belts as the surface biomes);
+  // high ranges impede the deck / poke above it (orographic clearing).
+  if (uCloudTerrain > 0.0){
+    float al = abs(lat);
+    float latB = 1.0 - 0.7 * smoothstep(0.22, 0.42, al) * (1.0 - smoothstep(0.5, 0.72, al));
+    float macroH = plateMacro(d0);
+    f += uCloudTerrain * 0.16 * (latB - 0.5);
+    f -= uCloudTerrain * 0.35 * smoothstep(0.72, 0.92, macroH);
+  }
+
+  float c0 = 1.0 - uCloudCover * 0.85;                 // coverage remap
+  return smoothstep(c0 - 0.12, c0 + 0.18, f);
 }
 `;
 
@@ -216,9 +283,6 @@ float iceCap(vec3 dir){
   return smoothstep(0.0, 0.12, abs(dir.y) + edgeNoise - (1.0 - uLatitudeIce * 0.55));
 }
 
-// Dave Hoskins hashes (cheap, decorrelated) for crater cell placement.
-float hash13(vec3 p3){ p3 = fract(p3 * 0.1031); p3 += dot(p3, p3.zyx + 31.32); return fract((p3.x + p3.y) * p3.z); }
-vec3  hash33(vec3 p3){ p3 = fract(p3 * vec3(0.1031, 0.1030, 0.0973)); p3 += dot(p3, p3.yxz + 33.33); return fract((p3.xxy + p3.yzz) * p3.zyx); }
 
 // Overlapping impact craters: a jittered cell grid on the sphere shell. Each cell
 // may host a crater (hash gate → coverage), its centre jittered (no lattice), its

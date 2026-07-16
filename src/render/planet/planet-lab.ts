@@ -221,6 +221,10 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
       title: 'Clouds', key: 'lab-clouds', ctrls: [
         slider('Cloud cover', 'cloudCover', 0, 1, 0.01),
         slider('Cloud shadow', 'cloudShadow', 0, 1, 0.01),
+        slider('Circulation', 'cloudFlow', 0, 2, 0.01),
+        slider('Turbulence', 'cloudTurb', 0, 1.5, 0.01),
+        slider('Cyclones', 'cyclones', 0, 1, 0.01),
+        slider('Terrain coupling', 'cloudTerrain', 0, 1, 0.01),
       ],
     }, {
       title: 'Atmosphere', key: 'lab-atmos', ctrls: [
