@@ -17,7 +17,7 @@
 import {
   Group, Mesh, BufferGeometry, BufferAttribute, ShaderMaterial,
   IcosahedronGeometry, RingGeometry, PlaneGeometry, DataTexture,
-  Vector3, BackSide, DoubleSide, AdditiveBlending, RedFormat, FloatType,
+  Vector3, Quaternion, BackSide, DoubleSide, AdditiveBlending, RedFormat, FloatType,
   LinearFilter, ClampToEdgeWrapping,
   type Object3D, type Texture,
 } from 'three';
@@ -35,7 +35,7 @@ import { generateRings, densityLUT, type RingSystem } from './rings';
 import { channel, range } from './rng';
 import { stageForPx, apparentRadiusPx, dotBrightness, LodStage } from './lod';
 import {
-  SURFACE_VERT, SURFACE_FRAG, GIANT_VERT, GIANT_FRAG,
+  SURFACE_VERT, SURFACE_FRAG, GIANT_VERT, GIANT_FRAG, CLOUD_VERT, CLOUD_FRAG,
   ATMOS_VERT, ATMOS_FRAG, RING_VERT, RING_FRAG, IMPOSTOR_VERT, IMPOSTOR_FRAG,
 } from './shaders';
 
@@ -65,6 +65,7 @@ const _camRight = new Vector3();
 const _camUp = new Vector3();
 const _planetWorld = new Vector3();
 const _camLocal = new Vector3();
+const _qTmp = new Quaternion();
 const _worldScale = new Vector3();
 
 export class PlanetGlobe {
@@ -78,6 +79,7 @@ export class PlanetGlobe {
   private readonly surfaceMat: ShaderMaterial | null = null;
   private readonly giantMesh: Mesh | null = null;
   private readonly atmosMesh: Mesh | null = null;
+  private cloudMesh: Mesh | null = null;
   private readonly ringMesh: Mesh | null = null;
   private readonly impostorMesh: Mesh;
   private readonly impostorMat: ShaderMaterial;
@@ -132,6 +134,12 @@ export class PlanetGlobe {
       this.atmosMesh = new Mesh(new IcosahedronGeometry(radius * 1.035, 6), this.buildAtmosMat());
       this.root.add(this.atmosMesh);
     }
+    // Cloud shell (surface worlds): lives in the SPIN frame — the same object
+    // space the surface samples for its cloud shadows, so they always align.
+    if (!this.params.isGiant) {
+      this.cloudMesh = new Mesh(new IcosahedronGeometry(radius * 1.03, 5), this.buildCloudMat());
+      this.spinGroup.add(this.cloudMesh);
+    }
 
     // Distant impostor (analytic ray-sphere billboard).
     this.impostorColor = this.baseColor();
@@ -163,6 +171,10 @@ export class PlanetGlobe {
         uCraters: { value: macroParams(p.type).craters },
         uCraterFreq: { value: macroParams(p.type).craterFreq },
         uCraterDepth: { value: macroParams(p.type).craterDepth },
+        uCloudCover: { value: p.cloudCover },
+        uCloudShadow: { value: p.cloudShadow },
+        uCloudTime: { value: 0 },
+        uSunDirObj: { value: new Vector3(0, 0, 1) },
         // Baked master (Phase 3): ONE stacked atlas (res × 6·res); the leaf picks
         // its face row via the per-vertex aFace attribute (no per-leaf uniforms).
         uUseBake: { value: 0 },
@@ -267,6 +279,13 @@ export class PlanetGlobe {
       u.uCraters.value = macroParams(p.type).craters;
       u.uCraterFreq.value = macroParams(p.type).craterFreq;
       u.uCraterDepth.value = macroParams(p.type).craterDepth;
+      u.uCloudCover.value = p.cloudCover;
+      u.uCloudShadow.value = p.cloudShadow;
+      if (this.cloudMesh) {
+        const cm = (this.cloudMesh.material as ShaderMaterial).uniforms;
+        cm.uCloudCover.value = p.cloudCover;
+        (cm.uNoiseSeed.value as Vector3).set(...p.noiseSeed);
+      }
       u.uSeaLevel.value = p.seaLevel;
       (u.uOceanShallow.value as Vector3).set(...p.oceanShallow);
       (u.uOceanDeep.value as Vector3).set(...p.oceanDeep);
@@ -326,6 +345,21 @@ export class PlanetGlobe {
         uSunDir: { value: new Vector3(0, 0, 1) },
         uColor: { value: new Vector3(...p.atmosphere) },
         uDensity: { value: p.atmosphereDensity },
+      },
+    });
+  }
+
+  private buildCloudMat(): ShaderMaterial {
+    const p = this.params;
+    return new ShaderMaterial({
+      vertexShader: CLOUD_VERT, fragmentShader: CLOUD_FRAG,
+      transparent: true, depthWrite: false,
+      uniforms: {
+        uSunDir: { value: new Vector3(0, 0, 1) },
+        uTerminator: { value: 0.08 },
+        uNoiseSeed: { value: new Vector3(...p.noiseSeed) },
+        uCloudCover: { value: p.cloudCover },
+        uCloudTime: { value: 0 },
       },
     });
   }
@@ -436,6 +470,7 @@ export class PlanetGlobe {
     this.surfaceGroup.visible = near;
     if (this.giantMesh) this.giantMesh.visible = near;
     if (this.atmosMesh) this.atmosMesh.visible = near;
+    if (this.cloudMesh) this.cloudMesh.visible = near;
     if (this.ringMesh) this.ringMesh.visible = near;
     this.impostorMesh.visible = !near;
 
@@ -452,6 +487,19 @@ export class PlanetGlobe {
       }
       if (this.giantMesh) { const m = this.giantMesh.material as ShaderMaterial; setSun(m, sunDir); m.uniforms.uTime.value = (m.uniforms.uTime.value + ctx.dt) % 1000; }
       if (this.atmosMesh) setSun(this.atmosMesh.material as ShaderMaterial, sunDir);
+      if (this.cloudMesh) {
+        const m = this.cloudMesh.material as ShaderMaterial;
+        setSun(m, sunDir);
+        m.uniforms.uCloudTime.value = (m.uniforms.uCloudTime.value + ctx.dt) % 10000;
+      }
+      if (this.surfaceMat) {
+        // Sun in the surface's OBJECT space (cloud-shadow shell ray) + the shared
+        // drift clock, so the ground shadow moves with the cloud overhead.
+        const su = this.surfaceMat.uniforms;
+        this.surfaceGroup.getWorldQuaternion(_qTmp);
+        (su.uSunDirObj.value as Vector3).copy(sunDir).applyQuaternion(_qTmp.invert());
+        su.uCloudTime.value = (su.uCloudTime.value + ctx.dt) % 10000;
+      }
       if (this.ringMesh) {
         const m = this.ringMesh.material as ShaderMaterial;
         setSun(m, sunDir);
@@ -484,6 +532,8 @@ export class PlanetGlobe {
     (this.giantMesh?.material as ShaderMaterial | undefined)?.dispose();
     this.atmosMesh?.geometry.dispose();
     (this.atmosMesh?.material as ShaderMaterial | undefined)?.dispose();
+    this.cloudMesh?.geometry.dispose();
+    (this.cloudMesh?.material as ShaderMaterial | undefined)?.dispose();
     if (this.ringMesh) {
       this.ringMesh.geometry.dispose();
       const m = this.ringMesh.material as ShaderMaterial;

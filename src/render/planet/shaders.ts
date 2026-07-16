@@ -12,7 +12,7 @@
 // planet shaders; Three injects position/normal/uv/matrices/cameraPosition.
 // ═══════════════════════════════════════════════════════════════════
 
-import { GLSL_SIMPLEX, GLSL_FBM, GLSL_PLATES, GLSL_TERRAIN, GLSL_RAMP } from './glsl';
+import { GLSL_SIMPLEX, GLSL_FBM, GLSL_PLATES, GLSL_TERRAIN, GLSL_RAMP, GLSL_CLOUDS } from './glsl';
 
 // ── Surface globe (cube-sphere terrain) ─────────────────────────────
 // The vertex shader only DISPLACES geometry (silhouette); all height + normal
@@ -85,8 +85,11 @@ ${GLSL_FBM}
 ${GLSL_PLATES}
 ${GLSL_TERRAIN}
 ${GLSL_RAMP}
+${GLSL_CLOUDS}
 uniform float uDisplacement;
 uniform float uNormalStrength; // relief-normal (bump) exaggeration
+uniform float uCloudShadow;   // how hard cloud shadows shade the direct light
+uniform vec3  uSunDirObj;     // sun dir in OBJECT space (for the cloud-shell ray)
 uniform float uUseBake;
 uniform sampler2D uHeightAtlas; // stacked 6-face height atlas
 uniform float uHeightRes;       // baked face resolution (for the normal step)
@@ -189,9 +192,21 @@ void main(){
     albedo = mix(albedo, vec3(0.93, 0.96, 1.0), max(iceCap(dir), frost));
   }
 
+  // Cloud self-shadowing: sample the SAME cloud field where the sun ray from this
+  // surface point crosses the cloud shell (thin-shell intersection at 1.03R in
+  // unit-dir space), and shade only the DIRECT light — the clouds overhead cast
+  // their own shapes onto the ground.
+  float cshadow = 1.0;
+  if (uCloudCover > 0.0 && uCloudShadow > 0.0){
+    float b = dot(dir, uSunDirObj);
+    float s = -b + sqrt(max(b * b + 0.0609, 0.0)); // 1.03^2 - 1 = 0.0609
+    vec3 cdir = normalize(dir + s * uSunDirObj);
+    cshadow = 1.0 - uCloudShadow * cloudDensity(cdir);
+  }
+
   // Lambert + soft terminator.
-  vec3 lit = albedo * (0.05 + 0.95 * day * max(ndl, 0.0));
-  lit += spec * (1.0 - uRoughness) * vec3(1.0);
+  vec3 lit = albedo * (0.05 + 0.95 * day * max(ndl, 0.0) * cshadow);
+  lit += spec * (1.0 - uRoughness) * vec3(1.0) * cshadow;
 
   // Lava emissive (glows in the low cracks, brightest on the night side).
   if (uEmissiveStrength > 0.0){
@@ -209,6 +224,38 @@ void main(){
   }
 
   gl_FragColor = vec4(lit, 1.0);
+}
+`;
+
+// ── Cloud shell (surface worlds) ─────────────────────────────────────
+// A thin translucent shell above the surface rendering the SAME cloudDensity
+// field the surface samples for its shadows — so shadow and cloud always agree.
+export const CLOUD_VERT = /* glsl */ `
+varying vec3 vDir;
+varying vec3 vWorldNormal;
+void main(){
+  vDir = normalize(position);
+  vWorldNormal = normalize(mat3(modelMatrix) * vDir);
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}
+`;
+
+export const CLOUD_FRAG = /* glsl */ `
+${GLSL_SIMPLEX}
+${GLSL_FBM}
+${GLSL_CLOUDS}
+uniform vec3  uSunDir;
+uniform float uTerminator;
+varying vec3  vDir;
+varying vec3  vWorldNormal;
+void main(){
+  float dcl = cloudDensity(normalize(vDir));
+  if (dcl <= 0.004) discard;
+  vec3 N = normalize(vWorldNormal);
+  float ndl = dot(N, uSunDir);
+  float day = smoothstep(-uTerminator, uTerminator, ndl);
+  vec3 col = vec3(1.0) * (0.08 + 0.92 * day * max(ndl, 0.0));
+  gl_FragColor = vec4(col, dcl * 0.85);
 }
 `;
 

@@ -217,6 +217,12 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
         color('Emissive tint', 'emissive'),
       ],
     }, {
+      // Cloud layer — the same field drives the shell AND its ground shadows.
+      title: 'Clouds', key: 'lab-clouds', ctrls: [
+        slider('Cloud cover', 'cloudCover', 0, 1, 0.01),
+        slider('Cloud shadow', 'cloudShadow', 0, 1, 0.01),
+      ],
+    }, {
       title: 'Atmosphere', key: 'lab-atmos', ctrls: [
         toggle('Enabled', 'hasAtmosphere'),
         slider('Density', 'atmosphereDensity', 0, 2, 0.01),

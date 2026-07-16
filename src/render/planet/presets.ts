@@ -55,6 +55,10 @@ export interface PlanetRenderParams {
   atmosphereDensity: number; // shell thickness / opacity scale
   nightLights: number;       // 0 = none, 1 = strong city-lights where NdotL<0
 
+  // ── cloud layer (surface worlds; giants use the banded material) ──
+  cloudCover: number;        // 0..1 sky coverage
+  cloudShadow: number;       // how hard clouds shade the ground (self-shadow)
+
   // ── emissive (lava) ──
   emissive: RGB;
   emissiveStrength: number;
@@ -80,6 +84,8 @@ interface Preset {
   atmosphere: RGB;
   atmosphereDensity: number;
   nightLights: number;
+  cloudCover: number;
+  cloudShadow: number;
   emissive: RGB;
   emissiveStrength: number;
 }
@@ -109,6 +115,7 @@ export const PRESETS: Record<PlanetVisualType, Preset> = {
     roughness: 0.9,
     bandColorA: G0, bandColorB: G0, bandCount: 0, bandTurbulence: 0, stormChance: 0,
     hasAtmosphere: false, atmosphere: [0.5, 0.4, 0.35], atmosphereDensity: 0.25, nightLights: 0,
+    cloudCover: 0.15, cloudShadow: 0.5,
     emissive: G0, emissiveStrength: 0,
   },
   ocean: {
@@ -124,6 +131,7 @@ export const PRESETS: Record<PlanetVisualType, Preset> = {
     roughness: 0.4,
     bandColorA: G0, bandColorB: G0, bandCount: 0, bandTurbulence: 0, stormChance: 0,
     hasAtmosphere: true, atmosphere: [0.30, 0.52, 0.92], atmosphereDensity: 1.0, nightLights: 0.8,
+    cloudCover: 0.55, cloudShadow: 0.6,
     emissive: G0, emissiveStrength: 0,
   },
   desert: {
@@ -138,6 +146,7 @@ export const PRESETS: Record<PlanetVisualType, Preset> = {
     roughness: 0.85,
     bandColorA: G0, bandColorB: G0, bandCount: 0, bandTurbulence: 0, stormChance: 0,
     hasAtmosphere: true, atmosphere: [0.82, 0.62, 0.40], atmosphereDensity: 0.5, nightLights: 0.15,
+    cloudCover: 0.10, cloudShadow: 0.45,
     emissive: G0, emissiveStrength: 0,
   },
   lava: {
@@ -152,6 +161,7 @@ export const PRESETS: Record<PlanetVisualType, Preset> = {
     roughness: 0.7,
     bandColorA: G0, bandColorB: G0, bandCount: 0, bandTurbulence: 0, stormChance: 0,
     hasAtmosphere: true, atmosphere: [0.9, 0.35, 0.15], atmosphereDensity: 0.6, nightLights: 0,
+    cloudCover: 0.08, cloudShadow: 0.4,
     emissive: [1.0, 0.35, 0.08], emissiveStrength: 1.0,
   },
   ice: {
@@ -161,6 +171,7 @@ export const PRESETS: Record<PlanetVisualType, Preset> = {
     bandColorA: [0.42, 0.60, 0.78], bandColorB: [0.26, 0.44, 0.66],
     bandCount: 9, bandTurbulence: 0.35, stormChance: 0.5,
     hasAtmosphere: true, atmosphere: [0.45, 0.70, 0.90], atmosphereDensity: 1.1, nightLights: 0,
+    cloudCover: 0, cloudShadow: 0,
     emissive: G0, emissiveStrength: 0,
   },
   gas: {
@@ -169,6 +180,7 @@ export const PRESETS: Record<PlanetVisualType, Preset> = {
     bandColorA: [0.86, 0.74, 0.54], bandColorB: [0.66, 0.50, 0.34],
     bandCount: 14, bandTurbulence: 0.6, stormChance: 0.7,
     hasAtmosphere: true, atmosphere: [0.92, 0.82, 0.55], atmosphereDensity: 1.2, nightLights: 0,
+    cloudCover: 0, cloudShadow: 0,
     emissive: G0, emissiveStrength: 0,
   },
 };
@@ -249,6 +261,8 @@ export function derivePlanetParams(planet: GenPlanet): PlanetRenderParams {
     atmosphere: jitterRGB(base.atmosphere, pal, 0.03),
     atmosphereDensity: base.atmosphereDensity,
     nightLights: base.nightLights,
+    cloudCover: Math.min(1, base.cloudCover * range(ter, 0.8, 1.2)),
+    cloudShadow: base.cloudShadow,
     emissive: base.emissive,
     emissiveStrength: base.emissiveStrength,
   };

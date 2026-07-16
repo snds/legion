@@ -86,6 +86,23 @@ float ridged(vec3 p){
 }
 `;
 
+/** Cloud coverage field — ONE source shared by the cloud-shell material and the
+ *  surface shader's self-shadow sampling, so the shadow on the ground always
+ *  matches the cloud overhead. Requires GLSL_FBM (fbm + uNoiseSeed). */
+export const GLSL_CLOUDS = /* glsl */ `
+uniform float uCloudCover;   // 0..1 sky coverage (0 = clear)
+uniform float uCloudTime;    // drift clock (seconds)
+float cloudDensity(vec3 d){
+  if (uCloudCover <= 0.0) return 0.0;
+  vec3 p = d * 3.2 + uNoiseSeed * 0.31 + vec3(uCloudTime * 0.012, 0.0, uCloudTime * 0.007);
+  float f = fbm(p) * 0.5 + 0.5;                       // broad weather systems
+  f += 0.4 * (fbm(p * 3.6 + 17.3) * 0.5 + 0.5);       // billow detail
+  f /= 1.4;
+  float d0 = 1.0 - uCloudCover * 0.85;                // coverage remap
+  return smoothstep(d0 - 0.12, d0 + 0.18, f);
+}
+`;
+
 /** Tectonic MACRO field — the GLSL mirror of plates.ts `macroHeight()`. Two
  *  layers: a CONTINENT field (few big landmasses) and PLATE boundaries (many
  *  cells whose edges make ranges/rifts). MUST stay in step with the CPU reference
