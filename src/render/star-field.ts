@@ -135,7 +135,9 @@ function makeGlareLayer(pos: Float32Array, mag: Float32Array, bv: Float32Array, 
       }
     `,
     uniforms: { uOpacity: { value: 0.85 }, uPixelRatio: { value: pixelRatio } },
-    transparent: true,
+    // transparent:false is LOAD-BEARING (same as the main field below): it keeps
+    // the glare in the OPAQUE pass so renderOrder -9 truly draws it first.
+    transparent: false,
     depthWrite: false,
     depthTest: false,         // backdrop — same as the main field
     blending: AdditiveBlending,
@@ -162,7 +164,14 @@ export function createCatalogStars(): Points {
       // is consistent across displays (renderer caps pixelRatio at 2).
       uPixelRatio: { value: Math.min(typeof window !== 'undefined' ? window.devicePixelRatio : 1, 2) },
     },
-    transparent: true,
+    // transparent:false is LOAD-BEARING: three.js renders the TRANSPARENT pass
+    // after ALL opaque geometry, so a transparent:true starfield (even at
+    // renderOrder -10) composited additively OVER planets/suns — background
+    // stars shone "through" every stellar object. With transparent:false the
+    // stars stay in the OPAQUE pass where renderOrder -10 really does draw
+    // them first, and every opaque mesh after simply covers them. The additive
+    // blend state is honoured per-material regardless of this flag.
+    transparent: false,
     depthWrite: false,
     // The star sphere is an infinity backdrop: NO depth test, drawn first, so
     // no in-system geometry (Oort shell, heliopause, belt) can ever punch
