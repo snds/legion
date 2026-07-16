@@ -189,7 +189,7 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
         slider('Ridged', 'ridged', 0, 1, 0.01),
         slider('Roughness', 'roughness', 0, 1, 0.01),
         slider('Sea level', 'seaLevel', 0, 1, 0.01),
-        slider('Moisture', 'moisture', 0, 1, 0.01),
+        slider('Moisture', 'moisture', 0, 1.5, 0.01),
         slider('Polar ice', 'latitudeIce', 0, 1, 0.01),
       ],
     }, {

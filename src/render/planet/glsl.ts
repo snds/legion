@@ -187,6 +187,17 @@ uniform float uDetailScale;   // detail-noise frequency multiplier (fine vs lump
 uniform float uCraters;       // impact-crater coverage 0..1 (0 = off) — Mercury/Mars ephemera
 uniform float uCraterFreq;    // crater cell density (also sets size scale)
 uniform float uCraterDepth;   // bowl depth / rim height
+uniform float uSeaLevel;      // waterline (shared: flat-ocean vertex + bathymetry + ice shelf)
+uniform float uLatitudeIce;   // polar-cap EXTENT — drives the cap MASS below + its colour
+
+// Polar cap coverage 0..1 for a direction — ONE source for both the ice MASS in
+// terrainHeight and the ice COLOUR in the fragment, so they can never disagree.
+// The edge is noise-broken (jagged shelf margin, not a ruled latitude circle).
+float iceCap(vec3 dir){
+  if (uLatitudeIce <= 0.0) return 0.0;
+  float edgeNoise = fbm(dir * 5.0 + uNoiseSeed) * 0.07;
+  return smoothstep(0.0, 0.12, abs(dir.y) + edgeNoise - (1.0 - uLatitudeIce * 0.55));
+}
 
 // Dave Hoskins hashes (cheap, decorrelated) for crater cell placement.
 float hash13(vec3 p3){ p3 = fract(p3 * 0.1031); p3 += dot(p3, p3.zyx + 31.32); return fract((p3.x + p3.y) * p3.z); }
@@ -241,7 +252,13 @@ float terrainHeight(vec3 dir){
   float mts   = clamp(ridged(dp), 0.0, 1.0);
   float detail = mix(hills, mts, uRidged);
   float relief = mix(0.16, 0.32, smoothstep(0.55, 0.85, macro)); // rougher up high
-  return clamp(macro + (detail - 0.5) * relief + craterField(dir), 0.0, 1.0);
+  float h = macro + (detail - 0.5) * relief + craterField(dir);
+  // Polar ice-cap MASS: beyond the (noise-broken) cap line the surface rises to a
+  // solid shelf plateau above sea level — frozen ocean kilometres deep forming a
+  // land-like mass, not just a white tint. Land under the cap keeps its relief.
+  float cap = iceCap(dir);
+  if (cap > 0.0) h = mix(h, max(h, uSeaLevel + 0.14), cap);
+  return clamp(h, 0.0, 1.0);
 }
 `;
 

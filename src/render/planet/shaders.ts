@@ -68,8 +68,11 @@ void main(){
   vFV = normalize(m3 * aFaceV);
   // Height: baked master (atlas) or live analytic terrain.
   float h = uUseBake > 0.5 ? atlasHeight(uHeightAtlas, aFace, faceUV, uHeightRes) : terrainHeight(dir);
+  // Water fills the basins: the ocean SURFACE is flat at sea level (the seafloor
+  // no longer bumps the water geometry — it shows through the bathymetry colour).
+  float hs = uSeaLevel > 0.0 ? max(h, uSeaLevel) : h;
   // Displace land radially; centre the mean so the globe keeps its radius.
-  float disp = uDisplacement * (h - 0.5);
+  float disp = uDisplacement * (hs - 0.5);
   vec3 displaced = position * (1.0 + disp);
   vWorldPos = (modelMatrix * vec4(displaced, 1.0)).xyz;
   gl_Position = projectionMatrix * modelViewMatrix * vec4(displaced, 1.0);
@@ -88,10 +91,10 @@ uniform float uUseBake;
 uniform sampler2D uHeightAtlas; // stacked 6-face height atlas
 uniform float uHeightRes;       // baked face resolution (for the normal step)
 uniform vec3  uSunDir;        // world-space, surface → sun
-uniform float uSeaLevel;
+// (uSeaLevel + uLatitudeIce are declared in GLSL_TERRAIN — shared with the
+//  vertex's flat-ocean displacement and the ice-cap mass.)
 uniform vec3  uOceanShallow;
 uniform vec3  uOceanDeep;
-uniform float uLatitudeIce;
 uniform float uMoisture;
 uniform float uRoughness;
 uniform vec3  uEmissive;
@@ -138,16 +141,26 @@ void main(){
     float gy = (terrainHeight(normalize(dir + b*eps)) - vHeight) / eps;
     N = normalize(vWN - uNormalStrength * (gx * normalize(vWT) + gy * normalize(vWB)));
   }
+  bool ocean = uSeaLevel > 0.0 && vHeight < uSeaLevel;
+  if (ocean){
+    // FLAT water-surface normal: the sphere normal + a whisper of wave detail.
+    // The seafloor no longer shades the surface — it reads through the COLOUR.
+    vec3 wave = vec3(snoise(dir * 90.0), snoise(dir * 90.0 + 31.7), snoise(dir * 90.0 + 77.3));
+    N = normalize(vWN + 0.015 * wave);
+  }
   vec3 V = normalize(cameraPosition - vWorldPos);
   float ndl = dot(N, uSunDir);
   float day = smoothstep(-uTerminator, uTerminator, ndl);
 
-  bool ocean = uSeaLevel > 0.0 && vHeight < uSeaLevel;
   vec3 albedo;
   float spec = 0.0;
   if (ocean){
     float depth = clamp((uSeaLevel - vHeight) / max(uSeaLevel, 1e-3), 0.0, 1.0);
-    albedo = mix(uOceanShallow, uOceanDeep, depth);
+    // Terrain-informed bathymetry: shallow→deep quickly near the shore, then an
+    // ABYSS darkening so trenches (underwater craters/canyons — the Mariana
+    // effect) read as distinctly deeper, diffused water.
+    albedo = mix(uOceanShallow, uOceanDeep, smoothstep(0.0, 0.35, depth));
+    albedo *= mix(1.0, 0.4, smoothstep(0.35, 1.0, depth));
     // Fresnel + sun glint (Lague-style water, done on-surface).
     float fres = pow(1.0 - max(dot(N, V), 0.0), 5.0);
     vec3 H = normalize(uSunDir + V);
@@ -155,13 +168,25 @@ void main(){
     albedo = mix(albedo, uAtmosTint, fres * 0.4);
   } else {
     float hh = uSeaLevel > 0.0 ? (vHeight - uSeaLevel) / max(1.0 - uSeaLevel, 1e-3) : vHeight;
-    albedo = sampleRamp(clamp(hh, 0.0, 1.0));
-    // Moisture darkens/greens lowlands a touch.
-    albedo = mix(albedo, albedo * vec3(0.8, 1.05, 0.8), uMoisture * (1.0 - hh) * 0.5);
-    // Latitude ice caps.
+    hh = clamp(hh, 0.0, 1.0);
+    albedo = sampleRamp(hh);
+    // ── Spatial moisture (Earthlike biomes): wet equator, dry subtropical belts,
+    // wetter mid-latitudes; wet lowlands/coasts, drier interiors/highlands; broken
+    // by mesoscale noise. uMoisture scales the whole field — high values push
+    // jungle inland; deserts survive only in the dry belts, as on Earth.
     float lat = abs(dir.y);
-    float ice = smoothstep(1.0 - uLatitudeIce * 0.6, 1.0, lat) * step(uSeaLevel, vHeight);
-    albedo = mix(albedo, vec3(0.95, 0.97, 1.0), ice);
+    float latBand = 1.0 - 0.8 * smoothstep(0.22, 0.42, lat) * (1.0 - smoothstep(0.5, 0.72, lat));
+    latBand *= 1.0 - 0.5 * smoothstep(0.78, 0.95, lat);
+    float coastal = 1.0 - smoothstep(0.0, 0.55, hh);
+    float mvar = 0.6 + 0.8 * (fbm(dir * 2.6 + uNoiseSeed * 0.13) * 0.5 + 0.5);
+    float moist = clamp(uMoisture * latBand * mix(0.5, 1.0, coastal) * mvar, 0.0, 1.0);
+    vec3 lush = albedo * vec3(0.5, 0.85, 0.45) + vec3(0.015, 0.06, 0.015);
+    albedo = mix(albedo, lush, moist * (1.0 - smoothstep(0.65, 0.9, hh)));
+    // ── Polar ice colour keys off the SAME cap-mass field the height uses
+    // (iceCap in GLSL_TERRAIN) — a raised white shelf with a jagged margin —
+    // plus a light frost on the highest peaks.
+    float frost = 0.6 * smoothstep(0.85, 0.97, hh);
+    albedo = mix(albedo, vec3(0.93, 0.96, 1.0), max(iceCap(dir), frost));
   }
 
   // Lambert + soft terminator.
