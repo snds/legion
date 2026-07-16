@@ -105,6 +105,7 @@ uniform float uCloudFlow;     // zonal circulation speed (trade winds / jets)
 uniform float uCloudTurb;     // evolving shear / morph turbulence
 uniform float uCyclones;      // cyclone strength (0 = none)
 uniform float uCloudTerrain;  // terrain/climate coupling (orographic + wet-dry)
+uniform float uCloudDetail;   // formation scale: >1 = smaller systems + finer billow texture
 
 vec3 rotY(vec3 d, float a){ float c = cos(a), s = sin(a); return vec3(c*d.x + s*d.z, d.y, -s*d.x + c*d.z); }
 float fbm2(vec3 p){ return snoise(p) * 0.6 + snoise(p * 2.3) * 0.3; } // cheap 2-octave
@@ -150,8 +151,12 @@ float cloudDensity(vec3 d0){
   }
 
   // ── Evolving turbulence: a time-morphing warp — formations grow, shear and
-  // decay instead of sliding around as a frozen pattern.
-  vec3 p = d * 3.2 + uNoiseSeed * 0.31;
+  // decay instead of sliding around as a frozen pattern. uCloudDetail scales the
+  // whole spectrum (smaller formations, finer billows). The morph warp displaces
+  // in p-SPACE, so its distortion stays proportional to feature size at any
+  // detail setting.
+  float det = max(uCloudDetail, 0.25);
+  vec3 p = d * 3.2 * det + uNoiseSeed * 0.31;
   if (uCloudTurb > 0.0){
     float tt = uCloudTime * 0.02;
     p += uCloudTurb * 0.55 * vec3(fbm2(d * 1.6 + vec3(tt, 7.0, 0.0)),
@@ -159,8 +164,9 @@ float cloudDensity(vec3 d0){
                                   fbm2(d * 1.6 + vec3(11.0, 0.0, tt + 41.0)));
   }
   float f = fbm(p) * 0.5 + 0.5;                        // broad weather systems
-  f += 0.4 * (fbm(p * 3.6 + 17.3) * 0.5 + 0.5);        // billow detail
-  f /= 1.4;
+  f += 0.4  * (fbm(p * 3.6 + 17.3) * 0.5 + 0.5);       // billow detail
+  f += 0.22 * (fbm(p * 8.8 + 31.7) * 0.5 + 0.5);       // fine cauliflower texture
+  f /= 1.62;
 
   // ── Terrain / climate coupling: the wet equator and mid-latitude belts breed
   // cloud and the dry subtropics clear it (the SAME belts as the surface biomes);

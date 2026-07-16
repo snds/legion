@@ -62,6 +62,7 @@ export interface PlanetRenderParams {
   cloudTurb: number;         // evolving shear/morph turbulence
   cyclones: number;          // cyclone strength (hurricanes)
   cloudTerrain: number;      // terrain/climate coupling (orographic + wet-dry)
+  cloudDetail: number;       // formation scale: >1 = smaller systems + finer billows
 
   // ── emissive (lava) ──
   emissive: RGB;
@@ -94,6 +95,7 @@ interface Preset {
   cloudTurb: number;
   cyclones: number;
   cloudTerrain: number;
+  cloudDetail: number;
   emissive: RGB;
   emissiveStrength: number;
 }
@@ -123,7 +125,7 @@ export const PRESETS: Record<PlanetVisualType, Preset> = {
     roughness: 0.9,
     bandColorA: G0, bandColorB: G0, bandCount: 0, bandTurbulence: 0, stormChance: 0,
     hasAtmosphere: false, atmosphere: [0.5, 0.4, 0.35], atmosphereDensity: 0.25, nightLights: 0,
-    cloudCover: 0.15, cloudShadow: 0.5, cloudFlow: 0.4, cloudTurb: 0.3, cyclones: 0.1, cloudTerrain: 0.5,
+    cloudCover: 0.15, cloudShadow: 0.5, cloudFlow: 0.4, cloudTurb: 0.3, cyclones: 0.1, cloudTerrain: 0.5, cloudDetail: 1.6,
     emissive: G0, emissiveStrength: 0,
   },
   ocean: {
@@ -139,7 +141,7 @@ export const PRESETS: Record<PlanetVisualType, Preset> = {
     roughness: 0.4,
     bandColorA: G0, bandColorB: G0, bandCount: 0, bandTurbulence: 0, stormChance: 0,
     hasAtmosphere: true, atmosphere: [0.30, 0.52, 0.92], atmosphereDensity: 1.0, nightLights: 0.8,
-    cloudCover: 0.55, cloudShadow: 0.6, cloudFlow: 0.7, cloudTurb: 0.55, cyclones: 0.5, cloudTerrain: 0.6,
+    cloudCover: 0.55, cloudShadow: 0.6, cloudFlow: 0.7, cloudTurb: 0.55, cyclones: 0.5, cloudTerrain: 0.6, cloudDetail: 1.8,
     emissive: G0, emissiveStrength: 0,
   },
   desert: {
@@ -154,7 +156,7 @@ export const PRESETS: Record<PlanetVisualType, Preset> = {
     roughness: 0.85,
     bandColorA: G0, bandColorB: G0, bandCount: 0, bandTurbulence: 0, stormChance: 0,
     hasAtmosphere: true, atmosphere: [0.82, 0.62, 0.40], atmosphereDensity: 0.5, nightLights: 0.15,
-    cloudCover: 0.10, cloudShadow: 0.45, cloudFlow: 0.55, cloudTurb: 0.35, cyclones: 0.15, cloudTerrain: 0.5,
+    cloudCover: 0.10, cloudShadow: 0.45, cloudFlow: 0.55, cloudTurb: 0.35, cyclones: 0.15, cloudTerrain: 0.5, cloudDetail: 1.6,
     emissive: G0, emissiveStrength: 0,
   },
   lava: {
@@ -169,7 +171,7 @@ export const PRESETS: Record<PlanetVisualType, Preset> = {
     roughness: 0.7,
     bandColorA: G0, bandColorB: G0, bandCount: 0, bandTurbulence: 0, stormChance: 0,
     hasAtmosphere: true, atmosphere: [0.9, 0.35, 0.15], atmosphereDensity: 0.6, nightLights: 0,
-    cloudCover: 0.08, cloudShadow: 0.4, cloudFlow: 0.35, cloudTurb: 0.5, cyclones: 0.0, cloudTerrain: 0.4,
+    cloudCover: 0.08, cloudShadow: 0.4, cloudFlow: 0.35, cloudTurb: 0.5, cyclones: 0.0, cloudTerrain: 0.4, cloudDetail: 1.5,
     emissive: [1.0, 0.35, 0.08], emissiveStrength: 1.0,
   },
   ice: {
@@ -179,7 +181,7 @@ export const PRESETS: Record<PlanetVisualType, Preset> = {
     bandColorA: [0.42, 0.60, 0.78], bandColorB: [0.26, 0.44, 0.66],
     bandCount: 9, bandTurbulence: 0.35, stormChance: 0.5,
     hasAtmosphere: true, atmosphere: [0.45, 0.70, 0.90], atmosphereDensity: 1.1, nightLights: 0,
-    cloudCover: 0, cloudShadow: 0, cloudFlow: 0, cloudTurb: 0, cyclones: 0, cloudTerrain: 0,
+    cloudCover: 0, cloudShadow: 0, cloudFlow: 0, cloudTurb: 0, cyclones: 0, cloudTerrain: 0, cloudDetail: 1,
     emissive: G0, emissiveStrength: 0,
   },
   gas: {
@@ -188,7 +190,7 @@ export const PRESETS: Record<PlanetVisualType, Preset> = {
     bandColorA: [0.86, 0.74, 0.54], bandColorB: [0.66, 0.50, 0.34],
     bandCount: 14, bandTurbulence: 0.6, stormChance: 0.7,
     hasAtmosphere: true, atmosphere: [0.92, 0.82, 0.55], atmosphereDensity: 1.2, nightLights: 0,
-    cloudCover: 0, cloudShadow: 0, cloudFlow: 0, cloudTurb: 0, cyclones: 0, cloudTerrain: 0,
+    cloudCover: 0, cloudShadow: 0, cloudFlow: 0, cloudTurb: 0, cyclones: 0, cloudTerrain: 0, cloudDetail: 1,
     emissive: G0, emissiveStrength: 0,
   },
 };
@@ -275,6 +277,7 @@ export function derivePlanetParams(planet: GenPlanet): PlanetRenderParams {
     cloudTurb: base.cloudTurb,
     cyclones: base.cyclones * range(ter, 0.6, 1.3),
     cloudTerrain: base.cloudTerrain,
+    cloudDetail: base.cloudDetail,
     emissive: base.emissive,
     emissiveStrength: base.emissiveStrength,
   };

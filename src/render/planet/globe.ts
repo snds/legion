@@ -177,6 +177,7 @@ export class PlanetGlobe {
         uCloudTurb: { value: p.cloudTurb },
         uCyclones: { value: p.cyclones },
         uCloudTerrain: { value: p.cloudTerrain },
+        uCloudDetail: { value: p.cloudDetail },
         uCloudTime: { value: 0 },
         uSunDirObj: { value: new Vector3(0, 0, 1) },
         // Baked master (Phase 3): ONE stacked atlas (res × 6·res); the leaf picks
@@ -289,6 +290,7 @@ export class PlanetGlobe {
       u.uCloudTurb.value = p.cloudTurb;
       u.uCyclones.value = p.cyclones;
       u.uCloudTerrain.value = p.cloudTerrain;
+      u.uCloudDetail.value = p.cloudDetail;
       if (this.cloudMesh) {
         const cm = (this.cloudMesh.material as ShaderMaterial).uniforms;
         cm.uCloudCover.value = p.cloudCover;
@@ -296,6 +298,7 @@ export class PlanetGlobe {
         cm.uCloudTurb.value = p.cloudTurb;
         cm.uCyclones.value = p.cyclones;
         cm.uCloudTerrain.value = p.cloudTerrain;
+        cm.uCloudDetail.value = p.cloudDetail;
         cm.uSeaLevel.value = p.seaLevel;
         (cm.uNoiseSeed.value as Vector3).set(...p.noiseSeed);
       }
@@ -376,6 +379,7 @@ export class PlanetGlobe {
         uCloudTurb: { value: p.cloudTurb },
         uCyclones: { value: p.cyclones },
         uCloudTerrain: { value: p.cloudTerrain },
+        uCloudDetail: { value: p.cloudDetail },
         uCloudTime: { value: 0 },
         uSeaLevel: { value: p.seaLevel }, // cyclone ocean gate
         // plateMacro inputs (orographic/climate coupling samples the real terrain)
