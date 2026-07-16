@@ -1,8 +1,9 @@
 // ═══════════════════════════════════════════════════════════════════
 // DEMO MENU — the "🚩 REVIEW BUILDS" selector on the main game UI.
 //
-// A floating button (bottom-left, mirroring the LAB button bottom-right) that
-// opens a list of the shipped subsystems. Picking one sets ?demo=<id> and
+// A floating button (bottom-right, stacked just above the LAB button so both lab
+// surfaces sit on the same side) that opens a list of the shipped subsystems.
+// Picking one sets ?demo=<id> and
 // reloads — the boot director (main.ts) then mounts the showcase and flies the
 // camera to it (see src/render/demos.ts). When a demo is active, a caption
 // banner names what you're looking at and offers "Exit" back to the game.
@@ -51,7 +52,7 @@ function goApproach(): void {
 const REVIEW_PHASES: readonly { param: string; icon: string; label: string; blurb: string }[] = [
   {
     param: 'scale1to1', icon: '🌍', label: '1:1 Scale + FOV (Phase 0)',
-    blurb: 'Telephoto FOV that narrows as you close on a body (the "from orbit" feel). Phase 0b adds true 1:1 planet radius on this same flag.',
+    blurb: 'Telephoto FOV that narrows as you approach a body.',
   },
 ];
 
@@ -68,7 +69,7 @@ export function initDemoMenu(): void {
   const menu = document.createElement('div');
   menu.id = 'demo-menu';
   menu.style.cssText = [
-    'position:fixed', 'left:16px', 'bottom:56px', 'z-index:9999', 'display:none',
+    'position:fixed', 'right:16px', 'bottom:92px', 'z-index:9999', 'display:none',
     'width:288px', 'max-height:calc(100vh - 96px)', 'overflow:auto',
     'padding:6px', 'background:rgba(12,15,20,0.96)',
     'border:1px solid #2a3340', 'border-radius:8px', 'color:#cfd8e3',
@@ -161,7 +162,7 @@ export function initDemoMenu(): void {
     item.innerHTML =
       `<span style="color:#eaf0f7">🌍 1:1 Approach${on ? '  <span style="color:#6aa3ff">● live</span>' : ''}</span>`
       + `<span style="display:block;margin-top:3px;opacity:0.6;font-size:10.5px;line-height:1.4">`
-      + `Fly into a single Earth-radius world at true scale under the telephoto lens — the one-click scale/FOV review.</span>`;
+      + `Fly into a single true-scale world under the telephoto lens.</span>`;
     menu.appendChild(item);
   }
 
@@ -184,7 +185,7 @@ export function initDemoMenu(): void {
   btn.textContent = activeLabel ? `🚩 ${activeLabel}` : '🚩 REVIEW BUILDS';
   btn.title = 'Review the shipped subsystems, or open a generator lab';
   btn.style.cssText = [
-    'position:fixed', 'left:16px', 'bottom:16px', 'z-index:9999',
+    'position:fixed', 'right:16px', 'bottom:16px', 'z-index:9999',
     'font-family:ui-monospace,Menlo,monospace', 'font-size:11px',
     'letter-spacing:1px', 'padding:7px 12px', 'cursor:pointer',
     'max-width:288px', 'overflow:hidden', 'text-overflow:ellipsis', 'white-space:nowrap',
@@ -197,6 +198,13 @@ export function initDemoMenu(): void {
     menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
   };
   document.body.appendChild(btn);
+
+  // Follow the docked lab panel: shift left by its width (--lab-dock-w) so the
+  // switcher button + menu clear the panel instead of hiding behind it.
+  btn.style.right = 'calc(16px + var(--lab-dock-w, 0px))';
+  btn.style.transition = 'right 0.18s ease';
+  menu.style.right = 'calc(16px + var(--lab-dock-w, 0px))';
+  menu.style.bottom = '52px';
 
   // Dismiss the menu on any outside click.
   document.addEventListener('click', (e) => {

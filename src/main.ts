@@ -254,7 +254,9 @@ async function boot(): Promise<void> {
   initDock();
   initHUD();
   Tooltip.init();
-  initRaycast(camera, layers, renderCtx.canvas, scene);
+  // Object inspection (hover tooltip · click inspect · dbl-click focus) is a game
+  // interaction — skip it in the generator labs, which are a clean tuning room.
+  if (!activeLabId()) initRaycast(camera, layers, renderCtx.canvas, scene);
   Debug.init(renderCtx.renderer);
   initVisualEditor(); // ADMIN VISUAL EDITOR — REMOVE
 
@@ -283,14 +285,18 @@ async function boot(): Promise<void> {
   const params = new URLSearchParams(window.location.search);
   const systemId = (params.get('system') === 'sol' ? 'sol' : 'ee') as 'ee' | 'sol';
   const worldExtras = populateWorld(sceneCtx, systemId, renderCtx.renderer);
+  // A generator lab (?lab=<id>) is a clean room: the game world is suppressed so
+  // only the lab content renders (perf) — see the isolation block below.
+  const inLab = activeLabId() !== null;
 
   // Catalog Points picking — raycast resolves a Points-hit index back to the
   // CatalogStar record through this handle (single-click info panel).
   setCatalogPicking(worldExtras.catalogSystems);
 
   // Galaxy LAB panel — the in-game tuning surface, driven by the physical galaxy's control schema. Null under
-  // ?proto-buildout (no physical galaxy) → the panel/button simply don't mount.
-  initGalaxyLabPanel(worldExtras.physGalaxy?.controls ?? null);
+  // ?proto-buildout (no physical galaxy) → the panel/button simply don't mount. Also suppressed while a ?lab=<id>
+  // generator lab is active, so that context owns the single LAB flyout (one lab surface per context).
+  initGalaxyLabPanel(activeLabId() ? null : (worldExtras.physGalaxy?.controls ?? null));
 
   // Review-builds selector — the "🚩 REVIEW BUILDS" dropdown (bottom-left) that
   // jumps the camera to each shipped subsystem via ?demo=<id> (src/ui/demo-menu.ts).
@@ -553,6 +559,24 @@ async function boot(): Promise<void> {
     Game.data.zoomLevel = planetLab.framingZoom;
     Game.data.targetZoom = planetLab.framingZoom;
     Game.data.camFocusTarget = { x: 0, y: 0, z: 0 }; // archetype row is centred on the local origin
+  }
+
+  // ── Lab clean-room isolation ──────────────────────────────────────────────
+  // Suppress the ENTIRE game world behind any generator lab so only the lab
+  // content renders — the galaxy/sector/catalog/nebula/black-hole background is
+  // pure overhead here and was tanking the lab's frame rate. The heavy per-frame
+  // galaxy/sector UPDATES are already camDist-gated (off at the lab's close
+  // framing); this drops their DRAW cost, and the black-hole geodesic update is
+  // gated below (`!inLab`). Backdrop skybox draw is skipped too.
+  if (inLab) {
+    for (const o of [
+      worldExtras.galaxyArms, worldExtras.catalogSystems.group, worldExtras.starShells.group,
+      worldExtras.sectorOrb, worldExtras.oortCloud, worldExtras.eclipticGrid,
+      worldExtras.sectorMgr?.group, worldExtras.regionMgr?.group, worldExtras.testNebula.group,
+      worldExtras.protoSector?.group, worldExtras.galaxyBuildout?.group, blackHole.group,
+    ]) { if (o) o.visible = false; }
+    // Keep scene.background (the baked Milky-Way skybox) — it's a cheap cubemap
+    // and useful visual reference; only the live particle systems/models are culled.
   }
 
   // 1:1 Approach (?demo=approach): one true-scale Earth-radius world at the local
@@ -867,7 +891,7 @@ async function boot(): Promise<void> {
     // LOD by distance. Runs after the broker/camera update (so its residual is
     // current) and before the post chain (which composites the billboard). Rides
     // the galactic tier's floating origin like the streamed sectors.
-    blackHole.update(renderCtx.renderer, camera, renderCtx.renderer.domElement.height);
+    if (!inLab) blackHole.update(renderCtx.renderer, camera, renderCtx.renderer.domElement.height);
 
     // 10. Render (post-processing pipeline) — bounded shader clock
     postCtx.render(shaderTime);

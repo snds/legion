@@ -82,8 +82,11 @@ button, select, input { font-family: var(--ui-font); letter-spacing: 0.02em; }
 
 /* ═══════════════════ HUD LAYER ═══════════════════ */
 #hud {
-  position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+  /* right inset = the docked lab panel width (0 when none/collapsed), so the
+     whole HUD reflows left as the panel opens. */
+  position: fixed; top: 0; left: 0; right: var(--lab-dock-w, 0px); height: 100%;
   pointer-events: none; z-index: 10;
+  transition: right 0.18s ease;
 }
 #hud > * { pointer-events: auto; }
 

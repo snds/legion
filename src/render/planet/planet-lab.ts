@@ -17,12 +17,11 @@ import { Vector3, type Object3D } from 'three';
 import type { GenPlanet, PlanetVisualType } from '../../data/system-gen';
 import { PlanetGlobe, type UpdateCtx } from './globe';
 import { visualRadius } from './index';
-import { PRESETS, PLANET_TYPES, snapshotPresets, type Preset } from './presets';
+import { PRESETS, PLANET_TYPES, type Preset } from './presets';
 import { MACRO, type MacroParams } from './plates';
 import { DEFAULT_BAKE, type BakeParams } from './bake';
 import { mountControlPanel, type ControlPanelHandle, type LabCtrl, type LabSection } from '../../ui/control-panel';
 
-const SPACING = 5.5;              // authoring units between globe centres
 const FIXED_SUN_DIR = new Vector3(0.6, 0.35, 0.72).normalize(); // even, flattering light
 
 /** Representative example body per archetype (radius/insolation drive the look). */
@@ -49,21 +48,6 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
     rocky: 1001, ocean: 2002, desert: 3003, lava: 4004, ice: 5005, gas: 6006,
   };
   const globes = new Map<PlanetVisualType, PlanetGlobe>();
-  const posX = new Map<PlanetVisualType, number>();
-
-  const mid = (PLANET_TYPES.length - 1) / 2;
-  PLANET_TYPES.forEach((type, i) => { posX.set(type, (i - mid) * SPACING); });
-
-  const build = (type: PlanetVisualType): void => {
-    const old = globes.get(type);
-    if (old) { parent.remove(old.root); old.dispose(); }
-    const planet: GenPlanet = { ...EXEMPLARS[type], seed: seeds[type] };
-    const globe = new PlanetGlobe(planet, visualRadius(planet));
-    globe.root.position.set(posX.get(type)!, 0, 0);
-    parent.add(globe.root);
-    globes.set(type, globe);
-  };
-  for (const t of PLANET_TYPES) build(t);
 
   let selected: PlanetVisualType = 'ocean';
 
@@ -73,6 +57,48 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
     rocky: false, ocean: false, desert: false, lava: false, ice: false, gas: false,
   };
   const bakeParams: BakeParams = { ...DEFAULT_BAKE };
+
+  // ── Single-example gallery view ──────────────────────────────────────
+  // Only the SELECTED archetype is built + mounted, centred at the origin and
+  // normalised to a consistent display size so every world frames identically in
+  // isolation. Switching disposes the old globe and builds the new on demand —
+  // cheaper than the old 6-globe row, and the pattern the star / nebula labs reuse.
+  const LAB_VIEW_R = visualRadius({ ...EXEMPLARS.ocean, seed: 0 }) * 3; // reference display size (fills the isolated frame)
+  const build = (type: PlanetVisualType): void => {
+    const planet: GenPlanet = { ...EXEMPLARS[type], seed: seeds[type] };
+    const globe = new PlanetGlobe(planet, visualRadius(planet));
+    globe.root.position.set(0, 0, 0);
+    globe.root.scale.setScalar(LAB_VIEW_R / visualRadius(planet)); // normalise apparent size
+    globe.root.userData.labType = type;
+    parent.add(globe.root);
+    globes.set(type, globe);
+  };
+  const mountSelected = (): void => {
+    for (const [, g] of globes) { parent.remove(g.root); g.dispose(); }
+    globes.clear();
+    build(selected);
+    globes.get(selected)?.setBaked(baked[selected], bakeParams);
+  };
+
+  // ── COMPLETE lab persistence ─────────────────────────────────────────
+  // Save EVERY editable field — all archetypes, every parameter — across the
+  // three sources the panel edits: PRESETS (presets.ts), MACRO tectonics
+  // (plates.ts) and the erosion bake config. Deep-cloning the whole objects makes
+  // this future-proof: new params/archetypes are captured automatically. Saved
+  // tuning is applied on boot BEFORE the globes build, so edits stick on reload.
+  const LAB_STORE = 'legion.planetLab.interim';
+  type LabSnap = { presets: typeof PRESETS; macro: typeof MACRO; bake: BakeParams; baked?: Record<PlanetVisualType, boolean> };
+  const snapshotLab = (): LabSnap => JSON.parse(JSON.stringify({ presets: PRESETS, macro: MACRO, bake: bakeParams, baked })) as LabSnap;
+  const CANONICAL = snapshotLab(); // captured before any saved overlay is applied
+  const applyLab = (s: Partial<LabSnap>): void => {
+    if (s.presets) for (const t of Object.keys(s.presets) as PlanetVisualType[]) if (PRESETS[t]) Object.assign(PRESETS[t], s.presets[t]);
+    if (s.macro) for (const t of Object.keys(s.macro) as PlanetVisualType[]) if (MACRO[t]) Object.assign(MACRO[t], s.macro[t]);
+    if (s.bake) Object.assign(bakeParams, s.bake);
+    if (s.baked) Object.assign(baked, s.baked); // per-type 'Baked + eroded' toggles persist too
+  };
+  try { const raw = localStorage.getItem(LAB_STORE); if (raw) applyLab(JSON.parse(raw) as Partial<LabSnap>); } catch { /* ignore */ }
+
+  mountSelected(); // build the initial selected archetype (after saved tuning applied)
   const applyBake = (): void => { globes.get(selected)?.setBaked(baked[selected], bakeParams); };
 
   // ── Control schema (dynamic: editable fields differ surface vs giant) ──
@@ -110,12 +136,20 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
 
   const sections = (): LabSection[] => {
     const giant = selected === 'gas' || selected === 'ice';
+    // Single-example gallery: pick which archetype to view + edit in isolation.
+    // Switching mounts only that world (mountSelected) and re-renders the panel
+    // (giant vs surface sections differ).
     const typeSel: LabSection = {
       title: 'Archetype', key: 'lab-archetype',
       ctrls: [{
-        kind: 'select', label: 'Editing', options: PLANET_TYPES as readonly string[],
+        kind: 'picker',
+        options: PLANET_TYPES.map((t) => ({
+          value: t,
+          label: `${t[0].toUpperCase()}${t.slice(1)}`,
+          icon: EXEMPLARS[t].isGasGiant ? '🪐' : '🌍',
+        })),
         get: () => selected,
-        set: (v) => { selected = v as PlanetVisualType; handle.panel.refresh(); },
+        set: (v) => { selected = v as PlanetVisualType; mountSelected(); handle.panel.refresh(); },
       }],
     };
     if (giant) {
@@ -156,8 +190,16 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
         slider('Ridged', 'ridged', 0, 1, 0.01),
         slider('Roughness', 'roughness', 0, 1, 0.01),
         slider('Sea level', 'seaLevel', 0, 1, 0.01),
-        slider('Moisture', 'moisture', 0, 1, 0.01),
+        slider('Moisture', 'moisture', 0, 1.5, 0.01),
         slider('Polar ice', 'latitudeIce', 0, 1, 0.01),
+      ],
+    }, {
+      // Optional structural ephemera (Mercury/Mars/Venus). Impact craters ship
+      // first; canyons + scarps follow. Randomised placement + overlap.
+      title: 'Surface features', key: 'lab-surface', ctrls: [
+        macroSlider('Craters', 'craters', 0, 1, 0.01),
+        macroSlider('Crater density', 'craterFreq', 6, 32, 0.5),
+        macroSlider('Crater depth', 'craterDepth', 0, 0.2, 0.005),
       ],
     }, {
       title: 'Master bake (erosion)', key: 'lab-bake', ctrls: [
@@ -174,6 +216,21 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
         color('Deep', 'oceanDeep'),
         slider('Emissive', 'emissiveStrength', 0, 3, 0.01),
         color('Emissive tint', 'emissive'),
+      ],
+    }, {
+      // Cloud layer — the same field drives the shell AND its ground shadows.
+      title: 'Clouds', key: 'lab-clouds', ctrls: [
+        slider('Cloud cover', 'cloudCover', 0, 1, 0.01),
+        slider('Cloud shadow', 'cloudShadow', 0, 1, 0.01),
+        slider('Circulation', 'cloudFlow', 0, 2, 0.01),
+        slider('Turbulence', 'cloudTurb', 0, 1.5, 0.01),
+        slider('Cyclones', 'cyclones', 0, 1, 0.01),
+        slider('Storm size', 'cycloneSize', 0.04, 0.4, 0.005),
+        slider('Terrain coupling', 'cloudTerrain', 0, 1, 0.01),
+        slider('Detail scale', 'cloudDetail', 0.5, 4, 0.05),
+        slider('Weather speed', 'cloudSpeed', 0, 1, 0.005),
+        slider('Wispiness', 'cloudWisp', 0, 1, 0.01),
+        slider('Clear regions', 'cloudRegion', 0, 1, 0.01),
       ],
     }, {
       title: 'Atmosphere', key: 'lab-atmos', ctrls: [
@@ -203,18 +260,35 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
         globes.get(selected)?.reseed(seeds[selected]);
         applyBake();
       } },
-      { label: 'Copy JSON → presets.ts', minor: true, onClick: () => {
-        const json = JSON.stringify(snapshotPresets(), null, 2);
+      // Save → persist ALL tuning (presets + tectonics + bake) to localStorage so
+      // it sticks across reloads. Revert → clear it and restore the canonical look.
+      { label: 'Save', onClick: () => {
+        try { localStorage.setItem(LAB_STORE, JSON.stringify(snapshotLab())); return 'Saved ✓'; }
+        catch { return 'Save failed'; }
+      } },
+      { label: 'Revert', onClick: () => {
+        try { localStorage.removeItem(LAB_STORE); } catch { /* ignore */ }
+        applyLab(CANONICAL);
+        for (const t of PLANET_TYPES) globes.get(t)?.refreshParams();
+        handle.panel.sync();
+        return 'Canonical';
+      } },
+      { label: 'Copy JSON (full set → presets.ts + plates.ts + bake.ts)', minor: true, onClick: () => {
+        const json = JSON.stringify(snapshotLab(), null, 2);
         return navigator.clipboard?.writeText(json).then(() => 'Copied ✓', () => 'Copy failed') ?? 'No clipboard';
       } },
     ],
-  }, { anchor: 'right:16px;top:64px' });
+  }, {
+    // Docked to the right edge (full height), collapsible — the HUD reflows around
+    // it. Open by default since a ?lab= view is dedicated to tuning.
+    dock: { open: true, storeKey: 'legion.planetLab.dock' },
+  });
 
   const _root = new Vector3();
   const _sun = new Vector3();
   const handle: PlanetLabHandle = {
     panel,
-    framingZoom: 0.205,
+    framingZoom: 0.135, // pulled in to frame the single isolated globe
     update(ctx) {
       // Even, fixed-direction key light so archetypes are lit identically for
       // comparison (independent of the floating-origin shift).
@@ -235,5 +309,8 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
     baked[selected] = on;
     globes.get(selected)?.setBaked(on, on ? { res: 128, droplets: 0, thermalIters: 0 } : bakeParams);
   };
+  // Dev hook: age the selected globe's storms past fade-in (verify full-strength
+  // cyclones without waiting out the ramp — see globe.stormsMature).
+  (window as unknown as { __labStorms?: () => void }).__labStorms = () => { globes.get(selected)?.stormsMature(); };
   return handle;
 }
