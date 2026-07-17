@@ -179,6 +179,9 @@ export class PlanetGlobe {
         uCraters: { value: macroParams(p.type).craters },
         uCraterFreq: { value: macroParams(p.type).craterFreq },
         uCraterDepth: { value: macroParams(p.type).craterDepth },
+        uCanyons: { value: macroParams(p.type).canyons },
+        uCanyonFreq: { value: macroParams(p.type).canyonFreq },
+        uCanyonDepth: { value: macroParams(p.type).canyonDepth },
         uCloudCover: { value: p.cloudCover },
         uCloudShadow: { value: p.cloudShadow },
         uCloudFlow: { value: p.cloudFlow },
@@ -387,6 +390,9 @@ export class PlanetGlobe {
       u.uCraters.value = macroParams(p.type).craters;
       u.uCraterFreq.value = macroParams(p.type).craterFreq;
       u.uCraterDepth.value = macroParams(p.type).craterDepth;
+      u.uCanyons.value = macroParams(p.type).canyons;
+      u.uCanyonFreq.value = macroParams(p.type).canyonFreq;
+      u.uCanyonDepth.value = macroParams(p.type).canyonDepth;
       u.uCloudCover.value = p.cloudCover;
       u.uCloudShadow.value = p.cloudShadow;
       u.uCloudFlow.value = p.cloudFlow;
