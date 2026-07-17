@@ -198,7 +198,7 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
       // first; canyons + scarps follow. Randomised placement + overlap.
       title: 'Surface features', key: 'lab-surface', ctrls: [
         macroSlider('Craters', 'craters', 0, 1, 0.01),
-        macroSlider('Crater density', 'craterFreq', 6, 32, 0.5),
+        macroSlider('Crater density', 'craterFreq', 3, 32, 0.5),
         macroSlider('Crater depth', 'craterDepth', 0, 0.2, 0.005),
         macroSlider('Canyons', 'canyons', 0, 1, 0.01),
         macroSlider('Canyon scale', 'canyonFreq', 1, 6, 0.1),
