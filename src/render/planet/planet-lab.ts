@@ -101,6 +101,29 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
   mountSelected(); // build the initial selected archetype (after saved tuning applied)
   const applyBake = (): void => { globes.get(selected)?.setBaked(baked[selected], bakeParams); };
 
+  // ── Live refresh: EVERY control edit pushes straight into the mounted globe's
+  // uniforms (refreshParams re-derives presets + regenerates the plate field —
+  // all uniform-driven, no geometry rebuild), so sliders scrub in real time
+  // instead of waiting on Rebuild. rAF-throttled: a fast drag costs one refresh
+  // per rendered frame.
+  let refreshQueued = false;
+  const liveRefresh = (): void => {
+    if (refreshQueued) return;
+    refreshQueued = true;
+    requestAnimationFrame(() => { refreshQueued = false; globes.get(selected)?.refreshParams(); });
+  };
+  // Baked worlds: scrubbing a bake INPUT (tectonics, warp, erosion config) makes
+  // the atlas stale — drop to the live analytic terrain for the drag (instant
+  // preview of the same master the bake will erode), then re-bake ONCE on
+  // release so the eroded surface snaps back in. Never re-bake per tick.
+  let bakePreview = false;
+  const bakeStaleSet = (): void => {
+    if (baked[selected] && !bakePreview) { bakePreview = true; globes.get(selected)?.setBaked(false, bakeParams); }
+  };
+  const bakeStaleCommit = (): void => {
+    if (baked[selected]) { bakePreview = false; applyBake(); }
+  };
+
   // ── Control schema (dynamic: editable fields differ surface vs giant) ──
   // Index the preset object (cast once) so the get/set close over a plain field.
   const P = (): Record<string, number | boolean | number[]> =>
@@ -108,30 +131,37 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
   const slider = (label: string, key: keyof Preset, min: number, max: number, step: number): LabCtrl => ({
     label, min, max, step,
     get: () => P()[key] as number,
-    set: (v) => { P()[key] = v; },
+    // `warp` feeds the bake (bakeCube warps the macro lookup) — stale-atlas path.
+    set: (v) => { P()[key] = v; if (key === 'warp') bakeStaleSet(); liveRefresh(); },
+    commit: key === 'warp' ? bakeStaleCommit : undefined,
   });
   const toggle = (label: string, key: keyof Preset): LabCtrl => ({
     kind: 'toggle', label,
     get: () => P()[key] as boolean,
-    set: (v) => { P()[key] = v; },
+    // hasAtmosphere is STRUCTURAL (creates/removes the shell mesh) — remount.
+    set: (v) => { P()[key] = v; if (key === 'hasAtmosphere') mountSelected(); else liveRefresh(); },
   });
   const color = (label: string, key: keyof Preset): LabCtrl => ({
     kind: 'color', label,
     get: () => P()[key] as [number, number, number],
-    set: (v) => { P()[key] = v; },
+    set: (v) => { P()[key] = v; liveRefresh(); },
   });
   // Tectonics (Orogen-style macro): edits the live MACRO table for the archetype.
+  // All bake inputs (generatePlates reads MACRO) → stale-atlas path when baked.
   const M = (): MacroParams => MACRO[selected];
   const macroSlider = (label: string, key: keyof MacroParams, min: number, max: number, step: number): LabCtrl => ({
     label, min, max, step,
     get: () => M()[key],
-    set: (v) => { M()[key] = v; },
+    set: (v) => { M()[key] = v; bakeStaleSet(); liveRefresh(); },
+    commit: bakeStaleCommit,
   });
-  // Bake-param sliders edit the shared erosion config (applied on Re-bake / Rebuild).
+  // Bake-param sliders edit the shared erosion config — no live preview possible
+  // (the config only exists inside the bake); re-bake once on release.
   const bakeSlider = (label: string, key: keyof BakeParams, min: number, max: number, step: number): LabCtrl => ({
     label, min, max, step,
     get: () => bakeParams[key],
     set: (v) => { bakeParams[key] = v; },
+    commit: () => { if (baked[selected]) applyBake(); },
   });
 
   const sections = (): LabSection[] => {
@@ -149,7 +179,7 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
           icon: EXEMPLARS[t].isGasGiant ? '🪐' : '🌍',
         })),
         get: () => selected,
-        set: (v) => { selected = v as PlanetVisualType; mountSelected(); handle.panel.refresh(); },
+        set: (v) => { selected = v as PlanetVisualType; bakePreview = false; mountSelected(); handle.panel.refresh(); },
       }],
     };
     if (giant) {
