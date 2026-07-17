@@ -334,8 +334,16 @@ float craterField(vec3 dir){
     vec3 cell = ip + vec3(float(x), float(y), float(z));
     if (hash13(cell + 3.7) > uCraters) continue;            // sparsity ← coverage
     vec3 j = hash33(cell + 1.9);
-    vec3 c = normalize(cell + (j - 0.5) * 1.6);              // jittered centre on the shell
-    float sizeF = mix(0.35, 1.9, j.x);                       // crater size factor (~1)
+    // WINDOW INVARIANT (load-bearing): the loop above scans only the 3x3x3
+    // neighbourhood, so every crater's FULL reach must fit inside it — centres
+    // stay INSIDE their own cell (jitter < 0.5) and max influence stays under
+    // one cell width: 1.7 * sizeF_max = 1.7 * 0.58 < 1.0. The old constants
+    // (jitter 0.8 outside the cell, sizeF up to 1.9 → reach ~3.2 cells) let big
+    // craters get CHOPPED along straight cell planes wherever the window ended
+    // — blocky rectangular separations, worst at low density / in bathymetry
+    // (field report, 2026-07-16).
+    vec3 c = normalize(cell + (j - 0.5) * 0.98);             // jittered centre, in-cell
+    float sizeF = mix(0.25, 0.58, j.x);                      // size factor (see invariant)
     float rad = sizeF / uCraterFreq;                        // varied angular radius
     float t = acos(clamp(dot(dir, c), -1.0, 1.0)) / rad;    // 0 centre → 1 rim
     if (t > 1.7) continue;
@@ -343,9 +351,10 @@ float craterField(vec3 dir){
     // rim, then ejecta fades out — reads as a crisp impact, not a soft dimple.
     float floor = -(1.0 - smoothstep(0.55, 1.0, t));        // flat floor → 0 at rim
     float rim   = exp(-pow((t - 1.0) * 4.5, 2.0));          // sharp rim ring at t=1
-    // depth scales with the crater's SIZE FACTOR (~1), not the tiny angular radius
+    // depth scales with the crater's SIZE FACTOR, not the tiny angular radius
     // (radians) — scaling by rad shrank craters ~10x below the terrain relief.
-    h += (0.95 * floor + 0.6 * rim) * sizeF * smoothstep(1.7, 1.02, t);
+    // The 2.4 renormalises the smaller sizeF range back to the old depth scale.
+    h += (0.95 * floor + 0.6 * rim) * (sizeF * 2.4) * smoothstep(1.7, 1.02, t);
   }
   return h * uCraterDepth;
 }
