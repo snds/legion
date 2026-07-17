@@ -15,43 +15,23 @@
 import type { PlanetVisualType } from '../../data/system-gen';
 import { CUBE_FACES, facePoint, cubeToSphere, type Vec3 } from './cube-sphere';
 import { generatePlates, macroHeight, type PlateField } from './plates';
-import { warpDir } from './simplex';
+import { warpDir, fbm3 } from './simplex';
 import { seedFrom, mulberry32 } from './rng';
-
-// ── CPU value-noise fBm (detail on top of the macro master) ──
-// Deterministic hash noise; needn't match the GLSL simplex — it only has to read
-// as organic fine relief. Trilinear-smoothstep interpolated 3D value noise.
-function hash3(x: number, y: number, z: number): number {
-  let h = (x * 374761393 + y * 668265263 + z * 1274126177) | 0;
-  h = (h ^ (h >>> 13)) * 1274126177;
-  h = h ^ (h >>> 16);
-  return (h >>> 0) / 4294967295;
-}
-function vnoise(x: number, y: number, z: number): number {
-  const xi = Math.floor(x), yi = Math.floor(y), zi = Math.floor(z);
-  const xf = x - xi, yf = y - yi, zf = z - zi;
-  const u = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf), w = zf * zf * (3 - 2 * zf);
-  const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
-  const c = (dx: number, dy: number, dz: number): number => hash3(xi + dx, yi + dy, zi + dz);
-  return lerp(
-    lerp(lerp(c(0, 0, 0), c(1, 0, 0), u), lerp(c(0, 1, 0), c(1, 1, 0), u), v),
-    lerp(lerp(c(0, 0, 1), c(1, 0, 1), u), lerp(c(0, 1, 1), c(1, 1, 1), u), v),
-    w,
-  );
-}
-function fbmC(x: number, y: number, z: number, octaves: number): number {
-  let f = 0, amp = 0.5, freq = 1;
-  for (let i = 0; i < octaves; i++) { f += amp * vnoise(x * freq, y * freq, z * freq); freq *= 2; amp *= 0.5; }
-  return f; // ~[0,1]
-}
 
 /** Full analytic master height at a unit direction (macro tectonics + detail). */
 export function sampleMaster(field: PlateField, dir: Vec3, detailScale: number, detailAmp: number, warp = 0, seed: Vec3 = [0, 0, 0]): number {
   // Warp the MACRO lookup with the SAME isotropic simplex the live shader uses
-  // (baked/unbaked parity). Detail below stays on the raw dir — it's shader-only
-  // fine relief and needn't match (erosion reworks it anyway).
+  // (baked/unbaked parity).
   const h = macroHeight(field, warpDir(dir, warp, seed));
-  const d = fbmC(dir[0] * 1.7 * detailScale + 11.3, dir[1] * 1.7 * detailScale + 47.7, dir[2] * 1.7 * detailScale + 83.1, 5);
+  // Detail noise must be the SAME isotropic simplex family as the live shader.
+  // This was 3D VALUE noise ("needn't match — only has to read as organic"):
+  // wrong — value noise's integer lattice painted axis-aligned blocky patches
+  // into the baked master, worst over ocean where bathymetry turns millimetre
+  // height steps into hard colour separations (ledger P-05: value noise is
+  // anisotropic wherever its own structure is visible). Simplex fbm3 is the
+  // CPU port already trusted for the warp parity.
+  const sx = dir[0] * 1.7 * detailScale, sy = dir[1] * 1.7 * detailScale, sz = dir[2] * 1.7 * detailScale;
+  const d = fbm3(sx + 11.3, sy + 47.7, sz + 83.1) * 0.5 + 0.5;
   return Math.min(1, Math.max(0, h + (d - 0.5) * detailAmp));
 }
 
@@ -204,14 +184,35 @@ export function thermalErode(g: Float32Array, res: number, p: BakeParams): void 
   }
 }
 
+/** Feather erosion in from every face edge. EDGE_MARGIN keeps the outer texels
+ *  at the analytic master (continuous across cube faces), but a hard margin
+ *  leaves a STEP where untouched edge meets heavily-eroded interior — visible
+ *  as straight seam lines parallel to the cube edges, meeting in a "V" at the
+ *  corners (field report, 2026-07-16). Ramping the erosion delta over a band
+ *  makes the per-face erosion meet the seamless master smoothly instead. */
+function featherEdges(g: Float32Array, pre: Float32Array, res: number): void {
+  const B = Math.max(6, Math.round(res / 32)); // feather band (texels)
+  for (let y = 0; y < res; y++) {
+    for (let x = 0; x < res; x++) {
+      const dEdge = Math.min(x, y, res - 1 - x, res - 1 - y);
+      if (dEdge >= B) continue;
+      const t = dEdge / B, w = t * t * (3 - 2 * t); // smoothstep 0 at edge → 1 inland
+      const i = y * res + x;
+      g[i] = pre[i] + (g[i] - pre[i]) * w;
+    }
+  }
+}
+
 /** Full bake: sample the master, then erode each face (thermal then hydraulic). */
 export function bakeCube(seed: number, type: PlanetVisualType, params: Partial<BakeParams> = {}, warp = 0, noiseSeed: Vec3 = [0, 0, 0]): BakedCube {
   const p: BakeParams = { ...DEFAULT_BAKE, ...params };
   const field = generatePlates(seed, type);
   const faces = bakeFaces(field, p, warp, noiseSeed);
   faces.forEach((g, f) => {
+    const pre = g.slice(); // pre-erosion master (seamless) for the edge feather
     thermalErode(g, p.res, p);
     hydraulicErode(g, p.res, (seedFrom('erode') ^ (seed >>> 0) ^ (f * 2654435761)) >>> 0, p);
+    featherEdges(g, pre, p.res);
   });
   return { res: p.res, faces };
 }
