@@ -179,7 +179,10 @@ void main(){
     // ABYSS darkening so trenches (underwater craters/canyons — the Mariana
     // effect) read as distinctly deeper, diffused water.
     albedo = mix(uOceanShallow, uOceanDeep, smoothstep(0.0, 0.35, depth));
-    albedo *= mix(1.0, 0.4, smoothstep(0.35, 1.0, depth));
+    // Abyss darkening, floored well above black: deep ocean from orbit is a dark
+    // navy, not a void. A 0.4 floor on an already-dark deep colour crushed the
+    // basins to near-black and made every coastline read as a hard cut.
+    albedo *= mix(1.0, 0.62, smoothstep(0.35, 1.0, depth));
     // Fresnel + sun glint (Lague-style water, done on-surface).
     float fres = pow(1.0 - max(dot(N, V), 0.0), 5.0);
     vec3 H = normalize(uSunDir + V);
