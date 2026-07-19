@@ -103,7 +103,7 @@ uniform vec3  uOceanDeep;
 // (uMoisture + the climate modifiers are declared in GLSL_TERRAIN — the field is
 //  shared, so ground cover and anything else keying off climate stay in step.)
 uniform float uRoughness;
-uniform float uLushDepth;     // how saturated/deep the wet-region greenery goes
+uniform float uLushDepth;     // how strongly the biome palette replaces bare ground
 uniform vec3  uEmissive;
 uniform float uEmissiveStrength;
 uniform float uNightLights;
@@ -189,15 +189,18 @@ void main(){
     float hh = uSeaLevel > 0.0 ? (vHeight - uSeaLevel) / max(1.0 - uSeaLevel, 1e-3) : vHeight;
     hh = clamp(hh, 0.0, 1.0);
     albedo = sampleRamp(hh);
-    // ── Climate-driven biome cover: the moisture FIELD (circulation belts, rain
-    // shadow behind upwind ranges, continentality, altitude, patchiness) picks
-    // how green this point is. uLushDepth sets how far the wet end pushes —
-    // deep jungle vs light scrub — so "greener where wet" is tunable separately
-    // from "where is it wet".
-    float moist = climateMoisture(dir, warpedDir(dir), hh);
-    vec3 lush = albedo * mix(vec3(1.0), vec3(0.42, 0.86, 0.38), uLushDepth)
-              + vec3(0.015, 0.06, 0.015) * uLushDepth;
-    albedo = mix(albedo, lush, moist * (1.0 - smoothstep(0.72, 0.95, hh)));
+    // ── Whittaker biomes: the climate MOISTURE field crossed with TEMPERATURE
+    // (latitude + altitude lapse) picks the actual biome — taiga, temperate
+    // forest, rainforest, savanna, steppe, tundra, desert — instead of tinting
+    // one green over everything. Vegetation thins out past the treeline (a
+    // temperature threshold, so it tracks mountains AND latitude) and the bare
+    // altitude ramp shows through above it.
+    vec3 wdirC = warpedDir(dir);
+    float moist = climateMoisture(dir, wdirC, hh);
+    float temp = climateTemp(dir, hh);
+    float cover = smoothstep(uTreeline - 0.06, uTreeline + 0.10, temp)  // treeline / alpine
+                * (0.35 + 0.65 * smoothstep(0.05, 0.35, moist));        // bare rock where truly arid
+    albedo = mix(albedo, biomeColor(temp, moist), cover * uLushDepth);
     // ── Polar ice colour keys off the SAME cap-mass field the height uses
     // (iceCap in GLSL_TERRAIN) — a raised white shelf with a jagged margin —
     // plus a light frost on the highest peaks.

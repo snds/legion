@@ -20,6 +20,10 @@ import { visualRadius } from './index';
 import { PRESETS, PLANET_TYPES, type Preset } from './presets';
 import { MACRO, type MacroParams } from './plates';
 import { DEFAULT_BAKE, type BakeParams } from './bake';
+import {
+  OCEAN_VARIANTS, variantById, DEFAULT_SYSTEMIC,
+  masterValues, applyOffsets, type SystemicState,
+} from './variants';
 import { mountControlPanel, type ControlPanelHandle, type LabCtrl, type LabSection } from '../../ui/control-panel';
 
 const FIXED_SUN_DIR = new Vector3(0.6, 0.35, 0.72).normalize(); // even, flattering light
@@ -50,6 +54,20 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
   const globes = new Map<PlanetVisualType, PlanetGlobe>();
 
   let selected: PlanetVisualType = 'ocean';
+  let variant = 'terran'; // habitable-world climate state (ocean archetype)
+  const systemic: SystemicState = { ...DEFAULT_SYSTEMIC };
+  // Offset model (see variants.ts): these hold what the dials LAST computed for
+  // every owned parameter. A hand edit shows up as (live - baseline), and that
+  // delta is re-applied on top of the next baseline — so moving a master never
+  // discards manual work. Re-seeded on archetype switch / climate-state apply,
+  // both of which are absolute writes that should start from zero offsets.
+  let baseP: Record<string, number> = {};
+  let baseM: Record<string, number> = {};
+  const seedBaseline = (): void => {
+    const v = masterValues(systemic);
+    baseP = v.preset; baseM = v.macro;
+  };
+  seedBaseline();
 
   // Bake (Phase 3): per-type on/off + shared erosion params. Baking is heavy, so
   // it runs only on toggle-on and the Rebuild action — never on a slider tick.
@@ -179,7 +197,39 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
           icon: EXEMPLARS[t].isGasGiant ? '🪐' : '🌍',
         })),
         get: () => selected,
-        set: (v) => { selected = v as PlanetVisualType; bakePreview = false; mountSelected(); handle.panel.refresh(); },
+        set: (v) => {
+          selected = v as PlanetVisualType; bakePreview = false;
+          seedBaseline();   // new archetype = new absolute values, zero offsets
+          mountSelected(); handle.panel.refresh();
+        },
+      }],
+    };
+    // Habitable-world climate states (ocean archetype). Each variant is a real
+    // documented climate — see variants.ts for the science each one encodes.
+    // Applying one overwrites the archetype's climate/tectonic params in place,
+    // so it is a STARTING POINT to tune from, not a locked mode.
+    const variantSel: LabSection = {
+      title: 'Climate state', key: 'lab-variant',
+      ctrls: [{
+        kind: 'picker',
+        options: OCEAN_VARIANTS.map((v) => ({ value: v.id, label: v.label, icon: '🌍' })),
+        get: () => variant,
+        set: (v) => {
+          variant = String(v);
+          const def = variantById(variant);
+          if (def) {
+            Object.assign(PRESETS.ocean, def.preset);
+            Object.assign(MACRO.ocean, def.macro);
+            seedBaseline(); // a climate state is an absolute write: offsets reset
+            bakeStaleSet();
+            globes.get(selected)?.refreshParams();
+            bakeStaleCommit();
+          }
+          handle.panel.refresh();
+        },
+      }, {
+        kind: 'info', label: 'Basis',
+        get: () => variantById(variant)?.blurb ?? '—',
       }],
     };
     if (giant) {
@@ -199,7 +249,37 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
         ],
       }];
     }
-    return [typeSel, {
+    // ── Systemic dials: each drives a physically-coupled BUNDLE of the detail
+    // params below, so a coherent world can be FOUND by sweeping four sliders
+    // instead of nudging six in step. They overwrite what they own and refresh
+    // the panel, so the detail sliders stay the finishing tool (see variants.ts).
+    const P2 = (): Record<string, number> => P() as unknown as Record<string, number>;
+    const M2 = (): Record<string, number> => M() as unknown as Record<string, number>;
+    const world = (label: string, key: keyof SystemicState): LabCtrl => ({
+      label, min: 0, max: 1, step: 0.01,
+      get: () => systemic[key],
+      set: (v) => {
+        systemic[key] = v;
+        // Offset model: re-apply every owned param as newBaseline + hand-delta.
+        const next = masterValues(systemic);
+        applyOffsets(P2(), next.preset, baseP);
+        applyOffsets(M2(), next.macro, baseM);
+        baseP = next.preset; baseM = next.macro;
+        bakeStaleSet();
+        liveRefresh();
+      },
+      commit: () => { bakeStaleCommit(); handle.panel.refresh(); },
+    });
+    const worldSel: LabSection = {
+      title: 'World', key: 'lab-world', ctrls: [
+        world('Warmth', 'warmth'),
+        world('Hydrosphere', 'hydrosphere'),
+        world('Tectonic vigour', 'tectonics'),
+        world('Biosphere', 'biosphere'),
+      ],
+    };
+    // Climate states are authored for the ocean archetype (habitable worlds).
+    return [typeSel, ...(selected === 'ocean' ? [variantSel] : []), worldSel, {
       title: 'Tectonics', key: 'lab-tectonics', ctrls: [
         macroSlider('Plates', 'plateCount', 3, 48, 1),
         macroSlider('Continents', 'continents', 1, 8, 1),
@@ -229,6 +309,9 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
         slider('Base humidity', 'moisture', 0, 1.5, 0.01),
         slider('Arid belts', 'aridBelts', 0, 1.5, 0.01),
         slider('Rain shadow', 'rainShadow', 0, 1.5, 0.01),
+        slider('Windward wetting', 'orographic', 0, 1.5, 0.01),
+        slider('Lapse rate', 'lapseRate', 0, 2, 0.01),
+        slider('Treeline', 'treeline', 0, 0.6, 0.005),
         slider('Wind bearing', 'windBearing', -1.57, 1.57, 0.01),
         slider('Continentality', 'continental', 0, 1.5, 0.01),
         slider('Altitude drying', 'altitudeDry', 0, 1.5, 0.01),
