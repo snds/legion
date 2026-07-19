@@ -22,7 +22,7 @@ import { MACRO, type MacroParams } from './plates';
 import { DEFAULT_BAKE, type BakeParams } from './bake';
 import {
   OCEAN_VARIANTS, variantById, DEFAULT_SYSTEMIC,
-  applyWarmth, applyHydrosphere, applyTectonics, applyBiosphere, type SystemicState,
+  masterValues, applyOffsets, type SystemicState,
 } from './variants';
 import { mountControlPanel, type ControlPanelHandle, type LabCtrl, type LabSection } from '../../ui/control-panel';
 
@@ -56,6 +56,18 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
   let selected: PlanetVisualType = 'ocean';
   let variant = 'terran'; // habitable-world climate state (ocean archetype)
   const systemic: SystemicState = { ...DEFAULT_SYSTEMIC };
+  // Offset model (see variants.ts): these hold what the dials LAST computed for
+  // every owned parameter. A hand edit shows up as (live - baseline), and that
+  // delta is re-applied on top of the next baseline — so moving a master never
+  // discards manual work. Re-seeded on archetype switch / climate-state apply,
+  // both of which are absolute writes that should start from zero offsets.
+  let baseP: Record<string, number> = {};
+  let baseM: Record<string, number> = {};
+  const seedBaseline = (): void => {
+    const v = masterValues(systemic);
+    baseP = v.preset; baseM = v.macro;
+  };
+  seedBaseline();
 
   // Bake (Phase 3): per-type on/off + shared erosion params. Baking is heavy, so
   // it runs only on toggle-on and the Rebuild action — never on a slider tick.
@@ -185,7 +197,11 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
           icon: EXEMPLARS[t].isGasGiant ? '🪐' : '🌍',
         })),
         get: () => selected,
-        set: (v) => { selected = v as PlanetVisualType; bakePreview = false; mountSelected(); handle.panel.refresh(); },
+        set: (v) => {
+          selected = v as PlanetVisualType; bakePreview = false;
+          seedBaseline();   // new archetype = new absolute values, zero offsets
+          mountSelected(); handle.panel.refresh();
+        },
       }],
     };
     // Habitable-world climate states (ocean archetype). Each variant is a real
@@ -204,6 +220,7 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
           if (def) {
             Object.assign(PRESETS.ocean, def.preset);
             Object.assign(MACRO.ocean, def.macro);
+            seedBaseline(); // a climate state is an absolute write: offsets reset
             bakeStaleSet();
             globes.get(selected)?.refreshParams();
             bakeStaleCommit();
@@ -236,25 +253,29 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
     // params below, so a coherent world can be FOUND by sweeping four sliders
     // instead of nudging six in step. They overwrite what they own and refresh
     // the panel, so the detail sliders stay the finishing tool (see variants.ts).
-    const world = (label: string, key: keyof SystemicState, apply: () => void): LabCtrl => ({
+    const P2 = (): Record<string, number> => P() as unknown as Record<string, number>;
+    const M2 = (): Record<string, number> => M() as unknown as Record<string, number>;
+    const world = (label: string, key: keyof SystemicState): LabCtrl => ({
       label, min: 0, max: 1, step: 0.01,
       get: () => systemic[key],
       set: (v) => {
         systemic[key] = v;
-        apply();
+        // Offset model: re-apply every owned param as newBaseline + hand-delta.
+        const next = masterValues(systemic);
+        applyOffsets(P2(), next.preset, baseP);
+        applyOffsets(M2(), next.macro, baseM);
+        baseP = next.preset; baseM = next.macro;
         bakeStaleSet();
         liveRefresh();
       },
       commit: () => { bakeStaleCommit(); handle.panel.refresh(); },
     });
-    const P2 = () => P() as unknown as Record<string, number>;
-    const M2 = () => M() as unknown as Record<string, number>;
     const worldSel: LabSection = {
       title: 'World', key: 'lab-world', ctrls: [
-        world('Warmth', 'warmth', () => applyWarmth(systemic.warmth, P2())),
-        world('Hydrosphere', 'hydrosphere', () => applyHydrosphere(systemic.hydrosphere, P2(), M2())),
-        world('Tectonic vigour', 'tectonics', () => applyTectonics(systemic.tectonics, P2(), M2())),
-        world('Biosphere', 'biosphere', () => applyBiosphere(systemic.biosphere, P2())),
+        world('Warmth', 'warmth'),
+        world('Hydrosphere', 'hydrosphere'),
+        world('Tectonic vigour', 'tectonics'),
+        world('Biosphere', 'biosphere'),
       ],
     };
     // Climate states are authored for the ocean archetype (habitable worlds).

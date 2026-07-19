@@ -141,12 +141,16 @@ export function variantById(id: string): PlanetVariant | undefined {
 // These four dials each drive one physically-coupled BUNDLE. They are the
 // continuous version of the climate states above: same idea, but sweepable.
 //
-// Semantics (deliberate, and the reason this is safe to revert): a master dial
-// OVERWRITES the detail params it owns, then the panel refreshes so the new
-// detail values are visible and can still be hand-tuned afterwards. Masters are
-// therefore a STARTING POINT, never a lock — identical to how the climate
-// states behave. The parameters each dial owns are listed per function; nothing
-// else is touched, so anything not owned by a master stays hand-authored.
+// Semantics: masters apply as an OFFSET, not an overwrite. The lab keeps the
+// master-computed BASELINE for every owned parameter; a hand edit is stored
+// implicitly as that parameter's delta from its baseline, and moving a dial
+// re-applies the same delta on top of the new baseline. So "I hand-raised the
+// treeline, then swept Warmth" keeps the raised treeline and still gets the
+// warmth change — manual work is never silently discarded.
+//
+// Baselines re-seed when the archetype changes or a climate state is applied
+// (both are absolute writes), so those act as a new starting point with zero
+// offsets. Anything no master owns stays purely hand-authored.
 
 export interface SystemicState {
   warmth: number;      // 0 = deep glacial, 0.5 = temperate, 1 = ice-free hothouse
@@ -207,4 +211,54 @@ export function applyBiosphere(t: number, p: Record<string, number>): void {
   p.orographic  = via(0.2, 0.55, 0.85, t);
   p.patchiness  = via(0.6, 0.45, 0.35, t);  // barren worlds look blotchier
   p.altitudeDry = via(0.8, 0.6, 0.42, t);
+}
+
+/** Every owned parameter at a given dial setting, computed WITHOUT touching the
+ *  live world — this is the baseline the offset model measures hand edits from. */
+export function masterValues(s: SystemicState): {
+  preset: Record<string, number>;
+  macro: Record<string, number>;
+} {
+  const preset: Record<string, number> = {};
+  const macro: Record<string, number> = {};
+  applyWarmth(s.warmth, preset);
+  applyHydrosphere(s.hydrosphere, preset, macro);
+  applyTectonics(s.tectonics, preset, macro);
+  applyBiosphere(s.biosphere, preset);
+  return { preset, macro };
+}
+
+/** Valid range per owned parameter — an offset must not push a param out of the
+ *  band its slider (and the shader) expect. `int` keys round. */
+const LIMITS: Record<string, { min: number; max: number; int?: boolean }> = {
+  latitudeIce: { min: 0, max: 1 }, treeline: { min: 0, max: 0.6 },
+  moisture: { min: 0, max: 1.5 }, aridBelts: { min: 0, max: 1.5 },
+  lapseRate: { min: 0, max: 2 }, cloudCover: { min: 0, max: 1 },
+  seaLevel: { min: 0, max: 1 }, landCoverage: { min: 0.02, max: 0.98 },
+  continental: { min: 0, max: 1.5 }, rainShadow: { min: 0, max: 1.5 },
+  uplift: { min: 0, max: 0.6 }, plateCount: { min: 3, max: 48, int: true },
+  ridged: { min: 0, max: 1 }, rangeVar: { min: 0, max: 1 },
+  canyons: { min: 0, max: 1 }, craters: { min: 0, max: 1 },
+  lushDepth: { min: 0, max: 1.5 }, orographic: { min: 0, max: 1.5 },
+  patchiness: { min: 0, max: 1.5 }, altitudeDry: { min: 0, max: 1.5 },
+};
+
+/** Re-apply each owned parameter as `newBaseline + (current - oldBaseline)`, so
+ *  hand edits ride along as offsets instead of being overwritten. Mutates
+ *  `live` and returns nothing; the caller swaps in the new baseline. */
+export function applyOffsets(
+  live: Record<string, number>,
+  next: Record<string, number>,
+  base: Record<string, number>,
+): void {
+  for (const k of Object.keys(next)) {
+    const delta = (live[k] ?? next[k]) - (base[k] ?? next[k]);
+    const lim = LIMITS[k];
+    let v = next[k] + delta;
+    if (lim) {
+      v = Math.min(lim.max, Math.max(lim.min, v));
+      if (lim.int) v = Math.round(v);
+    }
+    live[k] = v;
+  }
 }
