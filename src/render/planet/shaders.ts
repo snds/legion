@@ -140,7 +140,10 @@ void main(){
     float hu = atlasHeight(uHeightAtlas, vFace, vFaceUV + vec2(e, 0.0), uHeightRes);
     float hv = atlasHeight(uHeightAtlas, vFace, vFaceUV + vec2(0.0, e), uHeightRes);
     vec3 grad = ((hu - b0) / e) * normalize(vFU) + ((hv - b0) / e) * normalize(vFV);
-    grad *= (1.0 - iceCap(dir)); // shelf plateau flattens the eroded relief
+    // The shelf plateau flattens the eroded relief, but NOT to nothing: an ice
+    // sheet drapes over the ground it buries, so ridges and valleys still show
+    // optically through the surface. Keep ~30% of the gradient under the cap.
+    grad *= mix(1.0, 0.30, iceCap(dir));
     vec3 up = abs(dir.y) < 0.99 ? vec3(0.0,1.0,0.0) : vec3(1.0,0.0,0.0);
     vec3 t = normalize(cross(up, dir));
     vec3 b = cross(dir, t);
@@ -172,17 +175,27 @@ void main(){
   float day = smoothstep(-uTerminator, uTerminator, ndl);
 
   vec3 albedo;
+  // Hoisted: the biome branch fills these, and the night-lights pass below needs
+  // them to decide where people would actually settle (rain + temperate land).
+  float moist = 0.0;
+  float temp = 0.0;
   float spec = 0.0;
   if (ocean){
     float depth = clamp((uSeaLevel - vHeight) / max(uSeaLevel, 1e-3), 0.0, 1.0);
     // Terrain-informed bathymetry: shallow→deep quickly near the shore, then an
     // ABYSS darkening so trenches (underwater craters/canyons — the Mariana
     // effect) read as distinctly deeper, diffused water.
-    albedo = mix(uOceanShallow, uOceanDeep, smoothstep(0.0, 0.35, depth));
+    // Depth ramp. The bright turquoise band is a NARROW fringe on Earth — the
+    // shelf break falls away fast, so only the last few tens of metres before
+    // the beach read as pale. Ramping shallow->deep over 35% of the depth range
+    // painted a wide cyan halo around every landmass; 0.10 keeps it a fringe.
+    albedo = mix(uOceanShallow, uOceanDeep, smoothstep(0.0, 0.10, depth));
+    // Open water then keeps deepening gently toward the abyssal plain.
+    albedo = mix(albedo, uOceanDeep * 0.72, smoothstep(0.10, 0.55, depth));
     // Abyss darkening, floored well above black: deep ocean from orbit is a dark
     // navy, not a void. A 0.4 floor on an already-dark deep colour crushed the
     // basins to near-black and made every coastline read as a hard cut.
-    albedo *= mix(1.0, 0.62, smoothstep(0.35, 1.0, depth));
+    albedo *= mix(1.0, 0.72, smoothstep(0.45, 1.0, depth));
     // Fresnel + sun glint (Lague-style water, done on-surface).
     float fres = pow(1.0 - max(dot(N, V), 0.0), 5.0);
     vec3 H = normalize(uSunDir + V);
@@ -199,16 +212,36 @@ void main(){
     // temperature threshold, so it tracks mountains AND latitude) and the bare
     // altitude ramp shows through above it.
     vec3 wdirC = warpedDir(dir);
-    float moist = climateMoisture(dir, wdirC, hh);
-    float temp = climateTemp(dir, hh);
+    moist = climateMoisture(dir, wdirC, hh);
+    temp = climateTemp(dir, hh);
     float cover = smoothstep(uTreeline - 0.06, uTreeline + 0.10, temp)  // treeline / alpine
                 * (0.35 + 0.65 * smoothstep(0.05, 0.35, moist));        // bare rock where truly arid
     albedo = mix(albedo, biomeColor(temp, moist), cover * uLushDepth);
-    // ── Polar ice colour keys off the SAME cap-mass field the height uses
-    // (iceCap in GLSL_TERRAIN) — a raised white shelf with a jagged margin —
-    // plus a light frost on the highest peaks.
+    // ── Polar ice keys off the SAME cap-mass field the height uses (iceCap in
+    // GLSL_TERRAIN), plus frost on the highest peaks. Two refinements:
+    //
+    // 1. SEA ICE vs LAND GLACIER. Frozen ocean is thin, wet and salty — it
+    //    reads PALER and distinctly BLUER than kilometres of compressed
+    //    continental ice, which scatters warmer and brighter. Which one we are
+    //    standing on is decided by the MACRO basin (pre-cap), since the cap
+    //    itself raises the surface above sea level.
+    // 2. The ice is not opaque paint: a fraction of the ground below still
+    //    modulates it, so ridges and valleys read THROUGH the sheet rather than
+    //    vanishing under flat white.
+    float cap = iceCap(dir);
     float frost = 0.6 * smoothstep(0.85, 0.97, hh);
-    albedo = mix(albedo, vec3(0.93, 0.96, 1.0), max(iceCap(dir), frost));
+    float iceAmt = max(cap, frost);
+    if (iceAmt > 0.001){
+      float basin = plateMacro(wdirC);                       // pre-cap ground
+      float sea = 1.0 - smoothstep(uSeaLevel - 0.03, uSeaLevel + 0.03, basin);
+      vec3 seaIce  = vec3(0.82, 0.89, 0.99);                 // paler, bluer
+      vec3 landIce = vec3(0.95, 0.955, 0.95);                // thick, brighter
+      vec3 iceCol = mix(landIce, seaIce, sea);
+      // Terrain reads through: darken slightly in hollows, brighten on rises.
+      float relief = clamp((vHeight - uSeaLevel) * 1.6, -0.5, 0.5);
+      iceCol *= 1.0 + 0.16 * relief * (1.0 - sea);           // land ice only
+      albedo = mix(albedo, iceCol, iceAmt);
+    }
   }
 
   // Cloud self-shadowing: sample the SAME cloud field where the sun ray from this
@@ -233,13 +266,41 @@ void main(){
     lit += uEmissive * uEmissiveStrength * glow * (0.4 + 0.6 * (1.0 - day));
   }
 
-  // Night-side city lights where there's land (NdotL<0), a hashed mask.
-  if (uNightLights > 0.0){
+  // ── Night-side city lights: people do not settle at random. Weighted by where
+  // humans actually build — fresh water and river mouths, coastlines (trade),
+  // fertile land with reliable rain, temperate latitudes, and low flat ground.
+  // Then clustered: a low-frequency "where civilisation took hold" field carves
+  // out a few bright metro cores, a high-frequency field speckles the towns
+  // around them, and both fade off with the habitability score, so lit regions
+  // TRAIL OFF into darkness and follow coasts as tendrils instead of covering
+  // every landmass in even confetti.
+  if (uNightLights > 0.0 && uSeaLevel > 0.0){
     float night = 1.0 - day;
-    float land = step(uSeaLevel, vHeight);
-    float m = snoise(dir * 40.0);
-    float lights = smoothstep(0.72, 0.9, m) * land * night;
-    lit += vec3(1.0, 0.85, 0.5) * lights * uNightLights;
+    if (night > 0.01){
+      float land = smoothstep(uSeaLevel - 0.004, uSeaLevel + 0.004, vHeight);
+      float hh2 = clamp((vHeight - uSeaLevel) / max(1.0 - uSeaLevel, 1e-3), 0.0, 1.0);
+      // Coastal band: ports and river mouths. Strongest right at the waterline.
+      float coast   = 1.0 - smoothstep(0.0, 0.12, hh2);
+      float lowland = 1.0 - smoothstep(0.12, 0.45, hh2);   // plains, not peaks
+      // Farmland: needs rain, but nobody farms swamp or ice.
+      float fertile = smoothstep(0.22, 0.5, moist) * (1.0 - smoothstep(0.88, 1.05, moist));
+      float livable = smoothstep(0.10, 0.34, temp) * (1.0 - 0.35 * smoothstep(0.86, 1.0, temp));
+      float H = clamp((0.42 * coast + 0.26 * lowland + 0.54 * fertile) * livable, 0.0, 1.0);
+      H *= land * (1.0 - iceCap(dir));
+      // Metro cores + surrounding towns, both gated by habitability.
+      // Sharp falloff is what makes this read as CITIES rather than a glowing
+      // landmass: population density is strongly non-linear in habitability, so
+      // H is raised to a power and the noise thresholds are narrow. Only the
+      // best ground lights up brightly; the rest trails off into darkness.
+      float Hc = H * H;                                        // density ~ H^2
+      float region = fbm(dir * 5.5 + uNoiseSeed * 0.7) * 0.5 + 0.5;
+      float metro  = smoothstep(0.58, 0.86, region) * Hc;      // a few big cores
+      float towns  = smoothstep(0.70, 0.97, fbm(dir * 52.0 + uNoiseSeed) * 0.5 + 0.5) * H;
+      float lights = (metro * 1.15 + towns * 0.75) * night;
+      // Sodium-warm cores, cooler at the sparse edges (LED/mercury outskirts).
+      vec3 tint = mix(vec3(1.0, 0.78, 0.42), vec3(0.85, 0.88, 1.0), 0.35 * towns * (1.0 - metro));
+      lit += tint * lights * uNightLights;
+    }
   }
 
   gl_FragColor = vec4(lit, 1.0);

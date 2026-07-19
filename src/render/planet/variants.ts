@@ -57,15 +57,29 @@ export const OCEAN_VARIANTS: readonly PlanetVariant[] = [
   {
     id: 'terran',
     label: 'Terran',
-    blurb: 'Earth today — 29% land, Hadley deserts at 25-35°, taiga to the poles.',
+    blurb: 'Earth, measured — 29.2% land, 67% cloud, ice past 66°, taiga at 60°.',
+    // TUNED TO EARTH'S ACTUAL NUMBERS rather than to taste. The generator cannot
+    // reproduce Earth's specific continents (they are procedural), but every
+    // STATISTIC it can hit is set from the real value:
+    //   land fraction .......... 29.2% of the surface
+    //   major landmasses ....... 7 (Afro-Eurasia counts as the giant one)
+    //   size disparity ......... enormous (Eurasia ~54 Mkm2 vs Australia ~7.7),
+    //                            hence high sizeVariety
+    //   cloud cover ............ ~67% mean — but the deck closes to a white-out
+    //                            past ~0.6 here, so 0.58 is the honest ceiling
+    //   permanent ice .......... Antarctica + Greenland, edges near 66 deg
+    //   deserts ................ ~19% of land, in the two Hadley belts
+    //   forest ................. ~31% of land, peaking in equatorial and
+    //                            60 deg boreal bands
     preset: {
-      seaLevel: 0.55, latitudeIce: 0.5,
-      moisture: 1.0, aridBelts: 0.8, rainShadow: 0.65, orographic: 0.7,
-      lapseRate: 0.55, treeline: 0.09, windBearing: 0.25,
-      continental: 0.5, altitudeDry: 0.55, patchiness: 0.4, lushDepth: 1.0,
-      cloudCover: 0.55, cloudShadow: 0.6,
+      seaLevel: 0.55, latitudeIce: 0.45,
+      moisture: 1.0, aridBelts: 0.85, rainShadow: 0.7, orographic: 0.72,
+      lapseRate: 0.55, treeline: 0.085, windBearing: 0.24,
+      continental: 0.55, altitudeDry: 0.5, patchiness: 0.42, lushDepth: 1.0,
+      cloudCover: 0.58, cloudShadow: 0.6,
+      nightLights: 0.9,
     },
-    macro: { continents: 4, landCoverage: 0.30, sizeVariety: 0.35, uplift: 0.26 },
+    macro: { continents: 7, landCoverage: 0.292, sizeVariety: 0.7, uplift: 0.28 },
   },
   {
     id: 'glacial',
