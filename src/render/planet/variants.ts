@@ -130,3 +130,81 @@ export const OCEAN_VARIANTS: readonly PlanetVariant[] = [
 export function variantById(id: string): PlanetVariant | undefined {
   return OCEAN_VARIANTS.find((v) => v.id === id);
 }
+
+// ═══ SYSTEMIC CONTROLS ═══════════════════════════════════════════════
+// The detail sliders are the right level for FINISHING a world and the wrong
+// level for FINDING one: the parameters that make a coherent look move together
+// in reality (a colder world is also drier, icier, and has a lower waterline),
+// so hunting for "a look" meant nudging six sliders in step and getting
+// incoherent worlds in between.
+//
+// These four dials each drive one physically-coupled BUNDLE. They are the
+// continuous version of the climate states above: same idea, but sweepable.
+//
+// Semantics (deliberate, and the reason this is safe to revert): a master dial
+// OVERWRITES the detail params it owns, then the panel refreshes so the new
+// detail values are visible and can still be hand-tuned afterwards. Masters are
+// therefore a STARTING POINT, never a lock — identical to how the climate
+// states behave. The parameters each dial owns are listed per function; nothing
+// else is touched, so anything not owned by a master stays hand-authored.
+
+export interface SystemicState {
+  warmth: number;      // 0 = deep glacial, 0.5 = temperate, 1 = ice-free hothouse
+  hydrosphere: number; // 0 = arid/low sea level, 0.5 = Earth, 1 = ocean world
+  tectonics: number;   // 0 = dead/eroded, 0.5 = Earth, 1 = young/violent
+  biosphere: number;   // 0 = barren rock, 0.5 = sparse, 1 = fully verdant
+}
+
+export const DEFAULT_SYSTEMIC: SystemicState = {
+  warmth: 0.5, hydrosphere: 0.5, tectonics: 0.5, biosphere: 0.75,
+};
+
+const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
+/** Piecewise lerp through a mid anchor so 0.5 lands on the Earth-like value. */
+const via = (lo: number, mid: number, hi: number, t: number): number =>
+  t < 0.5 ? lerp(lo, mid, t * 2) : lerp(mid, hi, (t - 0.5) * 2);
+
+/** WARMTH owns: latitudeIce, treeline, moisture, aridBelts, lapseRate, cloudCover.
+ *  Colder is also DRIER (cold air holds less water) and has stronger latitudinal
+ *  contrast — the LGM lesson — so those move together, not independently. */
+export function applyWarmth(t: number, p: Record<string, number>): void {
+  p.latitudeIce = via(0.95, 0.5, 0.04, t);
+  p.treeline    = via(0.24, 0.09, 0.02, t);
+  p.moisture    = via(0.55, 1.0, 1.22, t);
+  p.aridBelts   = via(1.15, 0.8, 0.42, t);   // flatter gradient when warm
+  p.lapseRate   = via(0.78, 0.55, 0.42, t);
+  // Cloud cover is capped BELOW the white-out threshold (~0.6) on purpose: past
+  // it the deck closes and the surface stops reading at all (caught in review).
+  p.cloudCover  = via(0.40, 0.55, 0.58, t);
+}
+
+/** HYDROSPHERE owns: seaLevel, landCoverage, continental, rainShadow.
+ *  More water = higher waterline, less land, and a maritime climate everywhere
+ *  (the interior-drying term has nothing to bite on). */
+export function applyHydrosphere(t: number, p: Record<string, number>, m: Record<string, number>): void {
+  p.seaLevel    = via(0.40, 0.55, 0.70, t);
+  m.landCoverage = via(0.62, 0.30, 0.10, t);
+  p.continental = via(1.30, 0.50, 0.10, t);
+  p.rainShadow  = via(0.85, 0.65, 0.35, t);
+}
+
+/** TECTONICS owns: uplift, plateCount, ridged, rangeVar, canyons, craters.
+ *  A young violent world is high, ridged and rifted; a dead one is worn flat and
+ *  keeps its craters because nothing resurfaces them (Mars/Mercury logic). */
+export function applyTectonics(t: number, p: Record<string, number>, m: Record<string, number>): void {
+  m.uplift     = via(0.10, 0.26, 0.52, t);
+  m.plateCount = Math.round(via(8, 26, 44, t));
+  p.ridged     = via(0.18, 0.45, 0.85, t);
+  m.rangeVar   = via(0.30, 0.55, 0.80, t);
+  m.canyons    = via(0.05, 0.15, 0.55, t);
+  m.craters    = via(0.55, 0.15, 0.02, t);  // INVERSE: resurfacing erases craters
+}
+
+/** BIOSPHERE owns: lushDepth, orographic, patchiness, altitudeDry.
+ *  How far life has actually colonised the climate the other dials produced. */
+export function applyBiosphere(t: number, p: Record<string, number>): void {
+  p.lushDepth   = via(0.0, 0.7, 1.15, t);
+  p.orographic  = via(0.2, 0.55, 0.85, t);
+  p.patchiness  = via(0.6, 0.45, 0.35, t);  // barren worlds look blotchier
+  p.altitudeDry = via(0.8, 0.6, 0.42, t);
+}

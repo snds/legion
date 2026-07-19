@@ -20,7 +20,10 @@ import { visualRadius } from './index';
 import { PRESETS, PLANET_TYPES, type Preset } from './presets';
 import { MACRO, type MacroParams } from './plates';
 import { DEFAULT_BAKE, type BakeParams } from './bake';
-import { OCEAN_VARIANTS, variantById } from './variants';
+import {
+  OCEAN_VARIANTS, variantById, DEFAULT_SYSTEMIC,
+  applyWarmth, applyHydrosphere, applyTectonics, applyBiosphere, type SystemicState,
+} from './variants';
 import { mountControlPanel, type ControlPanelHandle, type LabCtrl, type LabSection } from '../../ui/control-panel';
 
 const FIXED_SUN_DIR = new Vector3(0.6, 0.35, 0.72).normalize(); // even, flattering light
@@ -52,6 +55,7 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
 
   let selected: PlanetVisualType = 'ocean';
   let variant = 'terran'; // habitable-world climate state (ocean archetype)
+  const systemic: SystemicState = { ...DEFAULT_SYSTEMIC };
 
   // Bake (Phase 3): per-type on/off + shared erosion params. Baking is heavy, so
   // it runs only on toggle-on and the Rebuild action — never on a slider tick.
@@ -228,8 +232,33 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
         ],
       }];
     }
+    // ── Systemic dials: each drives a physically-coupled BUNDLE of the detail
+    // params below, so a coherent world can be FOUND by sweeping four sliders
+    // instead of nudging six in step. They overwrite what they own and refresh
+    // the panel, so the detail sliders stay the finishing tool (see variants.ts).
+    const world = (label: string, key: keyof SystemicState, apply: () => void): LabCtrl => ({
+      label, min: 0, max: 1, step: 0.01,
+      get: () => systemic[key],
+      set: (v) => {
+        systemic[key] = v;
+        apply();
+        bakeStaleSet();
+        liveRefresh();
+      },
+      commit: () => { bakeStaleCommit(); handle.panel.refresh(); },
+    });
+    const P2 = () => P() as unknown as Record<string, number>;
+    const M2 = () => M() as unknown as Record<string, number>;
+    const worldSel: LabSection = {
+      title: 'World', key: 'lab-world', ctrls: [
+        world('Warmth', 'warmth', () => applyWarmth(systemic.warmth, P2())),
+        world('Hydrosphere', 'hydrosphere', () => applyHydrosphere(systemic.hydrosphere, P2(), M2())),
+        world('Tectonic vigour', 'tectonics', () => applyTectonics(systemic.tectonics, P2(), M2())),
+        world('Biosphere', 'biosphere', () => applyBiosphere(systemic.biosphere, P2())),
+      ],
+    };
     // Climate states are authored for the ocean archetype (habitable worlds).
-    return [typeSel, ...(selected === 'ocean' ? [variantSel] : []), {
+    return [typeSel, ...(selected === 'ocean' ? [variantSel] : []), worldSel, {
       title: 'Tectonics', key: 'lab-tectonics', ctrls: [
         macroSlider('Plates', 'plateCount', 3, 48, 1),
         macroSlider('Continents', 'continents', 1, 8, 1),
