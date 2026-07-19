@@ -20,6 +20,7 @@ import { visualRadius } from './index';
 import { PRESETS, PLANET_TYPES, type Preset } from './presets';
 import { MACRO, type MacroParams } from './plates';
 import { DEFAULT_BAKE, type BakeParams } from './bake';
+import { OCEAN_VARIANTS, variantById } from './variants';
 import { mountControlPanel, type ControlPanelHandle, type LabCtrl, type LabSection } from '../../ui/control-panel';
 
 const FIXED_SUN_DIR = new Vector3(0.6, 0.35, 0.72).normalize(); // even, flattering light
@@ -50,6 +51,7 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
   const globes = new Map<PlanetVisualType, PlanetGlobe>();
 
   let selected: PlanetVisualType = 'ocean';
+  let variant = 'terran'; // habitable-world climate state (ocean archetype)
 
   // Bake (Phase 3): per-type on/off + shared erosion params. Baking is heavy, so
   // it runs only on toggle-on and the Rebuild action — never on a slider tick.
@@ -182,6 +184,33 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
         set: (v) => { selected = v as PlanetVisualType; bakePreview = false; mountSelected(); handle.panel.refresh(); },
       }],
     };
+    // Habitable-world climate states (ocean archetype). Each variant is a real
+    // documented climate — see variants.ts for the science each one encodes.
+    // Applying one overwrites the archetype's climate/tectonic params in place,
+    // so it is a STARTING POINT to tune from, not a locked mode.
+    const variantSel: LabSection = {
+      title: 'Climate state', key: 'lab-variant',
+      ctrls: [{
+        kind: 'picker',
+        options: OCEAN_VARIANTS.map((v) => ({ value: v.id, label: v.label, icon: '🌍' })),
+        get: () => variant,
+        set: (v) => {
+          variant = String(v);
+          const def = variantById(variant);
+          if (def) {
+            Object.assign(PRESETS.ocean, def.preset);
+            Object.assign(MACRO.ocean, def.macro);
+            bakeStaleSet();
+            globes.get(selected)?.refreshParams();
+            bakeStaleCommit();
+          }
+          handle.panel.refresh();
+        },
+      }, {
+        kind: 'info', label: 'Basis',
+        get: () => variantById(variant)?.blurb ?? '—',
+      }],
+    };
     if (giant) {
       return [typeSel, {
         title: 'Cloud bands', key: 'lab-bands', ctrls: [
@@ -199,7 +228,8 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
         ],
       }];
     }
-    return [typeSel, {
+    // Climate states are authored for the ocean archetype (habitable worlds).
+    return [typeSel, ...(selected === 'ocean' ? [variantSel] : []), {
       title: 'Tectonics', key: 'lab-tectonics', ctrls: [
         macroSlider('Plates', 'plateCount', 3, 48, 1),
         macroSlider('Continents', 'continents', 1, 8, 1),
