@@ -423,10 +423,13 @@ float finishHeight(float base, vec3 dir){
 uniform float uMoisture;
 uniform float uAridBelts;
 uniform float uRainShadow;
+uniform float uOrographic;    // WINDWARD wetting — forests climb the wet flank
 uniform float uWindBearing;   // radians; tilts the zonal wind meridionally
 uniform float uContinental;
 uniform float uAltitudeDry;
 uniform float uPatchiness;
+uniform float uLapseRate;     // altitude cooling — sets the montane forest belt
+uniform float uTreeline;      // temperature below which trees give out (bare/alpine)
 
 // Prevailing surface wind (unit tangent) at a direction — the three-cell model.
 // Wide blend bands: a hard reversal latitude leaves a straight vegetation seam.
@@ -451,7 +454,11 @@ float climateMoisture(vec3 dir, vec3 wdir, float hh){
   float dryBelt = smoothstep(0.25, 0.44, al) * (1.0 - smoothstep(0.48, 0.68, al));
   float itcz    = 1.0 - smoothstep(0.0, 0.26, al);
   float polar   = smoothstep(0.72, 0.95, al);
-  m += uAridBelts * (0.30 * itcz - 0.85 * dryBelt - 0.45 * polar);
+  // Weights are calibrated so a default world reads MOSTLY VEGETATED with dry
+  // regions where the drivers stack (subtropical belt + deep interior + lee of a
+  // range = desert), rather than arid-by-default: any single driver at full
+  // strength should shift a biome one step, not strip the planet.
+  m += uAridBelts * (0.30 * itcz - 0.55 * dryBelt - 0.30 * polar);
 
   // Both terrain-driven drivers below need the macro height HERE — sample once.
   // (Each plateMacro call walks the plate/continent seed loops, so the whole
@@ -459,18 +466,28 @@ float climateMoisture(vec3 dir, vec3 wdir, float hh){
   if (uRainShadow > 0.0 || uContinental > 0.0){
     float here = plateMacro(wdir);
 
-    // ── orographic rain shadow: march UPWIND in warped space and find the
-    // tallest barrier the air had to climb. Sampling in WARPED space keeps the
-    // shadow locked to the ranges as drawn. Only the macro field matters — rain
-    // shadows are cast by cordilleras, not by hills.
-    if (uRainShadow > 0.0){
+    // ── orographic: BOTH halves of the mountain effect. March upwind for the
+    // tallest barrier the air had to climb (its lee is dry — Atacama/Gobi), and
+    // sample downwind to detect a WINDWARD slope (air forced up a range ahead
+    // rains out on the way — the wet flank where temperate rainforest and
+    // montane conifer belts actually live). Sampling in WARPED space keeps both
+    // locked to the ranges as drawn. Macro field only: rain shadows are cast by
+    // cordilleras, not by hills.
+    if (uRainShadow > 0.0 || uOrographic > 0.0){
       vec3 wind = prevailingWind(dir);
-      float barrier = here;
-      for (int i = 1; i <= 3; i++){
-        vec3 s = normalize(wdir - wind * (float(i) * 0.045)); // upwind = against the flow
-        barrier = max(barrier, plateMacro(s));
+      if (uRainShadow > 0.0){
+        float barrier = here;
+        for (int i = 1; i <= 3; i++){
+          vec3 s = normalize(wdir - wind * (float(i) * 0.045)); // upwind = against the flow
+          barrier = max(barrier, plateMacro(s));
+        }
+        m -= uRainShadow * smoothstep(0.02, 0.22, barrier - here);
       }
-      m -= uRainShadow * smoothstep(0.02, 0.22, barrier - here);
+      if (uOrographic > 0.0){
+        float ahead = max(plateMacro(normalize(wdir + wind * 0.045)),
+                          plateMacro(normalize(wdir + wind * 0.09)));
+        m += uOrographic * smoothstep(0.015, 0.16, ahead - here);
+      }
     }
 
     // ── continentality: how much LAND surrounds this point — a coast draws
@@ -485,7 +502,7 @@ float climateMoisture(vec3 dir, vec3 wdir, float hh){
         vec3 s = normalize(wdir + (t * cos(a) + b * sin(a)) * 0.10);
         land += step(uSeaLevel, plateMacro(s));
       }
-      m -= uContinental * 0.55 * (land * 0.25);   // 0 (island) .. 1 (deep interior)
+      m -= uContinental * 0.40 * (land * 0.25);   // 0 (island) .. 1 (deep interior)
     }
   }
 
@@ -496,6 +513,48 @@ float climateMoisture(vec3 dir, vec3 wdir, float hh){
   m += uPatchiness * 0.55 * fbm(dir * 2.6 + uNoiseSeed * 0.13);
 
   return clamp(m, 0.0, 1.0);
+}
+
+// Surface TEMPERATURE 0..1 (1 = hot equatorial lowland, 0 = polar or high
+// alpine). Two terms, exactly as on Earth: insolation falls off toward the
+// poles, and the environmental LAPSE RATE cools with altitude — which is why a
+// tropical mountain wears the same conifer-then-bare belts as a boreal lowland.
+// This is the second Whittaker axis; moisture is the first.
+float climateTemp(vec3 dir, float hh){
+  float t = 1.0 - smoothstep(0.02, 0.98, abs(dir.y));  // equator hot -> pole cold
+  t -= uLapseRate * hh;                                 // altitude cooling
+  t += 0.06 * fbm(dir * 3.7 + uNoiseSeed * 0.37);       // regional variation
+  return clamp(t, 0.0, 1.0);
+}
+
+// ═══ BIOME PALETTE — the Whittaker grid (temperature x moisture) ═══════
+// Linear RGB (the pipeline tonemaps), authored DARK and desaturated at the wet
+// end: real forest canopy is a deep blue-green that reads almost black in
+// shadow — the light "grass green" look comes from treating vegetation as one
+// bright tint instead of a biome field.
+vec3 biomeColor(float temp, float moist){
+  // ── arid axis: cold desert/steppe gravel -> hot sand
+  vec3 dry = mix(vec3(0.26, 0.24, 0.19), vec3(0.52, 0.40, 0.23),
+                 smoothstep(0.30, 0.75, temp));
+  // ── mid axis: tundra -> steppe/prairie straw -> tropical savanna. These sit
+  // between bare ground and canopy, so they stay muted — a steppe is olive-tan,
+  // not yellow.
+  vec3 mid = mix(vec3(0.115, 0.115, 0.088),                    // tundra: moss/grey
+                 mix(vec3(0.155, 0.150, 0.070),                // temperate steppe
+                     vec3(0.190, 0.165, 0.062),                // savanna
+                     smoothstep(0.55, 0.85, temp)),
+                 smoothstep(0.10, 0.38, temp));
+  // ── wet axis: TAIGA (dark blue-green pine) -> temperate forest -> rainforest.
+  // Deliberately DARK and low-red: canopy albedo is genuinely low (~0.03-0.09),
+  // and the tonemap + atmospheric haze lift these a long way. Authoring them at
+  // "looks green in a swatch" brightness is what produced the pale sage read.
+  vec3 wet = mix(vec3(0.014, 0.048, 0.038),                    // boreal / pine (blue-shifted)
+                 vec3(0.020, 0.072, 0.026),                    // temperate broadleaf
+                 smoothstep(0.22, 0.52, temp));
+  wet = mix(wet, vec3(0.017, 0.082, 0.020),                    // tropical rainforest
+            smoothstep(0.62, 0.88, temp));
+  vec3 c = mix(dry, mid, smoothstep(0.16, 0.42, moist));
+  return mix(c, wet, smoothstep(0.44, 0.70, moist));
 }
 
 // Isotropic simplex domain warp (a broad bend + a finer crenellation) so

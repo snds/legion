@@ -210,6 +210,9 @@ export class PlanetGlobe {
         uMoisture: { value: p.moisture },
         uAridBelts: { value: p.aridBelts },
         uRainShadow: { value: p.rainShadow },
+        uOrographic: { value: p.orographic },
+        uLapseRate: { value: p.lapseRate },
+        uTreeline: { value: p.treeline },
         uWindBearing: { value: p.windBearing },
         uContinental: { value: p.continental },
         uAltitudeDry: { value: p.altitudeDry },
@@ -431,6 +434,8 @@ export class PlanetGlobe {
       (u.uOceanDeep.value as Vector3).set(...p.oceanDeep);
       u.uLatitudeIce.value = p.latitudeIce; u.uMoisture.value = p.moisture; u.uRoughness.value = p.roughness;
       u.uAridBelts.value = p.aridBelts; u.uRainShadow.value = p.rainShadow;
+      u.uOrographic.value = p.orographic; u.uLapseRate.value = p.lapseRate;
+      u.uTreeline.value = p.treeline;
       u.uWindBearing.value = p.windBearing; u.uContinental.value = p.continental;
       u.uAltitudeDry.value = p.altitudeDry; u.uPatchiness.value = p.patchiness;
       u.uLushDepth.value = p.lushDepth;

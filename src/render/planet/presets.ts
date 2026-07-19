@@ -42,6 +42,9 @@ export interface PlanetRenderParams {
   // ── climate modifiers (each an independent driver of the moisture field) ──
   aridBelts: number;         // Hadley circulation: dry subtropics / wet ITCZ depth
   rainShadow: number;        // orographic drying leeward of upwind ranges
+  orographic: number;       // WINDWARD wetting — forests climb the wet flank
+  lapseRate: number;        // altitude cooling — sets the montane forest belt
+  treeline: number;         // temperature below which trees give out
   windBearing: number;       // radians — tilts the zonal prevailing wind
   continental: number;       // inland drying (maritime coasts stay wet)
   altitudeDry: number;       // how fast highlands dry out (treeline)
@@ -93,6 +96,9 @@ interface Preset {
   moisture: number;
   aridBelts: number;
   rainShadow: number;
+  orographic: number;
+  lapseRate: number;
+  treeline: number;
   windBearing: number;
   continental: number;
   altitudeDry: number;
@@ -144,7 +150,7 @@ export const PRESETS: Record<PlanetVisualType, Preset> = {
       { at: 1.0, color: [0.55, 0.52, 0.50] },
     ],
     seaLevel: 0, oceanShallow: G0, oceanDeep: G0,
-    displacement: 0.045, ridged: 0.6, warp: 0.4, latitudeIce: 0.15, moisture: 0.2, aridBelts: 0.7, rainShadow: 0.5, windBearing: 0.2, continental: 0.6, altitudeDry: 0.6, patchiness: 0.35, lushDepth: 0.5,
+    displacement: 0.045, ridged: 0.6, warp: 0.4, latitudeIce: 0.15, moisture: 0.2, aridBelts: 0.7, rainShadow: 0.5, orographic: 0.5, lapseRate: 0.5, treeline: 0.10, windBearing: 0.2, continental: 0.6, altitudeDry: 0.6, patchiness: 0.35, lushDepth: 0.5,
     roughness: 0.9,
     bandColorA: G0, bandColorB: G0, bandCount: 0, bandTurbulence: 0, stormChance: 0,
     hasAtmosphere: false, atmosphere: [0.5, 0.4, 0.35], atmosphereDensity: 0.25, nightLights: 0,
@@ -152,15 +158,19 @@ export const PRESETS: Record<PlanetVisualType, Preset> = {
     emissive: G0, emissiveStrength: 0,
   },
   ocean: {
+    // BARE GROUND only — soil/rock/scree. Vegetation colour now comes entirely
+    // from the biome layer (biomeColor), so the ramp must not pre-tint the land
+    // green: a green ramp showing through partial canopy cover was exactly what
+    // made every biome read as pale sage.
     ramp: [
-      { at: 0.0, color: [0.18, 0.32, 0.16] },
-      { at: 0.35, color: [0.28, 0.42, 0.20] },
-      { at: 0.6, color: [0.45, 0.40, 0.26] },
-      { at: 0.85, color: [0.40, 0.34, 0.28] },
-      { at: 1.0, color: [0.92, 0.94, 0.97] },
+      { at: 0.0, color: [0.19, 0.16, 0.12] },   // coastal silt / dark soil
+      { at: 0.35, color: [0.26, 0.22, 0.16] },  // loam
+      { at: 0.6, color: [0.34, 0.29, 0.22] },   // dry earth / rock
+      { at: 0.85, color: [0.40, 0.38, 0.36] },  // grey scree
+      { at: 1.0, color: [0.92, 0.94, 0.97] },   // snow
     ],
     seaLevel: 0.55, oceanShallow: [0.10, 0.42, 0.52], oceanDeep: [0.02, 0.09, 0.22],
-    displacement: 0.03, ridged: 0.45, warp: 0.6, latitudeIce: 0.5, moisture: 0.85, aridBelts: 0.8, rainShadow: 0.65, windBearing: 0.25, continental: 0.5, altitudeDry: 0.55, patchiness: 0.4, lushDepth: 1.0,
+    displacement: 0.03, ridged: 0.45, warp: 0.6, latitudeIce: 0.5, moisture: 1.0, aridBelts: 0.8, rainShadow: 0.65, orographic: 0.7, lapseRate: 0.55, treeline: 0.09, windBearing: 0.25, continental: 0.5, altitudeDry: 0.55, patchiness: 0.4, lushDepth: 1.0,
     roughness: 0.4,
     bandColorA: G0, bandColorB: G0, bandCount: 0, bandTurbulence: 0, stormChance: 0,
     hasAtmosphere: true, atmosphere: [0.30, 0.52, 0.92], atmosphereDensity: 1.0, nightLights: 0.8,
@@ -175,7 +185,7 @@ export const PRESETS: Record<PlanetVisualType, Preset> = {
       { at: 1.0, color: [0.80, 0.66, 0.48] },
     ],
     seaLevel: 0, oceanShallow: G0, oceanDeep: G0,
-    displacement: 0.05, ridged: 0.7, warp: 0.5, latitudeIce: 0.05, moisture: 0.08, aridBelts: 1.0, rainShadow: 0.8, windBearing: 0.15, continental: 0.9, altitudeDry: 0.5, patchiness: 0.5, lushDepth: 0.7,
+    displacement: 0.05, ridged: 0.7, warp: 0.5, latitudeIce: 0.05, moisture: 0.08, aridBelts: 1.0, rainShadow: 0.8, orographic: 0.45, lapseRate: 0.5, treeline: 0.09, windBearing: 0.15, continental: 0.9, altitudeDry: 0.5, patchiness: 0.5, lushDepth: 0.7,
     roughness: 0.85,
     bandColorA: G0, bandColorB: G0, bandCount: 0, bandTurbulence: 0, stormChance: 0,
     hasAtmosphere: true, atmosphere: [0.82, 0.62, 0.40], atmosphereDensity: 0.5, nightLights: 0.15,
@@ -190,7 +200,7 @@ export const PRESETS: Record<PlanetVisualType, Preset> = {
       { at: 1.0, color: [0.20, 0.09, 0.07] },
     ],
     seaLevel: 0.4, oceanShallow: [1.0, 0.45, 0.10], oceanDeep: [0.9, 0.18, 0.03],
-    displacement: 0.06, ridged: 0.85, warp: 0.35, latitudeIce: 0, moisture: 0, aridBelts: 0, rainShadow: 0, windBearing: 0, continental: 0, altitudeDry: 0, patchiness: 0, lushDepth: 0,
+    displacement: 0.06, ridged: 0.85, warp: 0.35, latitudeIce: 0, moisture: 0, aridBelts: 0, rainShadow: 0, orographic: 0, lapseRate: 0.5, treeline: 0.09, windBearing: 0, continental: 0, altitudeDry: 0, patchiness: 0, lushDepth: 0,
     roughness: 0.7,
     bandColorA: G0, bandColorB: G0, bandCount: 0, bandTurbulence: 0, stormChance: 0,
     hasAtmosphere: true, atmosphere: [0.9, 0.35, 0.15], atmosphereDensity: 0.6, nightLights: 0,
@@ -200,7 +210,7 @@ export const PRESETS: Record<PlanetVisualType, Preset> = {
   ice: {
     // "ice" as a Neptune-class ICE GIANT (Step 0: radius 3.5–8 R⊕ ⇒ giant).
     ramp: [], seaLevel: 0, oceanShallow: G0, oceanDeep: G0,
-    displacement: 0, ridged: 0, warp: 0, latitudeIce: 0, moisture: 0, aridBelts: 0, rainShadow: 0, windBearing: 0, continental: 0, altitudeDry: 0, patchiness: 0, lushDepth: 0, roughness: 0,
+    displacement: 0, ridged: 0, warp: 0, latitudeIce: 0, moisture: 0, aridBelts: 0, rainShadow: 0, orographic: 0, lapseRate: 0.5, treeline: 0.09, windBearing: 0, continental: 0, altitudeDry: 0, patchiness: 0, lushDepth: 0, roughness: 0,
     bandColorA: [0.42, 0.60, 0.78], bandColorB: [0.26, 0.44, 0.66],
     bandCount: 9, bandTurbulence: 0.35, stormChance: 0.5,
     hasAtmosphere: true, atmosphere: [0.45, 0.70, 0.90], atmosphereDensity: 1.1, nightLights: 0,
@@ -209,7 +219,7 @@ export const PRESETS: Record<PlanetVisualType, Preset> = {
   },
   gas: {
     ramp: [], seaLevel: 0, oceanShallow: G0, oceanDeep: G0,
-    displacement: 0, ridged: 0, warp: 0, latitudeIce: 0, moisture: 0, aridBelts: 0, rainShadow: 0, windBearing: 0, continental: 0, altitudeDry: 0, patchiness: 0, lushDepth: 0, roughness: 0,
+    displacement: 0, ridged: 0, warp: 0, latitudeIce: 0, moisture: 0, aridBelts: 0, rainShadow: 0, orographic: 0, lapseRate: 0.5, treeline: 0.09, windBearing: 0, continental: 0, altitudeDry: 0, patchiness: 0, lushDepth: 0, roughness: 0,
     bandColorA: [0.86, 0.74, 0.54], bandColorB: [0.66, 0.50, 0.34],
     bandCount: 14, bandTurbulence: 0.6, stormChance: 0.7,
     hasAtmosphere: true, atmosphere: [0.92, 0.82, 0.55], atmosphereDensity: 1.2, nightLights: 0,
@@ -287,6 +297,9 @@ export function derivePlanetParams(planet: GenPlanet): PlanetRenderParams {
     // depth, shadow strength, wind bearing, patchiness); keep the rest stable.
     aridBelts: Math.max(0, Math.min(1.5, base.aridBelts * range(ter, 0.8, 1.2))),
     rainShadow: Math.max(0, Math.min(1.5, base.rainShadow * range(ter, 0.8, 1.25))),
+    orographic: Math.max(0, Math.min(1.5, base.orographic * range(ter, 0.85, 1.2))),
+    lapseRate: base.lapseRate,
+    treeline: base.treeline,
     windBearing: base.windBearing + range(ter, -0.35, 0.35),
     continental: base.continental,
     altitudeDry: base.altitudeDry,
