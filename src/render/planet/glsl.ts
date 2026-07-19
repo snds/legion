@@ -453,12 +453,16 @@ float climateMoisture(vec3 dir, vec3 wdir, float hh){
   float al = abs(dir.y);
   float dryBelt = smoothstep(0.25, 0.44, al) * (1.0 - smoothstep(0.48, 0.68, al));
   float itcz    = 1.0 - smoothstep(0.0, 0.26, al);
-  float polar   = smoothstep(0.72, 0.95, al);
+  // Polar drying starts LATE and stays mild: the Arctic is a cold desert by
+  // precipitation, but it is not bare — it is tundra, wet enough at the surface
+  // (permafrost holds meltwater) to carry moss, sedge and dwarf shrub. Starting
+  // this at 0.72 with a heavy weight pushed 46 deg+ toward the arid axis.
+  float polar   = smoothstep(0.84, 1.0, al);
   // Weights are calibrated so a default world reads MOSTLY VEGETATED with dry
   // regions where the drivers stack (subtropical belt + deep interior + lee of a
   // range = desert), rather than arid-by-default: any single driver at full
   // strength should shift a biome one step, not strip the planet.
-  m += uAridBelts * (0.30 * itcz - 0.55 * dryBelt - 0.30 * polar);
+  m += uAridBelts * (0.30 * itcz - 0.55 * dryBelt - 0.16 * polar);
 
   // Both terrain-driven drivers below need the macro height HERE — sample once.
   // (Each plateMacro call walks the plate/continent seed loops, so the whole
@@ -526,7 +530,17 @@ float climateMoisture(vec3 dir, vec3 wdir, float hh){
 // tropical mountain wears the same conifer-then-bare belts as a boreal lowland.
 // This is the second Whittaker axis; moisture is the first.
 float climateTemp(vec3 dir, float hh){
-  float t = 1.0 - smoothstep(0.02, 0.98, abs(dir.y));  // equator hot -> pole cold
+  // Fitted to Earth's mean annual temperature by latitude, normalised so 1 =
+  // equatorial (~26 C) and 0 = polar (~-25 C):
+  //     0deg 1.00 | 30deg 0.88 | 45deg 0.73 | 60deg 0.49 | 75deg 0.25 | 90deg 0.05
+  // The old curve was a smoothstep straight over sin(latitude), which put 30 deg
+  // at 0.5 and 58 deg at 0.05 — so vegetation cover collapsed and the bare ramp showed
+  // through as tan. That is why high latitudes read as DESERT rather than the
+  // taiga/tundra that actually lives there (field report, 2026-07-19).
+  // Earth's gradient is flat through the tropics and steepens past ~45 deg;
+  // a cubic in sin(lat) tracks that far better than a smoothstep.
+  float al = abs(dir.y);
+  float t = 1.0 - 0.95 * al * al * al;
   t -= uLapseRate * hh;                                 // altitude cooling
   t += 0.06 * fbm(dir * 3.7 + uNoiseSeed * 0.37);       // regional variation
   return clamp(t, 0.0, 1.0);
@@ -550,7 +564,9 @@ vec3 biomeColor(float temp, float moist){
   // ── mid axis: tundra -> steppe/prairie straw -> tropical savanna. These sit
   // between bare ground and canopy, so they stay muted — a steppe is olive-tan,
   // not yellow.
-  vec3 mid = mix(vec3(0.145, 0.145, 0.120),                    // tundra: moss/grey
+  // Tundra is GREEN in season — moss, sedge and dwarf birch, not grey gravel.
+  // The grey-brown reading is winter/satellite-composite bias.
+  vec3 mid = mix(vec3(0.105, 0.150, 0.092),                    // tundra: moss/sedge
                  mix(vec3(0.185, 0.175, 0.100),                // temperate steppe
                      vec3(0.215, 0.185, 0.095),                // savanna
                      smoothstep(0.55, 0.85, temp)),
