@@ -38,7 +38,15 @@ export interface PlanetRenderParams {
   ridged: number;            // 0 = smooth fBm hills, 1 = sharp ridged mountains
   warp: number;              // domain-warp strength (organic coastlines)
   latitudeIce: number;       // 0 = none, 1 = strong polar caps
-  moisture: number;          // 0 = arid (desert), 1 = lush — biases the mid ramp
+  moisture: number;          // BASE humidity — the climate field's starting level
+  // ── climate modifiers (each an independent driver of the moisture field) ──
+  aridBelts: number;         // Hadley circulation: dry subtropics / wet ITCZ depth
+  rainShadow: number;        // orographic drying leeward of upwind ranges
+  windBearing: number;       // radians — tilts the zonal prevailing wind
+  continental: number;       // inland drying (maritime coasts stay wet)
+  altitudeDry: number;       // how fast highlands dry out (treeline)
+  patchiness: number;        // mesoscale variation within a belt
+  lushDepth: number;         // how deep/saturated the wet-region greenery goes
   roughness: number;         // specular breakup
   noiseSeed: RGB;            // domain offset so bodies never share terrain
 
@@ -83,6 +91,13 @@ interface Preset {
   warp: number;
   latitudeIce: number;
   moisture: number;
+  aridBelts: number;
+  rainShadow: number;
+  windBearing: number;
+  continental: number;
+  altitudeDry: number;
+  patchiness: number;
+  lushDepth: number;
   roughness: number;
   bandColorA: RGB;
   bandColorB: RGB;
@@ -129,7 +144,7 @@ export const PRESETS: Record<PlanetVisualType, Preset> = {
       { at: 1.0, color: [0.55, 0.52, 0.50] },
     ],
     seaLevel: 0, oceanShallow: G0, oceanDeep: G0,
-    displacement: 0.045, ridged: 0.6, warp: 0.4, latitudeIce: 0.15, moisture: 0.2,
+    displacement: 0.045, ridged: 0.6, warp: 0.4, latitudeIce: 0.15, moisture: 0.2, aridBelts: 0.7, rainShadow: 0.5, windBearing: 0.2, continental: 0.6, altitudeDry: 0.6, patchiness: 0.35, lushDepth: 0.5,
     roughness: 0.9,
     bandColorA: G0, bandColorB: G0, bandCount: 0, bandTurbulence: 0, stormChance: 0,
     hasAtmosphere: false, atmosphere: [0.5, 0.4, 0.35], atmosphereDensity: 0.25, nightLights: 0,
@@ -145,7 +160,7 @@ export const PRESETS: Record<PlanetVisualType, Preset> = {
       { at: 1.0, color: [0.92, 0.94, 0.97] },
     ],
     seaLevel: 0.55, oceanShallow: [0.10, 0.42, 0.52], oceanDeep: [0.02, 0.09, 0.22],
-    displacement: 0.03, ridged: 0.45, warp: 0.6, latitudeIce: 0.5, moisture: 0.85,
+    displacement: 0.03, ridged: 0.45, warp: 0.6, latitudeIce: 0.5, moisture: 0.85, aridBelts: 0.8, rainShadow: 0.65, windBearing: 0.25, continental: 0.5, altitudeDry: 0.55, patchiness: 0.4, lushDepth: 1.0,
     roughness: 0.4,
     bandColorA: G0, bandColorB: G0, bandCount: 0, bandTurbulence: 0, stormChance: 0,
     hasAtmosphere: true, atmosphere: [0.30, 0.52, 0.92], atmosphereDensity: 1.0, nightLights: 0.8,
@@ -160,7 +175,7 @@ export const PRESETS: Record<PlanetVisualType, Preset> = {
       { at: 1.0, color: [0.80, 0.66, 0.48] },
     ],
     seaLevel: 0, oceanShallow: G0, oceanDeep: G0,
-    displacement: 0.05, ridged: 0.7, warp: 0.5, latitudeIce: 0.05, moisture: 0.08,
+    displacement: 0.05, ridged: 0.7, warp: 0.5, latitudeIce: 0.05, moisture: 0.08, aridBelts: 1.0, rainShadow: 0.8, windBearing: 0.15, continental: 0.9, altitudeDry: 0.5, patchiness: 0.5, lushDepth: 0.7,
     roughness: 0.85,
     bandColorA: G0, bandColorB: G0, bandCount: 0, bandTurbulence: 0, stormChance: 0,
     hasAtmosphere: true, atmosphere: [0.82, 0.62, 0.40], atmosphereDensity: 0.5, nightLights: 0.15,
@@ -175,7 +190,7 @@ export const PRESETS: Record<PlanetVisualType, Preset> = {
       { at: 1.0, color: [0.20, 0.09, 0.07] },
     ],
     seaLevel: 0.4, oceanShallow: [1.0, 0.45, 0.10], oceanDeep: [0.9, 0.18, 0.03],
-    displacement: 0.06, ridged: 0.85, warp: 0.35, latitudeIce: 0, moisture: 0,
+    displacement: 0.06, ridged: 0.85, warp: 0.35, latitudeIce: 0, moisture: 0, aridBelts: 0, rainShadow: 0, windBearing: 0, continental: 0, altitudeDry: 0, patchiness: 0, lushDepth: 0,
     roughness: 0.7,
     bandColorA: G0, bandColorB: G0, bandCount: 0, bandTurbulence: 0, stormChance: 0,
     hasAtmosphere: true, atmosphere: [0.9, 0.35, 0.15], atmosphereDensity: 0.6, nightLights: 0,
@@ -185,7 +200,7 @@ export const PRESETS: Record<PlanetVisualType, Preset> = {
   ice: {
     // "ice" as a Neptune-class ICE GIANT (Step 0: radius 3.5–8 R⊕ ⇒ giant).
     ramp: [], seaLevel: 0, oceanShallow: G0, oceanDeep: G0,
-    displacement: 0, ridged: 0, warp: 0, latitudeIce: 0, moisture: 0, roughness: 0,
+    displacement: 0, ridged: 0, warp: 0, latitudeIce: 0, moisture: 0, aridBelts: 0, rainShadow: 0, windBearing: 0, continental: 0, altitudeDry: 0, patchiness: 0, lushDepth: 0, roughness: 0,
     bandColorA: [0.42, 0.60, 0.78], bandColorB: [0.26, 0.44, 0.66],
     bandCount: 9, bandTurbulence: 0.35, stormChance: 0.5,
     hasAtmosphere: true, atmosphere: [0.45, 0.70, 0.90], atmosphereDensity: 1.1, nightLights: 0,
@@ -194,7 +209,7 @@ export const PRESETS: Record<PlanetVisualType, Preset> = {
   },
   gas: {
     ramp: [], seaLevel: 0, oceanShallow: G0, oceanDeep: G0,
-    displacement: 0, ridged: 0, warp: 0, latitudeIce: 0, moisture: 0, roughness: 0,
+    displacement: 0, ridged: 0, warp: 0, latitudeIce: 0, moisture: 0, aridBelts: 0, rainShadow: 0, windBearing: 0, continental: 0, altitudeDry: 0, patchiness: 0, lushDepth: 0, roughness: 0,
     bandColorA: [0.86, 0.74, 0.54], bandColorB: [0.66, 0.50, 0.34],
     bandCount: 14, bandTurbulence: 0.6, stormChance: 0.7,
     hasAtmosphere: true, atmosphere: [0.92, 0.82, 0.55], atmosphereDensity: 1.2, nightLights: 0,
@@ -268,6 +283,15 @@ export function derivePlanetParams(planet: GenPlanet): PlanetRenderParams {
     warp: base.warp * range(ter, 0.8, 1.25),
     latitudeIce: Math.max(0, Math.min(1, base.latitudeIce + coldBias)),
     moisture: Math.max(0, Math.min(1, base.moisture + range(pal, -0.1, 0.1))),
+    // Climate modifiers: jitter the ones that make worlds feel different (belt
+    // depth, shadow strength, wind bearing, patchiness); keep the rest stable.
+    aridBelts: Math.max(0, Math.min(1.5, base.aridBelts * range(ter, 0.8, 1.2))),
+    rainShadow: Math.max(0, Math.min(1.5, base.rainShadow * range(ter, 0.8, 1.25))),
+    windBearing: base.windBearing + range(ter, -0.35, 0.35),
+    continental: base.continental,
+    altitudeDry: base.altitudeDry,
+    patchiness: Math.max(0, Math.min(1.5, base.patchiness * range(ter, 0.85, 1.2))),
+    lushDepth: base.lushDepth,
     roughness: base.roughness,
     noiseSeed: seedOffset(seed),
     bandColorA: jitterRGB(base.bandColorA, pal, 0.05),

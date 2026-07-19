@@ -208,6 +208,13 @@ export class PlanetGlobe {
         uOceanDeep: { value: new Vector3(...p.oceanDeep) },
         uLatitudeIce: { value: p.latitudeIce },
         uMoisture: { value: p.moisture },
+        uAridBelts: { value: p.aridBelts },
+        uRainShadow: { value: p.rainShadow },
+        uWindBearing: { value: p.windBearing },
+        uContinental: { value: p.continental },
+        uAltitudeDry: { value: p.altitudeDry },
+        uPatchiness: { value: p.patchiness },
+        uLushDepth: { value: p.lushDepth },
         uRoughness: { value: p.roughness },
         uEmissive: { value: new Vector3(...p.emissive) },
         uEmissiveStrength: { value: p.emissiveStrength },
@@ -423,6 +430,10 @@ export class PlanetGlobe {
       (u.uOceanShallow.value as Vector3).set(...p.oceanShallow);
       (u.uOceanDeep.value as Vector3).set(...p.oceanDeep);
       u.uLatitudeIce.value = p.latitudeIce; u.uMoisture.value = p.moisture; u.uRoughness.value = p.roughness;
+      u.uAridBelts.value = p.aridBelts; u.uRainShadow.value = p.rainShadow;
+      u.uWindBearing.value = p.windBearing; u.uContinental.value = p.continental;
+      u.uAltitudeDry.value = p.altitudeDry; u.uPatchiness.value = p.patchiness;
+      u.uLushDepth.value = p.lushDepth;
       (u.uEmissive.value as Vector3).set(...p.emissive); u.uEmissiveStrength.value = p.emissiveStrength;
       u.uNightLights.value = p.nightLights; u.uTerminator.value = p.hasAtmosphere ? 0.1 : 0.03;
       (u.uAtmosTint.value as Vector3).set(...p.atmosphere);

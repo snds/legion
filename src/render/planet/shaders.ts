@@ -100,8 +100,10 @@ uniform vec3  uSunDir;        // world-space, surface → sun
 //  vertex's flat-ocean displacement and the ice-cap mass.)
 uniform vec3  uOceanShallow;
 uniform vec3  uOceanDeep;
-uniform float uMoisture;
+// (uMoisture + the climate modifiers are declared in GLSL_TERRAIN — the field is
+//  shared, so ground cover and anything else keying off climate stay in step.)
 uniform float uRoughness;
+uniform float uLushDepth;     // how saturated/deep the wet-region greenery goes
 uniform vec3  uEmissive;
 uniform float uEmissiveStrength;
 uniform float uNightLights;
@@ -187,18 +189,15 @@ void main(){
     float hh = uSeaLevel > 0.0 ? (vHeight - uSeaLevel) / max(1.0 - uSeaLevel, 1e-3) : vHeight;
     hh = clamp(hh, 0.0, 1.0);
     albedo = sampleRamp(hh);
-    // ── Spatial moisture (Earthlike biomes): wet equator, dry subtropical belts,
-    // wetter mid-latitudes; wet lowlands/coasts, drier interiors/highlands; broken
-    // by mesoscale noise. uMoisture scales the whole field — high values push
-    // jungle inland; deserts survive only in the dry belts, as on Earth.
-    float lat = abs(dir.y);
-    float latBand = 1.0 - 0.8 * smoothstep(0.22, 0.42, lat) * (1.0 - smoothstep(0.5, 0.72, lat));
-    latBand *= 1.0 - 0.5 * smoothstep(0.78, 0.95, lat);
-    float coastal = 1.0 - smoothstep(0.0, 0.55, hh);
-    float mvar = 0.6 + 0.8 * (fbm(dir * 2.6 + uNoiseSeed * 0.13) * 0.5 + 0.5);
-    float moist = clamp(uMoisture * latBand * mix(0.5, 1.0, coastal) * mvar, 0.0, 1.0);
-    vec3 lush = albedo * vec3(0.5, 0.85, 0.45) + vec3(0.015, 0.06, 0.015);
-    albedo = mix(albedo, lush, moist * (1.0 - smoothstep(0.65, 0.9, hh)));
+    // ── Climate-driven biome cover: the moisture FIELD (circulation belts, rain
+    // shadow behind upwind ranges, continentality, altitude, patchiness) picks
+    // how green this point is. uLushDepth sets how far the wet end pushes —
+    // deep jungle vs light scrub — so "greener where wet" is tunable separately
+    // from "where is it wet".
+    float moist = climateMoisture(dir, warpedDir(dir), hh);
+    vec3 lush = albedo * mix(vec3(1.0), vec3(0.42, 0.86, 0.38), uLushDepth)
+              + vec3(0.015, 0.06, 0.015) * uLushDepth;
+    albedo = mix(albedo, lush, moist * (1.0 - smoothstep(0.72, 0.95, hh)));
     // ── Polar ice colour keys off the SAME cap-mass field the height uses
     // (iceCap in GLSL_TERRAIN) — a raised white shelf with a jagged margin —
     // plus a light frost on the highest peaks.

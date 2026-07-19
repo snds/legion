@@ -403,15 +403,118 @@ float finishHeight(float base, vec3 dir){
   return clamp(h, 0.0, 1.0);
 }
 
-float terrainHeight(vec3 dir){
+// ═══ CLIMATE — a moisture FIELD, not a global dial ═══════════════════
+// Five independent physical drivers, each separately tunable, so a world can be
+// broadly lush with believable dry regions (Earth) rather than uniformly one or
+// the other. Structured as base + SIGNED contributions, never a product chain:
+// five multiplied sub-1 factors collapse moisture to ~0 everywhere and the whole
+// planet goes drab (the obvious trap when stacking climate terms).
+//
+//  · uMoisture      base humidity — what the world is on average
+//  · uAridBelts     Hadley circulation: wet equator (ITCZ), DRY subtropics near
+//                   25-30 deg (every major desert on Earth), wet mid-latitudes
+//  · uRainShadow    orographic: ranges UPWIND wring the air out, leaving a dry
+//                   lee (Atacama, Gobi, Great Basin). Prevailing wind is zonal
+//                   and reverses by cell (trades -> westerlies -> polar
+//                   easterlies), tiltable with uWindBearing
+//  · uContinental   maritime vs continental: coasts stay wet, deep interiors dry
+//  · uAltitudeDry   highlands dry + cold with elevation (treeline)
+//  · uPatchiness    mesoscale variation so regions differ within a belt
+uniform float uMoisture;
+uniform float uAridBelts;
+uniform float uRainShadow;
+uniform float uWindBearing;   // radians; tilts the zonal wind meridionally
+uniform float uContinental;
+uniform float uAltitudeDry;
+uniform float uPatchiness;
+
+// Prevailing surface wind (unit tangent) at a direction — the three-cell model.
+// Wide blend bands: a hard reversal latitude leaves a straight vegetation seam.
+vec3 prevailingWind(vec3 dir){
+  vec3 up = abs(dir.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+  vec3 east = normalize(cross(up, dir));
+  vec3 north = cross(dir, east);
+  float al = abs(dir.y);
+  float flow = mix(-1.0, 1.0, smoothstep(0.36, 0.62, al));  // trades -> westerlies
+  flow = mix(flow, -1.0, smoothstep(0.76, 0.94, al));       // -> polar easterlies
+  vec3 w = east * flow;
+  return normalize(w + north * sin(uWindBearing) * sign(dir.y + 1e-6));
+}
+
+// Moisture 0..1 at a surface point. hh is normalised land altitude (0 at the
+// waterline, 1 at peaks); wdir is the SAME warped direction the terrain used.
+float climateMoisture(vec3 dir, vec3 wdir, float hh){
+  float m = uMoisture;
+
+  // ── circulation: ITCZ wet, subtropical dry belts, mid-latitude wet, polar dry
+  float al = abs(dir.y);
+  float dryBelt = smoothstep(0.25, 0.44, al) * (1.0 - smoothstep(0.48, 0.68, al));
+  float itcz    = 1.0 - smoothstep(0.0, 0.26, al);
+  float polar   = smoothstep(0.72, 0.95, al);
+  m += uAridBelts * (0.30 * itcz - 0.85 * dryBelt - 0.45 * polar);
+
+  // Both terrain-driven drivers below need the macro height HERE — sample once.
+  // (Each plateMacro call walks the plate/continent seed loops, so the whole
+  // climate block is budgeted at <=8 of them, and each driver early-outs at 0.)
+  if (uRainShadow > 0.0 || uContinental > 0.0){
+    float here = plateMacro(wdir);
+
+    // ── orographic rain shadow: march UPWIND in warped space and find the
+    // tallest barrier the air had to climb. Sampling in WARPED space keeps the
+    // shadow locked to the ranges as drawn. Only the macro field matters — rain
+    // shadows are cast by cordilleras, not by hills.
+    if (uRainShadow > 0.0){
+      vec3 wind = prevailingWind(dir);
+      float barrier = here;
+      for (int i = 1; i <= 3; i++){
+        vec3 s = normalize(wdir - wind * (float(i) * 0.045)); // upwind = against the flow
+        barrier = max(barrier, plateMacro(s));
+      }
+      m -= uRainShadow * smoothstep(0.02, 0.22, barrier - here);
+    }
+
+    // ── continentality: how much LAND surrounds this point — a coast draws
+    // maritime moisture, a deep interior starves. Cheap ring test vs sea level.
+    if (uContinental > 0.0){
+      vec3 up = abs(dir.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+      vec3 t = normalize(cross(up, wdir));
+      vec3 b = cross(wdir, t);
+      float land = 0.0;
+      for (int i = 0; i < 4; i++){
+        float a = float(i) * 1.5708;
+        vec3 s = normalize(wdir + (t * cos(a) + b * sin(a)) * 0.10);
+        land += step(uSeaLevel, plateMacro(s));
+      }
+      m -= uContinental * 0.55 * (land * 0.25);   // 0 (island) .. 1 (deep interior)
+    }
+  }
+
+  // ── altitude: thinner, colder air holds less water; hard cut above treeline
+  m -= uAltitudeDry * (0.35 * hh + 0.75 * smoothstep(0.45, 0.85, hh));
+
+  // ── mesoscale patchiness so a belt is never uniform
+  m += uPatchiness * 0.55 * fbm(dir * 2.6 + uNoiseSeed * 0.13);
+
+  return clamp(m, 0.0, 1.0);
+}
+
+// Isotropic simplex domain warp (a broad bend + a finer crenellation) so
+// continent/plate edges dissolve into organic coastlines rather than straight
+// Voronoi cells. Shared by terrainHeight AND the climate model — the rain
+// shadow MUST sample plate structure in the same warped space, or its deserts
+// sit beside mountains that aren't where they look like they are.
+// (CPU bake parity uses the simplex port in simplex.ts — warpDir().)
+vec3 warpedDir(vec3 dir){
   vec3 p = dir * 1.7 + uNoiseSeed;
-  // Isotropic simplex domain warp (a broad bend + a finer crenellation) so
-  // continent/plate edges dissolve into organic coastlines rather than straight
-  // Voronoi cells. (Sharing THIS warp with the CPU bake for baked/unbaked parity
-  // needs a CPU simplex port — a follow-up; value noise here is anisotropic.)
   vec3 wLo = vec3(fbm(p * 0.6 + 11.3), fbm(p * 0.6 + 47.7), fbm(p * 0.6 + 83.1));
   vec3 wHi = vec3(fbm(p * 2.3 + 5.1), fbm(p * 2.3 + 27.9), fbm(p * 2.3 + 61.4));
-  vec3 wdir = normalize(dir + uWarp * (0.55 * wLo + 0.18 * wHi));
+  return normalize(dir + uWarp * (0.55 * wLo + 0.18 * wHi));
+}
+
+float terrainHeight(vec3 dir){
+  vec3 p = dir * 1.7 + uNoiseSeed;
+  vec3 wLo = vec3(fbm(p * 0.6 + 11.3), fbm(p * 0.6 + 47.7), fbm(p * 0.6 + 83.1));
+  vec3 wdir = warpedDir(dir);
   float macro = plateMacro(wdir);
   // Detail sampled at a HIGHER base frequency (uDetailScale) so relief is fine and
   // planet-scale, not lumpy; centred so it roughens without shifting the mean

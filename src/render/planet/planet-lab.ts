@@ -220,8 +220,20 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
         slider('Ridged', 'ridged', 0, 1, 0.01),
         slider('Roughness', 'roughness', 0, 1, 0.01),
         slider('Sea level', 'seaLevel', 0, 1, 0.01),
-        slider('Moisture', 'moisture', 0, 1.5, 0.01),
         slider('Polar ice', 'latitudeIce', 0, 1, 0.01),
+      ],
+    }, {
+      // Moisture is a FIELD, not a dial: each driver below moves it independently
+      // so a world can be broadly lush with believable dry regions.
+      title: 'Climate', key: 'lab-climate', ctrls: [
+        slider('Base humidity', 'moisture', 0, 1.5, 0.01),
+        slider('Arid belts', 'aridBelts', 0, 1.5, 0.01),
+        slider('Rain shadow', 'rainShadow', 0, 1.5, 0.01),
+        slider('Wind bearing', 'windBearing', -1.57, 1.57, 0.01),
+        slider('Continentality', 'continental', 0, 1.5, 0.01),
+        slider('Altitude drying', 'altitudeDry', 0, 1.5, 0.01),
+        slider('Patchiness', 'patchiness', 0, 1.5, 0.01),
+        slider('Lush depth', 'lushDepth', 0, 1.5, 0.01),
       ],
     }, {
       // Optional structural ephemera (Mercury/Mars/Venus). Impact craters ship
