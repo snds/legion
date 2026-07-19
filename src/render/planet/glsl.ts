@@ -500,7 +500,12 @@ float climateMoisture(vec3 dir, vec3 wdir, float hh){
       for (int i = 0; i < 4; i++){
         float a = float(i) * 1.5708;
         vec3 s = normalize(wdir + (t * cos(a) + b * sin(a)) * 0.10);
-        land += step(uSeaLevel, plateMacro(s));
+        // SMOOTHSTEP, never step(): a hard land/sea test quantises this sum into
+        // 5 discrete levels, and each level boundary draws a hard-edged colour
+        // seam straight across the interior (field report, 2026-07-19). The soft
+        // band also reads better physically — a shoreline is a gradient of
+        // maritime influence, not a switch.
+        land += smoothstep(uSeaLevel - 0.06, uSeaLevel + 0.06, plateMacro(s));
       }
       m -= uContinental * 0.40 * (land * 0.25);   // 0 (island) .. 1 (deep interior)
     }
@@ -532,26 +537,29 @@ float climateTemp(vec3 dir, float hh){
 // end: real forest canopy is a deep blue-green that reads almost black in
 // shadow — the light "grass green" look comes from treating vegetation as one
 // bright tint instead of a biome field.
+// CALIBRATED TO EARTH'S ACTUAL ALBEDO SPREAD. Broadband albedo from orbit:
+// Sahara sand ~0.35, grassland ~0.20, tundra ~0.20, boreal forest ~0.09-0.15,
+// Amazon ~0.13 — so desert-to-forest is only about 3:1. Earth's land is far
+// LESS contrasty than intuition suggests. An earlier pass ran ~10:1 (near-black
+// canopy against pale sand) and read as harsh and posterised, so: forests dark
+// but never black, deserts bright but never white.
 vec3 biomeColor(float temp, float moist){
   // ── arid axis: cold desert/steppe gravel -> hot sand
-  vec3 dry = mix(vec3(0.26, 0.24, 0.19), vec3(0.52, 0.40, 0.23),
+  vec3 dry = mix(vec3(0.200, 0.185, 0.150), vec3(0.330, 0.265, 0.165),
                  smoothstep(0.30, 0.75, temp));
   // ── mid axis: tundra -> steppe/prairie straw -> tropical savanna. These sit
   // between bare ground and canopy, so they stay muted — a steppe is olive-tan,
   // not yellow.
-  vec3 mid = mix(vec3(0.115, 0.115, 0.088),                    // tundra: moss/grey
-                 mix(vec3(0.155, 0.150, 0.070),                // temperate steppe
-                     vec3(0.190, 0.165, 0.062),                // savanna
+  vec3 mid = mix(vec3(0.145, 0.145, 0.120),                    // tundra: moss/grey
+                 mix(vec3(0.185, 0.175, 0.100),                // temperate steppe
+                     vec3(0.215, 0.185, 0.095),                // savanna
                      smoothstep(0.55, 0.85, temp)),
                  smoothstep(0.10, 0.38, temp));
   // ── wet axis: TAIGA (dark blue-green pine) -> temperate forest -> rainforest.
-  // Deliberately DARK and low-red: canopy albedo is genuinely low (~0.03-0.09),
-  // and the tonemap + atmospheric haze lift these a long way. Authoring them at
-  // "looks green in a swatch" brightness is what produced the pale sage read.
-  vec3 wet = mix(vec3(0.014, 0.048, 0.038),                    // boreal / pine (blue-shifted)
-                 vec3(0.020, 0.072, 0.026),                    // temperate broadleaf
+  vec3 wet = mix(vec3(0.042, 0.070, 0.058),                    // boreal / pine (blue-shifted)
+                 vec3(0.050, 0.095, 0.045),                    // temperate broadleaf
                  smoothstep(0.22, 0.52, temp));
-  wet = mix(wet, vec3(0.017, 0.082, 0.020),                    // tropical rainforest
+  wet = mix(wet, vec3(0.042, 0.100, 0.038),                    // tropical rainforest
             smoothstep(0.62, 0.88, temp));
   vec3 c = mix(dry, mid, smoothstep(0.16, 0.42, moist));
   return mix(c, wet, smoothstep(0.44, 0.70, moist));
