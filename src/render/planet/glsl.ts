@@ -462,6 +462,7 @@ uniform float uAltitudeDry;
 uniform float uPatchiness;
 uniform float uLapseRate;     // altitude cooling — sets the montane forest belt
 uniform float uTreeline;      // temperature below which trees give out (bare/alpine)
+uniform float uSnowfall;      // snow-cover extent (albedo overlay, no mass)
 
 // Prevailing surface wind (unit tangent) at a direction — the three-cell model.
 // Wide blend bands: a hard reversal latitude leaves a straight vegetation seam.
@@ -576,6 +577,24 @@ float climateTemp(vec3 dir, float hh){
   t -= uLapseRate * hh;                                 // altitude cooling
   t += 0.06 * fbm(dir * 3.7 + uNoiseSeed * 0.37);       // regional variation
   return clamp(t, 0.0, 1.0);
+}
+
+// SNOW COVER 0..1 — a seasonal/permanent snowpack that lies ON the terrain as
+// an albedo overlay and adds NO mass, which is what separates it from iceCap:
+// the caps are kilometres of ice that bury the ground into a shelf, snow is a
+// blanket you still see the mountains through.
+//
+// Extent is driven by TEMPERATURE, so it climbs mountains and spreads from the
+// poles for free, and its snow line rises as the caps grow (uLatitudeIce) —
+// a cooling world whitens outward from the caps rather than the caps merely
+// getting wider. The response is deliberately NON-LINEAR: a small cooling
+// converts a large area to snow, because fresh snow raises albedo and cools
+// further (the ice-albedo feedback that drives glacial onset). Hence the pow.
+float snowCover(float temp, float latIce){
+  if (uSnowfall <= 0.0) return 0.0;
+  float line = mix(0.04, 0.62, latIce);            // snow line rises with the caps
+  float t = smoothstep(line + 0.12, line - 0.12, temp);
+  return clamp(pow(t, 0.65) * uSnowfall, 0.0, 1.0);
 }
 
 // ═══ BIOME PALETTE — the Whittaker grid (temperature x moisture) ═══════

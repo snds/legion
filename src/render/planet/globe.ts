@@ -224,6 +224,7 @@ export class PlanetGlobe {
         uAltitudeDry: { value: p.altitudeDry },
         uPatchiness: { value: p.patchiness },
         uLushDepth: { value: p.lushDepth },
+        uSnowfall: { value: p.snowfall },
         uRoughness: { value: p.roughness },
         uEmissive: { value: new Vector3(...p.emissive) },
         uEmissiveStrength: { value: p.emissiveStrength },
@@ -462,6 +463,7 @@ export class PlanetGlobe {
       u.uWindBearing.value = p.windBearing; u.uContinental.value = p.continental;
       u.uAltitudeDry.value = p.altitudeDry; u.uPatchiness.value = p.patchiness;
       u.uLushDepth.value = p.lushDepth;
+      u.uSnowfall.value = p.snowfall;
       (u.uEmissive.value as Vector3).set(...p.emissive); u.uEmissiveStrength.value = p.emissiveStrength;
       u.uNightLights.value = p.nightLights; u.uTerminator.value = p.hasAtmosphere ? 0.1 : 0.03;
       (u.uAtmosTint.value as Vector3).set(...p.atmosphere);
