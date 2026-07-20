@@ -317,6 +317,7 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
         slider('Altitude drying', 'altitudeDry', 0, 1.5, 0.01),
         slider('Patchiness', 'patchiness', 0, 1.5, 0.01),
         slider('Lush depth', 'lushDepth', 0, 1.5, 0.01),
+        slider('Snowfall', 'snowfall', 0, 1.5, 0.01),
       ],
     }, {
       // Optional structural ephemera (Mercury/Mars/Venus). Impact craters ship

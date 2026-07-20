@@ -201,6 +201,19 @@ void main(){
     vec3 H = normalize(uSunDir + V);
     spec = pow(max(dot(N, H), 0.0), 80.0) * day;
     albedo = mix(albedo, uAtmosTint, fres * 0.4);
+    // PACK ICE on open water. Sea ice is a thin skin, not a glacier: it never
+    // reaches the caps' opacity, and it reads paler and bluer. Freezing runs
+    // AHEAD of the land snow line (salt water freezes readily once the air is
+    // cold enough and there is no relief to warm it), so it uses the same
+    // temperature field with no altitude term.
+    float seaT = climateTemp(dir, 0.0);
+    float pack = snowCover(seaT, uLatitudeIce) * 0.72;
+    if (pack > 0.002){
+      // Break the margin up so it reads as floe and lead, not a painted disc.
+      pack *= 0.55 + 0.45 * (fbm(dir * 8.0 + uNoiseSeed * 1.7) * 0.5 + 0.5);
+      albedo = mix(albedo, vec3(0.80, 0.87, 0.97), clamp(pack, 0.0, 0.9));
+      spec *= 1.0 - clamp(pack, 0.0, 0.9);   // ice is not glassy like open water
+    }
   } else {
     float hh = uSeaLevel > 0.0 ? (vHeight - uSeaLevel) / max(1.0 - uSeaLevel, 1e-3) : vHeight;
     hh = clamp(hh, 0.0, 1.0);
@@ -230,10 +243,20 @@ void main(){
     //    vanishing under flat white.
     float cap = iceCap(dir, vHeight);
     float frost = 0.6 * smoothstep(0.85, 0.97, hh);
-    float iceAmt = max(cap, frost);
+    // SNOWPACK, layered UNDER the glaciers: no mass, just a blanket you still
+    // read the terrain through. Because it keys off temperature it climbs
+    // mountain ranges and spreads outward from the caps as the world cools —
+    // so a glacial world whitens over almost everything while the caps stay
+    // the only true ice sheets. Capped below 1 so terrain never fully vanishes.
+    float snow = snowCover(temp, uLatitudeIce) * 0.88;
+    float iceAmt = max(max(cap, frost), snow);
     if (iceAmt > 0.001){
       float basin = plateMacro(wdirC);                       // pre-cap ground
       float sea = 1.0 - smoothstep(uSeaLevel - 0.03, uSeaLevel + 0.03, basin);
+      // Sea ice is THINNER than a glacier: over water the snowpack alone only
+      // ever forms a pack-ice skin, so its coverage is held back unless the cap
+      // itself has reached here.
+      if (sea > 0.5) iceAmt = max(max(cap, frost), snow * 0.62);
       vec3 seaIce  = vec3(0.82, 0.89, 0.99);                 // paler, bluer
       vec3 landIce = vec3(0.95, 0.955, 0.95);                // thick, brighter
       vec3 iceCol = mix(landIce, seaIce, sea);

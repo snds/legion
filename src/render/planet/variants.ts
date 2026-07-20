@@ -87,7 +87,7 @@ export const OCEAN_VARIANTS: readonly PlanetVariant[] = [
     blurb: 'Last Glacial Maximum — ice to 40°, sea level 120 m lower, globally drier.',
     preset: {
       // Lower sea level EXPOSES continental shelf: more land, and the caps are huge.
-      seaLevel: 0.47, latitudeIce: 0.95,
+      seaLevel: 0.47, latitudeIce: 0.95, snowfall: 1.35,
       // Cold air holds less water — the LGM was arid, not just cold.
       moisture: 0.58, aridBelts: 1.15, rainShadow: 0.8, orographic: 0.55,
       lapseRate: 0.75, treeline: 0.22, windBearing: 0.3,
@@ -102,7 +102,7 @@ export const OCEAN_VARIANTS: readonly PlanetVariant[] = [
     blurb: 'Early Eocene — no polar ice, forests at 78°N, flat pole-to-equator gradient.',
     preset: {
       // Ice-free: that water is in the ocean, so the waterline rises.
-      seaLevel: 0.62, latitudeIce: 0.04,
+      seaLevel: 0.62, latitudeIce: 0.04, snowfall: 0.15,
       // The "equable climate" signature: a much weaker latitudinal gradient.
       moisture: 1.2, aridBelts: 0.42, rainShadow: 0.5, orographic: 0.8,
       lapseRate: 0.42, treeline: 0.02, windBearing: 0.15,
@@ -193,6 +193,7 @@ export function applyWarmth(t: number, p: Record<string, number>): void {
   p.lapseRate   = via(0.78, 0.55, 0.42, t);
   // Cloud cover is capped BELOW the white-out threshold (~0.6) on purpose: past
   // it the deck closes and the surface stops reading at all (caught in review).
+  p.snowfall    = via(1.35, 0.75, 0.12, t);   // cold worlds whiten far past their caps
   p.cloudCover  = via(0.40, 0.55, 0.58, t);
 }
 
@@ -246,6 +247,7 @@ export function masterValues(s: SystemicState): {
  *  band its slider (and the shader) expect. `int` keys round. */
 const LIMITS: Record<string, { min: number; max: number; int?: boolean }> = {
   latitudeIce: { min: 0, max: 1 }, treeline: { min: 0, max: 0.6 },
+  snowfall: { min: 0, max: 1.5 },
   moisture: { min: 0, max: 1.5 }, aridBelts: { min: 0, max: 1.5 },
   lapseRate: { min: 0, max: 2 }, cloudCover: { min: 0, max: 1 },
   seaLevel: { min: 0, max: 1 }, landCoverage: { min: 0.02, max: 0.98 },
