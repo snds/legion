@@ -284,7 +284,17 @@ void main(){
       float lowland = 1.0 - smoothstep(0.12, 0.45, hh2);   // plains, not peaks
       // Farmland: needs rain, but nobody farms swamp or ice.
       float fertile = smoothstep(0.22, 0.5, moist) * (1.0 - smoothstep(0.88, 1.05, moist));
-      float livable = smoothstep(0.10, 0.34, temp) * (1.0 - 0.35 * smoothstep(0.86, 1.0, temp));
+      // Temperate gate: settlement needs meaningfully warm ground, and the very
+      // hottest ground is also thinner (equatorial deserts / deep jungle).
+      float livable = smoothstep(0.26, 0.55, temp) * (1.0 - 0.35 * smoothstep(0.86, 1.0, temp));
+      // Explicit POLAR falloff on top of temperature. Earth's population density
+      // collapses past ~60 deg: there are real cities at 55-60 (Oslo, Stockholm,
+      // St Petersburg) but almost nothing above 70 — the Arctic coast is a
+      // handful of settlements, not a lit band. Temperature alone was too
+      // permissive because the biome curve still reads 60 deg as habitable
+      // taiga, which is true for TREES and not for cities.
+      float lat2 = abs(dir.y);
+      livable *= 1.0 - 0.93 * smoothstep(0.80, 0.97, lat2);
       float H = clamp((0.42 * coast + 0.26 * lowland + 0.54 * fertile) * livable, 0.0, 1.0);
       H *= land * (1.0 - iceCap(dir));
       // Metro cores + surrounding towns, both gated by habitability.
