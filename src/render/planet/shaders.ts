@@ -302,14 +302,35 @@ void main(){
       // landmass: population density is strongly non-linear in habitability, so
       // H is raised to a power and the noise thresholds are narrow. Only the
       // best ground lights up brightly; the rest trails off into darkness.
+      // The smooth fields only set DENSITY — they must never be the light shape
+      // itself. Thresholding a low-frequency fbm produces soft-edged blobs, not
+      // cities; real night imagery is fine, sharp speckle whose SPACING tightens
+      // toward the cores. So: a broad "where civilisation took hold" field plus
+      // habitability gives a probability, and that probability lowers the
+      // threshold on very high-frequency noise. Dense areas light up almost
+      // everywhere, sparse ones only at the rare peaks — which is exactly how
+      // conurbations blur into a sheet at the centre and break into separate
+      // dots at the edges.
       float Hc = H * H;                                        // density ~ H^2
       float region = fbm(dir * 5.5 + uNoiseSeed * 0.7) * 0.5 + 0.5;
-      float metro  = smoothstep(0.58, 0.86, region) * Hc;      // a few big cores
-      float towns  = smoothstep(0.70, 0.97, fbm(dir * 52.0 + uNoiseSeed) * 0.5 + 0.5) * H;
-      float lights = (metro * 1.15 + towns * 0.75) * night;
-      // Sodium-warm cores, cooler at the sparse edges (LED/mercury outskirts).
-      vec3 tint = mix(vec3(1.0, 0.78, 0.42), vec3(0.85, 0.88, 1.0), 0.35 * towns * (1.0 - metro));
-      lit += tint * lights * uNightLights;
+      float dens = clamp(Hc * (0.30 + 1.45 * smoothstep(0.42, 0.86, region)), 0.0, 1.0);
+      if (dens > 0.002){
+        // Two crisp octaves at CITY scale (single snoise, not fbm — fbm's
+        // smoothing is what rounded these into blobs).
+        // Frequency is capped deliberately: past ~300 these features go
+        // SUB-PIXEL with the planet full-screen, which shimmers under the
+        // planet's own rotation instead of reading as steady city lights.
+        float n1 = snoise(dir * 150.0 + uNoiseSeed * 3.1) * 0.5 + 0.5;
+        float n2 = snoise(dir * 300.0 + uNoiseSeed * 7.7) * 0.5 + 0.5;
+        float t1 = mix(0.985, 0.60, dens);                     // core: easy to light
+        float t2 = mix(0.995, 0.72, dens);                     // outliers: rarer
+        float core  = smoothstep(t1, t1 + 0.035, n1);
+        float small = smoothstep(t2, t2 + 0.02, n2) * 0.65;    // satellite towns
+        float lights = max(core, small) * night;
+        // Sodium-warm in the dense cores, cooler at the sparse edges.
+        vec3 tint = mix(vec3(0.86, 0.90, 1.0), vec3(1.0, 0.76, 0.40), smoothstep(0.15, 0.7, dens));
+        lit += tint * lights * uNightLights * (0.55 + 0.75 * dens);
+      }
     }
   }
 
