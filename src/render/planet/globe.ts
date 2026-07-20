@@ -70,6 +70,12 @@ const _camLocal = new Vector3();
 const _qTmp = new Quaternion();
 const _worldScale = new Vector3();
 
+/** smoothstep(0,1,t) — storm birth/death easing, so they never pop. */
+function smoothstep01(t: number): number {
+  const x = Math.min(1, Math.max(0, t));
+  return x * x * (3 - 2 * x);
+}
+
 export class PlanetGlobe {
   readonly root = new Group();
   params: PlanetRenderParams; // mutable: the lab re-derives + refreshes uniforms live
@@ -97,7 +103,7 @@ export class PlanetGlobe {
   private cloudClock = 0;                       // raw seconds; shader scales by uCloudSpeed
   private plateField: PlateField | null = null; // cached exact land field for storm gating
   private cycRng: (() => number) | null = null;
-  private cycStorms: { lon: number; lat: number; drift: number; born: number }[] = [];
+  private cycStorms: { lon: number; lat: number; drift: number; born: number; life: number }[] = [];
 
   constructor(
     readonly planet: GenPlanet,
@@ -288,7 +294,7 @@ export class PlanetGlobe {
 
   /** Roll storm candidates (slot parity fixes the hemisphere) until one sits over
    *  open water; keep the wettest candidate if none fully clears. */
-  private spawnStorm(slot: number, bornT: number): { lon: number; lat: number; drift: number; born: number } {
+  private spawnStorm(slot: number, bornT: number): { lon: number; lat: number; drift: number; born: number; life: number } {
     const rng = this.cycRng!;
     let best = { lon: 0, lat: 0.3, drift: 1, g: -1 };
     for (let k = 0; k < 12; k++) {
@@ -299,7 +305,10 @@ export class PlanetGlobe {
       if (g > best.g) best = { lon, lat, drift, g };
       if (g >= 0.6) break;
     }
-    return { lon: best.lon, lat: best.lat, drift: best.drift, born: bornT };
+    // Staggered lifespans so the three storms never grow and die in lockstep —
+    // that synchrony reads as the whole storm system blinking at once.
+    const life = 16 + 10 * rng() + slot * 3;
+    return { lon: best.lon, lat: best.lat, drift: best.drift, born: bornT, life };
   }
 
   /** Per-frame: drift each storm westward, gate it against the live coastline,
@@ -314,14 +323,20 @@ export class PlanetGlobe {
       let str = 0, x = 0, y = 0, z = 1;
       if (p.cyclones > 0) {
         let s = this.cycStorms[i];
-        let lon = s.lon - (T - s.born) * 0.03 * s.drift; // westward drift on the weather clock
-        let gate = this.stormGate(lon, s.lat);
-        if (gate < 0.03 && T - s.born > 2) { // fully dead over land → respawn over fresh ocean
-          s = this.cycStorms[i] = this.spawnStorm(i, T);
-          lon = s.lon; gate = this.stormGate(lon, s.lat);
-        }
-        const fadeIn = Math.min(1, (T - s.born) * 0.25);
-        str = p.cyclones * gate * fadeIn * Math.sign(s.lat);
+        // Fixed LIFECYCLE rather than an ad-hoc respawn test. The old rule
+        // ("respawn once the gate is low and age > 2") thrashed: the guard was
+        // shorter than the 4-unit fade-in, so a storm sitting over a poor gate
+        // could respawn before it had ever become visible — flicker. A storm
+        // now lives a set span, and only respawns when that span is up.
+        if (T - s.born >= s.life) s = this.cycStorms[i] = this.spawnStorm(i, T);
+        const age = T - s.born;
+        const lon = s.lon - age * 0.03 * s.drift;   // westward drift
+        const gate = this.stormGate(lon, s.lat);    // smooth landfall decay
+        // Smooth birth AND death, so storms grow and dissipate instead of
+        // popping in and out at a new location.
+        const grow = smoothstep01(age / 3.5);
+        const fade = 1 - smoothstep01((age - (s.life - 3.5)) / 3.5);
+        str = p.cyclones * gate * grow * fade * Math.sign(s.lat);
         const cl = Math.sqrt(Math.max(1 - s.lat * s.lat, 0));
         x = Math.cos(lon) * cl; y = s.lat; z = Math.sin(lon) * cl;
       }
@@ -373,6 +388,9 @@ export class PlanetGlobe {
    *  the shader params + plate field change; callers re-apply the bake if active. */
   reseed(seed: number): void {
     this.seed = seed >>> 0;
+    // A new seed IS a new world: storms and their RNG stream must re-derive.
+    // (refreshParams deliberately does not do this — see the note there.)
+    this.cycStorms = []; this.cycRng = null;
     this.refreshParams();
   }
 
@@ -428,7 +446,12 @@ export class PlanetGlobe {
       }
       // Storm placement depends on the (possibly retuned) terrain and seed —
       // drop the cached field, storms, and rng so everything re-derives fresh.
-      this.plateField = null; this.cycStorms = []; this.cycRng = null;
+      // Drop the cached plate field so storm gating re-derives against the new
+      // terrain — but DO NOT wipe the storms themselves. Every slider now
+      // live-updates, so wiping here made each slider tick destroy all storms
+      // and restart their fade-in from zero: they flashed on and off while
+      // tuning. Existing storms simply re-gate against the new terrain.
+      this.plateField = null;
       u.uSeaLevel.value = p.seaLevel;
       (u.uOceanShallow.value as Vector3).set(...p.oceanShallow);
       (u.uOceanDeep.value as Vector3).set(...p.oceanDeep);
