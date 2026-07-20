@@ -1,6 +1,13 @@
 // ═══════════════════════════════════════════════════════════════════
 // GLSL CHUNKS — the noise vocabulary shared by every planet shader
 //
+// ⚠ NEVER put a backtick in a comment below this line. Every chunk in this file
+//   lives inside a TypeScript template literal, so a stray backtick — even in
+//   GLSL comment prose, e.g. quoting an identifier — terminates the string and
+//   produces a baffling TS1005 parse error dozens of lines away. This has cost
+//   real debugging time four separate times (2026-07-14, -15, -19 x2). Quote
+//   identifiers as plain words instead.
+//
 // procedural-planet-research.md §2: fBm (continents), ridged multifractal
 // (mountains), domain warp (organic coastlines). One canonical 3D simplex noise
 // (Ashima / webgl-noise, public domain) underlies all of it, so terrain is a
@@ -312,10 +319,33 @@ uniform float uLatitudeIce;   // polar-cap EXTENT — drives the cap MASS below 
 // Polar cap coverage 0..1 for a direction — ONE source for both the ice MASS in
 // terrainHeight and the ice COLOUR in the fragment, so they can never disagree.
 // The edge is noise-broken (jagged shelf margin, not a ruled latitude circle).
-float iceCap(vec3 dir){
+// Ice-sheet coverage 0..1. The margin is deliberately UNEVEN: a single octave
+// of edge noise only wobbles a circle, which is what made the caps read as even
+// discs. Real ice sheets are asymmetric for three physical reasons, all cheap:
+//
+//  · MULTI-SCALE MARGIN — continental lobes, bays between them, and fine
+//    crenellation. Ice sheets have structure at every scale, not one.
+//  · ALTITUDE — highlands hold ice far equatorward of the plains around them.
+//    This is the strongest asymmetry after latitude: it is why Greenland's
+//    interior is ice while its coast is not, and why equatorial mountains carry
+//    glaciers at all.
+//  · CURRENT ASYMMETRY — warm water keeps one flank ice-free far poleward while
+//    the opposite flank freezes much further equatorward. Norway and Labrador
+//    sit at the same latitude and look nothing alike.
+//
+// The h argument is the pre-cap surface height, so the altitude term reads the
+// ground the ice is actually sitting on.
+float iceCap(vec3 dir, float h){
   if (uLatitudeIce <= 0.0) return 0.0;
-  float edgeNoise = fbm(dir * 5.0 + uNoiseSeed) * 0.07;
-  return smoothstep(0.0, 0.12, abs(dir.y) + edgeNoise - (1.0 - uLatitudeIce * 0.55));
+  float al = abs(dir.y);
+  float lobes = fbm(dir * 1.6 + uNoiseSeed * 0.4) * 0.15;   // continental lobes
+  float bays  = fbm(dir * 5.0 + uNoiseSeed) * 0.07;         // bays / outlet gaps
+  float fine  = snoise(dir * 15.0 + uNoiseSeed * 2.3) * 0.022;
+  float alt   = 0.30 * clamp((h - uSeaLevel) * 1.6, 0.0, 1.0);
+  float current = 0.055 * sin(atan(dir.z, dir.x) + uNoiseSeed.x * 2.0)
+                * smoothstep(0.25, 0.75, al);                // only bites at depth
+  float line = 1.0 - uLatitudeIce * 0.55;
+  return smoothstep(0.0, 0.12, al + lobes + bays + fine + alt + current - line);
 }
 
 
@@ -398,7 +428,9 @@ float finishHeight(float base, vec3 dir){
   // Polar ice-cap MASS: beyond the (noise-broken) cap line the surface rises to a
   // solid shelf plateau above sea level — frozen ocean kilometres deep forming a
   // land-like mass, not just a white tint. Land under the cap keeps its relief.
-  float cap = iceCap(dir);
+  // Pass the PRE-cap height so the altitude term reads the ground the ice is
+  // sitting on, not the plateau the cap is about to create.
+  float cap = iceCap(dir, h);
   if (cap > 0.0) h = mix(h, max(h, uSeaLevel + 0.14), cap);
   return clamp(h, 0.0, 1.0);
 }
