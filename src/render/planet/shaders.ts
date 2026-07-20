@@ -143,7 +143,7 @@ void main(){
     // The shelf plateau flattens the eroded relief, but NOT to nothing: an ice
     // sheet drapes over the ground it buries, so ridges and valleys still show
     // optically through the surface. Keep ~30% of the gradient under the cap.
-    grad *= mix(1.0, 0.30, iceCap(dir));
+    grad *= mix(1.0, 0.30, iceCap(dir, vHeight));
     vec3 up = abs(dir.y) < 0.99 ? vec3(0.0,1.0,0.0) : vec3(1.0,0.0,0.0);
     vec3 t = normalize(cross(up, dir));
     vec3 b = cross(dir, t);
@@ -228,7 +228,7 @@ void main(){
     // 2. The ice is not opaque paint: a fraction of the ground below still
     //    modulates it, so ridges and valleys read THROUGH the sheet rather than
     //    vanishing under flat white.
-    float cap = iceCap(dir);
+    float cap = iceCap(dir, vHeight);
     float frost = 0.6 * smoothstep(0.85, 0.97, hh);
     float iceAmt = max(cap, frost);
     if (iceAmt > 0.001){
@@ -296,7 +296,7 @@ void main(){
       float lat2 = abs(dir.y);
       livable *= 1.0 - 0.93 * smoothstep(0.80, 0.97, lat2);
       float H = clamp((0.42 * coast + 0.26 * lowland + 0.54 * fertile) * livable, 0.0, 1.0);
-      H *= land * (1.0 - iceCap(dir));
+      H *= land * (1.0 - iceCap(dir, vHeight));
       // Metro cores + surrounding towns, both gated by habitability.
       // Sharp falloff is what makes this read as CITIES rather than a glowing
       // landmass: population density is strongly non-linear in habitability, so
