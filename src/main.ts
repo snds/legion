@@ -102,6 +102,7 @@ import { activeDemoId, demoById, HERO_BLACKHOLE_ABS } from './render/demos';
 import { activeLabId } from './ui/labs';
 import { createPlanetLab, type PlanetLabHandle } from './render/planet/planet-lab';
 import { createApproachPlanet, type ApproachPlanet } from './render/planet/approach';
+import { installPerfCapture } from './render/perf-capture';
 import { initDemoMenu } from './ui/demo-menu';
 import { PlanetState, Identity, EntityType, BobState, Personality, StarSystem } from './core/components';
 
@@ -920,8 +921,10 @@ async function boot(): Promise<void> {
 
   // ── Profiling baseline (stats-gl): GPU ms via EXT_disjoint_timer_query_webgl2.
   // Opt-in so the live demo stays clean: enabled in dev or with ?stats in the URL.
+  // ?perfcapture claims the single TIME_ELAPSED query slot — stats-gl can't coexist, so it wins.
   const showStats =
-    import.meta.env.DEV || new URLSearchParams(location.search).has('stats');
+    (import.meta.env.DEV || new URLSearchParams(location.search).has('stats')) &&
+    !new URLSearchParams(location.search).has('perfcapture');
   if (showStats) {
     try {
       const { default: Stats } = await import('stats-gl');
@@ -933,6 +936,20 @@ async function boot(): Promise<void> {
     } catch (err) {
       console.warn('[Legion] stats-gl unavailable:', err);
     }
+  }
+
+  // ── GPU profiling / close-planet capture harness (?perfcapture) — additive, off by default.
+  //    CAPTURE mode needs ?demo=approach (worst-case ocean world); mutually exclusive with stats-gl
+  //    (gated above). Installed last so the composer pass list is final (lens flare inserted at :200).
+  if (new URLSearchParams(location.search).has('perfcapture')) {
+    installPerfCapture({
+      renderer: renderCtx.renderer,
+      postCtx,
+      planetRoot: approach?.root ?? null,
+      globe: approach?.globe ?? null,
+      freezeSim: () => Game.setTimeSpeed(0),
+      onViewport: (w, h) => updateOrbitLineResolution(w, h),
+    });
   }
 
   // Start the loop
