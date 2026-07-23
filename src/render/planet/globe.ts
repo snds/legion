@@ -100,6 +100,7 @@ export class PlanetGlobe {
   private useBake = false;
   private bakeWorker: Worker | null = null; // in-flight async height bake (see bakeAsync)
   private bakePending = false;
+  private bakeAuto = true;  // cleared once setBaked() takes manual control
   private seed: number; // mutable so the lab can reseed IN PLACE (keep the root)
   private spinPaused = false; // lab: stop the auto-spin to hand-turn the subject
 
@@ -397,7 +398,7 @@ export class PlanetGlobe {
    */
   bakeAsync(params: Partial<BakeParams> = {}): void {
     if (this.params.isGiant || !this.surfaceMat) return;
-    if (this.useBake || this.bakePending) return;
+    if (!this.bakeAuto || this.useBake || this.bakePending) return;
     // Headless/test/SSR contexts have no Worker — stay on the live analytic path
     // rather than throwing out of the per-frame update.
     if (typeof Worker === 'undefined') return;
@@ -428,8 +429,15 @@ export class PlanetGlobe {
     worker.postMessage(req);
   }
 
-  /** Toggle between the baked master and the live analytic terrain. */
+  /** Toggle between the baked master and the live analytic terrain. Taking manual
+   *  control (lab, profiling harness) stands the auto-bake down for good — otherwise
+   *  an in-flight worker would flip a deliberately-live view back to baked mid-run
+   *  and silently corrupt an A/B measurement. */
   setBaked(on: boolean, params: Partial<BakeParams> = {}): void {
+    this.bakeAuto = false;
+    this.bakeWorker?.terminate();
+    this.bakeWorker = null;
+    this.bakePending = false;
     if (on) { this.bake(params); return; }
     this.useBake = false;
     if (this.surfaceMat) this.surfaceMat.uniforms.uUseBake.value = 0;
