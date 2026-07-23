@@ -386,6 +386,7 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
         slider('Weather speed', 'cloudSpeed', 0, 1, 0.005),
         slider('Wispiness', 'cloudWisp', 0, 1, 0.01),
         slider('Clear regions', 'cloudRegion', 0, 1, 0.01),
+        slider('Lightning', 'lightning', 0, 2, 0.01),
       ],
     }, {
       title: 'Atmosphere', key: 'lab-atmos', ctrls: [
