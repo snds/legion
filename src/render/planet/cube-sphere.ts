@@ -114,6 +114,38 @@ export interface SelectParams {
   readonly detail: number;
   /** Hard cap on subdivision depth (system-zoom never needs deep trees). */
   readonly maxLevel: number;
+  /** Cull whole subtrees that fall entirely behind the planet's horizon (hidden by
+   *  the body). Off by default so existing callers/tests keep the full-sphere set. */
+  readonly cullHorizon?: boolean;
+  /** Max terrain elevation as a fraction of `radius` (≈ displacement/2). Only used
+   *  when `cullHorizon`; pushes the horizon out so a peak near the limb is never
+   *  wrongly culled. */
+  readonly maxElevation?: number;
+}
+
+/**
+ * True when a node lies ENTIRELY beyond the camera's horizon on the sphere — hidden
+ * behind the planet body and unable to touch the visible silhouette, so skipping it
+ * changes nothing on screen. Conservative by construction: a node is only reported
+ * hidden when its NEAREST point (centre angle minus the node's angular radius) is
+ * past the horizon, and the horizon is pushed outward by `maxElevation` so a mountain
+ * peak near the limb survives. The rule errs toward keeping patches, never dropping a
+ * visible one — the failure the old code avoided by disabling frustum culling wholesale.
+ */
+export function nodeBelowHorizon(
+  n: QuadNode, camLocal: Vec3, radius: number, maxElevation = 0,
+): boolean {
+  const d = Math.sqrt(camLocal[0] * camLocal[0] + camLocal[1] * camLocal[1] + camLocal[2] * camLocal[2]);
+  if (d <= radius) return false; // camera at/inside the surface → the whole sphere is potentially visible
+  const inv = 1 / d;
+  const cx = camLocal[0] * inv, cy = camLocal[1] * inv, cz = camLocal[2] * inv;
+  const nc = nodeCenterDir(n);
+  const cosCenter = Math.max(-1, Math.min(1, nc[0] * cx + nc[1] * cy + nc[2] * cz));
+  const angleCenter = Math.acos(cosCenter);
+  // Horizon half-angle from the sub-camera point, widened by the tallest terrain.
+  const thetaHorizon = Math.acos(Math.min(1, radius / d));
+  const elevSlop = Math.acos(Math.min(1, 1 / (1 + Math.max(0, maxElevation))));
+  return angleCenter - nodeAngularRadius(n) > thetaHorizon + elevSlop;
 }
 
 /**
@@ -126,6 +158,10 @@ export interface SelectParams {
 export function selectFace(face: number, p: SelectParams): QuadNode[] {
   const out: QuadNode[] = [];
   const walk = (n: QuadNode): void => {
+    // Prune whole subtrees hidden behind the horizon before spending split work on
+    // them — this is what removes the far hemisphere (and, at close zoom, most of
+    // the near one) from the ~12k-leaf close-approach set.
+    if (p.cullHorizon && nodeBelowHorizon(n, p.camLocal, p.radius, p.maxElevation ?? 0)) return;
     if (n.level >= p.maxLevel || !shouldSplit(n, p)) {
       out.push(n);
       return;

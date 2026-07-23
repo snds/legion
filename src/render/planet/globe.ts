@@ -688,6 +688,11 @@ export class PlanetGlobe {
         const sel = selectSphere({
           camLocal: [_camLocal.x, _camLocal.y, _camLocal.z] as Vec3,
           radius: this.radius, detail: DETAIL, maxLevel: MAX_LEVEL,
+          // Skip leaves hidden behind the planet body. Slop = tallest terrain
+          // (displacement raises the surface by up to displacement/2) + a small
+          // margin for the approximate node angular radius, so limb peaks survive.
+          cullHorizon: true,
+          maxElevation: this.params.displacement * 0.5 + 0.01,
         });
         this.rebuildQuadtree(sel);
         setSun(this.surfaceMat, sunDir);

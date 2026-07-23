@@ -1,10 +1,45 @@
 import { describe, it, expect } from 'vitest';
 import {
   CUBE_FACES, facePoint, cubeToSphere, rootNode, childNodes, nodeId,
-  nodeCenterDir, selectFace, selectSphere, type Vec3,
+  nodeCenterDir, selectFace, selectSphere, nodeBelowHorizon, type Vec3,
 } from './cube-sphere';
 
 const len = (v: Vec3): number => Math.hypot(v[0], v[1], v[2]);
+
+describe('horizon culling', () => {
+  // Camera just above the +X face centre (radius 1, camera at 1.1 out).
+  const radius = 1;
+  const camLocal: Vec3 = [1.1, 0, 0];
+
+  it('reports the antipodal face root as below the horizon, the sub-camera root as visible', () => {
+    expect(nodeBelowHorizon(rootNode(1), camLocal, radius)).toBe(true);  // -X, hidden behind the body
+    expect(nodeBelowHorizon(rootNode(0), camLocal, radius)).toBe(false); // +X, straight ahead
+  });
+
+  it('never culls when the camera is at or inside the surface', () => {
+    for (let f = 0; f < 6; f++) {
+      expect(nodeBelowHorizon(rootNode(f), [1, 0, 0], radius)).toBe(false);
+      expect(nodeBelowHorizon(rootNode(f), [0.5, 0, 0], radius)).toBe(false);
+    }
+  });
+
+  it('cullHorizon shrinks the leaf set but never empties the visible cap', () => {
+    const base = { camLocal, radius, detail: 0.02, maxLevel: 6 } as const;
+    const full = selectSphere(base);
+    const culled = selectSphere({ ...base, cullHorizon: true });
+    expect(culled.length).toBeGreaterThan(0);
+    expect(culled.length).toBeLessThan(full.length);
+    // Every surviving leaf's nearest point is within the horizon (nothing fully hidden survives).
+    for (const n of culled) expect(nodeBelowHorizon(n, camLocal, radius)).toBe(false);
+  });
+
+  it('elevation slop keeps more leaves (a taller planet culls less)', () => {
+    const base = { camLocal, radius, detail: 0.02, maxLevel: 6, cullHorizon: true } as const;
+    const flat = selectSphere({ ...base, maxElevation: 0 }).length;
+    const tall = selectSphere({ ...base, maxElevation: 0.06 }).length;
+    expect(tall).toBeGreaterThanOrEqual(flat);
+  });
+});
 
 describe('cube→sphere mapping', () => {
   it('maps every face sample onto the unit sphere', () => {
