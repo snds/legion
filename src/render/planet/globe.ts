@@ -98,6 +98,7 @@ export class PlanetGlobe {
   private atlasTex: DataTexture | null = null; // stacked 6-face eroded height atlas
   private useBake = false;
   private seed: number; // mutable so the lab can reseed IN PLACE (keep the root)
+  private spinPaused = false; // lab: stop the auto-spin to hand-turn the subject
 
   // ── CPU weather: cyclone placement/lifecycle (ocean-gated, respawning) ──
   private cloudClock = 0;                       // raw seconds; shader scales by uCloudSpeed
@@ -641,9 +642,22 @@ export class PlanetGlobe {
     }
   }
 
+  /** Pause/resume the automatic daily spin (the lab lets you stop and hand-turn
+   *  the subject). */
+  setSpinPaused(p: boolean): void { this.spinPaused = p; }
+  get isSpinPaused(): boolean { return this.spinPaused; }
+
+  /** Hand-rotate the subject: yaw turns it about its own axis (longitude), pitch
+   *  tips the pole toward/away (latitude). Applied in the spin/tilt frames so it
+   *  composes with the axial tilt already there. */
+  nudgeRotation(yaw: number, pitch: number): void {
+    if (yaw) this.spinGroup.rotateY(yaw);
+    if (pitch) this.tiltGroup.rotateX(pitch);
+  }
+
   // ── per-frame update ────────────────────────────────────────────────
   update(ctx: UpdateCtx): void {
-    this.spinGroup.rotateY(this.spinRate * ctx.dt);
+    if (!this.spinPaused) this.spinGroup.rotateY(this.spinRate * ctx.dt);
 
     this.root.getWorldPosition(_planetWorld);
     this.root.getWorldScale(_worldScale);
