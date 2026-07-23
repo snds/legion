@@ -893,6 +893,18 @@ async function boot(): Promise<void> {
     // the galactic tier's floating origin like the streamed sectors.
     if (!inLab) blackHole.update(renderCtx.renderer, camera, renderCtx.renderer.domElement.height);
 
+    // Lab framing: the control panel is docked over the right of the screen, so
+    // pan the camera LEFT by half the panel width — a pure horizontal frustum
+    // shift (width == fullWidth ⇒ no zoom), updated each frame from the live
+    // --lab-dock-w so it tracks the panel opening/collapsing. The subject then
+    // centres in the VISIBLE area instead of hiding behind the panel.
+    if (inLab) {
+      const dockW = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--lab-dock-w')) || 0;
+      const vw = window.innerWidth, vh = window.innerHeight;
+      if (dockW > 1) camera.setViewOffset(vw, vh, dockW / 2, 0, vw, vh);
+      else camera.clearViewOffset();
+    }
+
     // 10. Render (post-processing pipeline) — bounded shader clock
     postCtx.render(shaderTime);
 

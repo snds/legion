@@ -54,6 +54,25 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
   const globes = new Map<PlanetVisualType, PlanetGlobe>();
 
   let selected: PlanetVisualType = 'ocean';
+  // View: auto-spin on by default; arrow keys hand-turn the subject either way.
+  let autoRotate = true;
+  const setAutoRotate = (on: boolean): void => {
+    autoRotate = on;
+    for (const g of globes.values()) g.setSpinPaused(!on);
+  };
+  const onKey = (e: KeyboardEvent): void => {
+    if (e.target instanceof HTMLInputElement) return; // don't hijack slider text entry
+    const step = e.shiftKey ? 0.09 : 0.035;
+    let yaw = 0, pitch = 0;
+    if (e.key === 'ArrowLeft') yaw = step;
+    else if (e.key === 'ArrowRight') yaw = -step;
+    else if (e.key === 'ArrowUp') pitch = -step;
+    else if (e.key === 'ArrowDown') pitch = step;
+    else return;
+    e.preventDefault();
+    globes.get(selected)?.nudgeRotation(yaw, pitch);
+  };
+  window.addEventListener('keydown', onKey);
   let variant = 'terran'; // habitable-world climate state (ocean archetype)
   const systemic: SystemicState = { ...DEFAULT_SYSTEMIC };
   // Offset model (see variants.ts): these hold what the dials LAST computed for
@@ -96,6 +115,7 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
     globes.clear();
     build(selected);
     globes.get(selected)?.setBaked(baked[selected], bakeParams);
+    globes.get(selected)?.setSpinPaused(!autoRotate); // preserve the pause state across rebuilds
   };
 
   // ── COMPLETE lab persistence ─────────────────────────────────────────
@@ -187,6 +207,12 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
     // Single-example gallery: pick which archetype to view + edit in isolation.
     // Switching mounts only that world (mountSelected) and re-renders the panel
     // (giant vs surface sections differ).
+    const viewSel: LabSection = {
+      title: 'View', key: 'lab-view', ctrls: [
+        { kind: 'toggle', label: 'Auto-rotate', get: () => autoRotate, set: (v) => setAutoRotate(v) },
+        { kind: 'info', label: 'Turn', get: () => 'Arrow keys · Shift = faster' },
+      ],
+    };
     const typeSel: LabSection = {
       title: 'Archetype', key: 'lab-archetype',
       ctrls: [{
@@ -233,7 +259,7 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
       }],
     };
     if (giant) {
-      return [typeSel, {
+      return [typeSel, viewSel, {
         title: 'Cloud bands', key: 'lab-bands', ctrls: [
           slider('Band count', 'bandCount', 0, 24, 1),
           slider('Turbulence', 'bandTurbulence', 0, 1.5, 0.01),
@@ -279,7 +305,7 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
       ],
     };
     // Climate states are authored for the ocean archetype (habitable worlds).
-    return [typeSel, ...(selected === 'ocean' ? [variantSel] : []), worldSel, {
+    return [typeSel, viewSel, ...(selected === 'ocean' ? [variantSel] : []), worldSel, {
       title: 'Tectonics', key: 'lab-tectonics', ctrls: [
         macroSlider('Plates', 'plateCount', 3, 48, 1),
         macroSlider('Continents', 'continents', 1, 8, 1),
@@ -427,6 +453,7 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
       for (const g of globes.values()) g.update(full);
     },
     dispose() {
+      window.removeEventListener('keydown', onKey);
       for (const g of globes.values()) { parent.remove(g.root); g.dispose(); }
       globes.clear();
       panel.destroy();
