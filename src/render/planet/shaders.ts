@@ -225,8 +225,17 @@ void main(){
     // temperature threshold, so it tracks mountains AND latitude) and the bare
     // altitude ramp shows through above it.
     vec3 wdirC = warpedDir(dir);
-    moist = climateMoisture(dir, wdirC, hh);
-    temp = climateTemp(dir, hh);
+    // BIOME altitude reads the SMOOTH analytic macro height, never the per-texel
+    // baked vHeight. A baked-atlas seam at a quadtree-leaf boundary is a tiny
+    // height step on its own, but the lapse-rate term amplifies it: it crosses
+    // the treeline and flips the biome to bare ground along the leaf's straight
+    // edges (the hexagonal tan patch, 2026-07-22). Colour follows the broad
+    // terrain shape; the baked relief still drives the ramp, normals and
+    // displacement, so nothing else is lost. plateMacro is dir-based and
+    // continuous, so baked and unbaked biomes now match exactly.
+    float bh = clamp((plateMacro(wdirC) - uSeaLevel) / max(1.0 - uSeaLevel, 1e-3), 0.0, 1.0);
+    moist = climateMoisture(dir, wdirC, bh);
+    temp = climateTemp(dir, bh);
     float cover = smoothstep(uTreeline - 0.06, uTreeline + 0.10, temp)  // treeline / alpine
                 * (0.35 + 0.65 * smoothstep(0.05, 0.35, moist));        // bare rock where truly arid
     albedo = mix(albedo, biomeColor(temp, moist), cover * uLushDepth);
@@ -283,6 +292,15 @@ void main(){
   vec3 lit = albedo * (0.05 + 0.95 * day * max(ndl, 0.0) * cshadow);
   lit += spec * (1.0 - uRoughness) * vec3(1.0) * cshadow;
 
+  // Lightning UNDER-GLOW: the cell directly overhead (radially out) throws a
+  // faint blue-white flash down onto the ground. Reuses the same lightningFlash
+  // and clock as the cloud shell, so the ground flickers in step with the bolt
+  // above it. Night-side only — daylight drowns it.
+  if (uLightning > 0.0){
+    float bolt = lightningFlash(dir, cloudDensity(dir));
+    lit += vec3(0.45, 0.58, 0.9) * bolt * 0.35 * (1.0 - day);
+  }
+
   // Lava emissive (glows in the low cracks, brightest on the night side).
   if (uEmissiveStrength > 0.0){
     float glow = smoothstep(uSeaLevel + 0.1, uSeaLevel - 0.1, vHeight);
@@ -310,16 +328,25 @@ void main(){
       // Temperate gate: settlement needs meaningfully warm ground, and the very
       // hottest ground is also thinner (equatorial deserts / deep jungle).
       float livable = smoothstep(0.26, 0.55, temp) * (1.0 - 0.35 * smoothstep(0.86, 1.0, temp));
-      // Explicit POLAR falloff on top of temperature. Earth's population density
-      // collapses past ~60 deg: there are real cities at 55-60 (Oslo, Stockholm,
-      // St Petersburg) but almost nothing above 70 — the Arctic coast is a
-      // handful of settlements, not a lit band. Temperature alone was too
-      // permissive because the biome curve still reads 60 deg as habitable
-      // taiga, which is true for TREES and not for cities.
-      float lat2 = abs(dir.y);
-      livable *= 1.0 - 0.93 * smoothstep(0.80, 0.97, lat2);
+      // Harsh-environment thinning — the poles, the ice-cap fringe, and large
+      // deserts are all the same story: people still live there, but density and
+      // volume are a fraction of the temperate norm. Each penalty FLOORS at a
+      // trace rather than going dark, so these regions show a sparse scatter of
+      // lights (Arctic ports, desert oasis towns) instead of a black void.
+      //
+      //  · cold      — falls with temperature, so it thins toward the poles AND
+      //                up mountains (always active; temp needs no other uniform).
+      //  · capNear   — the closer to permanent ice/snow, the sparser; and because
+      //                the snow line tracks the caps, this band GROWS as the caps
+      //                grow, so a glacial world's mid-latitudes depopulate too.
+      //  · arid      — true desert keeps only scattered settlement.
+      float cold    = mix(0.05, 1.0, smoothstep(0.16, 0.44, temp));
+      float capNear = mix(0.05, 1.0, 1.0 - smoothstep(0.02, 0.45,
+                          iceCap(dir, vHeight) + snowCover(temp, uLatitudeIce)));
+      float arid    = mix(0.10, 1.0, smoothstep(0.12, 0.42, moist));
+      livable *= cold * capNear * arid;
       float H = clamp((0.42 * coast + 0.26 * lowland + 0.54 * fertile) * livable, 0.0, 1.0);
-      H *= land * (1.0 - iceCap(dir, vHeight));
+      H *= land;
       // Metro cores + surrounding towns, both gated by habitability.
       // Sharp falloff is what makes this read as CITIES rather than a glowing
       // landmass: population density is strongly non-linear in habitability, so
@@ -384,13 +411,23 @@ uniform float uTerminator;
 varying vec3  vDir;
 varying vec3  vWorldNormal;
 void main(){
-  float dcl = cloudDensity(normalize(vDir));
+  vec3 cd = normalize(vDir);
+  float dcl = cloudDensity(cd);
   if (dcl <= 0.004) discard;
   vec3 N = normalize(vWorldNormal);
   float ndl = dot(N, uSunDir);
   float day = smoothstep(-uTerminator, uTerminator, ndl);
   vec3 col = vec3(1.0) * (0.08 + 0.92 * day * max(ndl, 0.0));
-  gl_FragColor = vec4(col, dcl * 0.85);
+  float a = dcl * 0.85;
+  // Lightning lights the cloud from within: a blue-white flash added to the
+  // colour AND to the opacity, so a dark night-side storm cell briefly glows
+  // and the bolt reads as happening inside the cloud rather than on top of it.
+  float bolt = lightningFlash(cd, dcl);
+  if (bolt > 0.001){
+    col += vec3(0.72, 0.82, 1.0) * bolt * 1.7;
+    a = clamp(a + bolt * 0.55, 0.0, 1.0);
+  }
+  gl_FragColor = vec4(col, a);
 }
 `;
 

@@ -200,6 +200,7 @@ export class PlanetGlobe {
         uCycSize: { value: p.cycloneSize },
         uCycPos: { value: [new Vector3(0, 0, 1), new Vector3(0, 0, 1), new Vector3(0, 0, 1)] },
         uCycStr: { value: [0, 0, 0] },
+        uLightning: { value: p.lightning },
         uCloudTime: { value: 0 },
         uSunDirObj: { value: new Vector3(0, 0, 1) },
         // Baked master (Phase 3): ONE stacked atlas (res × 6·res); the leaf picks
@@ -443,6 +444,7 @@ export class PlanetGlobe {
         cm.uCloudWisp.value = p.cloudWisp;
         cm.uCloudRegion.value = p.cloudRegion;
         cm.uCycSize.value = p.cycloneSize;
+        cm.uLightning.value = p.lightning;
         (cm.uNoiseSeed.value as Vector3).set(...p.noiseSeed);
       }
       // Storm placement depends on the (possibly retuned) terrain and seed —
@@ -464,6 +466,7 @@ export class PlanetGlobe {
       u.uAltitudeDry.value = p.altitudeDry; u.uPatchiness.value = p.patchiness;
       u.uLushDepth.value = p.lushDepth;
       u.uSnowfall.value = p.snowfall;
+      u.uLightning.value = p.lightning;
       (u.uEmissive.value as Vector3).set(...p.emissive); u.uEmissiveStrength.value = p.emissiveStrength;
       u.uNightLights.value = p.nightLights; u.uTerminator.value = p.hasAtmosphere ? 0.1 : 0.03;
       (u.uAtmosTint.value as Vector3).set(...p.atmosphere);
@@ -543,6 +546,7 @@ export class PlanetGlobe {
         uCycSize: { value: p.cycloneSize },
         uCycPos: { value: [new Vector3(0, 0, 1), new Vector3(0, 0, 1), new Vector3(0, 0, 1)] },
         uCycStr: { value: [0, 0, 0] },
+        uLightning: { value: p.lightning },
         uCloudTime: { value: 0 },
         // plateMacro inputs (orographic/climate coupling samples the real terrain)
         ...this.plateUniforms(),
