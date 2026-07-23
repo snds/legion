@@ -33,6 +33,7 @@ import {
 } from './plates';
 import { warpDir } from './simplex';
 import { bakeCube, type BakeParams } from './bake';
+import type { BakeRequest, BakeResponse } from './bake-worker';
 import { generateRings, densityLUT, type RingSystem } from './rings';
 import { channel, range } from './rng';
 import { stageForPx, apparentRadiusPx, dotBrightness, LodStage } from './lod';
@@ -97,6 +98,8 @@ export class PlanetGlobe {
   private readonly nodeGeoCache = new Map<string, BufferGeometry>();
   private atlasTex: DataTexture | null = null; // stacked 6-face eroded height atlas
   private useBake = false;
+  private bakeWorker: Worker | null = null; // in-flight async height bake (see bakeAsync)
+  private bakePending = false;
   private seed: number; // mutable so the lab can reseed IN PLACE (keep the root)
   private spinPaused = false; // lab: stop the auto-spin to hand-turn the subject
 
@@ -362,11 +365,17 @@ export class PlanetGlobe {
     // Warp the bake with the SAME simplex + noiseSeed the live shader uses, so a
     // baked world's coasts/ranges land exactly where the live view drew them.
     const cube = bakeCube(this.seed, this.params.type, params, this.params.warp, this.params.noiseSeed);
-    const res = cube.res;
+    this.applyBakedCube(cube.res, cube.faces);
+  }
+
+  /** Upload a baked 6-face height set as the atlas and switch the shader onto the
+   *  baked branch. Shared by the synchronous `bake()` (lab) and the worker path. */
+  private applyBakedCube(res: number, faces: readonly Float32Array[]): void {
+    if (!this.surfaceMat) return;
     // Stack the 6 faces vertically into one atlas (res wide × 6·res tall); face f
     // owns rows [f·res, (f+1)·res). The shader maps (aFace, faceUV) into it.
     const atlas = new Float32Array(res * res * 6);
-    for (let f = 0; f < 6; f++) atlas.set(cube.faces[f], f * res * res);
+    for (let f = 0; f < 6; f++) atlas.set(faces[f], f * res * res);
     this.atlasTex?.dispose();
     const tex = new DataTexture(atlas as Float32Array<ArrayBuffer>, res, res * 6, RedFormat, FloatType);
     tex.minFilter = tex.magFilter = LinearFilter;
@@ -377,6 +386,46 @@ export class PlanetGlobe {
     this.surfaceMat.uniforms.uHeightRes.value = res;
     this.useBake = true;
     this.surfaceMat.uniforms.uUseBake.value = 1;
+  }
+
+  /**
+   * Kick the height bake onto a WORKER, keeping the live analytic terrain on screen
+   * until it lands. The bake is ~4 s of CPU at res 256, so it can never run inline —
+   * this is the only way the shipping path gets the baked branch without freezing
+   * the tab. Idempotent (one bake per globe) and safe to fire every frame; the
+   * result is dropped if the globe is disposed while it runs.
+   */
+  bakeAsync(params: Partial<BakeParams> = {}): void {
+    if (this.params.isGiant || !this.surfaceMat) return;
+    if (this.useBake || this.bakePending) return;
+    // Headless/test/SSR contexts have no Worker — stay on the live analytic path
+    // rather than throwing out of the per-frame update.
+    if (typeof Worker === 'undefined') return;
+    let worker: Worker;
+    try {
+      worker = new Worker(new URL('./bake-worker.ts', import.meta.url), { type: 'module' });
+    } catch {
+      return; // worker construction blocked (CSP, unsupported) → live path stands
+    }
+    this.bakePending = true;
+    this.bakeWorker = worker;
+    worker.onmessage = (e: MessageEvent<BakeResponse>): void => {
+      this.bakePending = false;
+      if (this.bakeWorker !== worker) return; // disposed/superseded while baking
+      this.applyBakedCube(e.data.res, e.data.faces);
+      worker.terminate();
+      this.bakeWorker = null;
+    };
+    worker.onerror = (): void => {
+      // Bake failed → stay on the live analytic path. Correct, just costlier.
+      this.bakePending = false;
+      if (this.bakeWorker === worker) { worker.terminate(); this.bakeWorker = null; }
+    };
+    const req: BakeRequest = {
+      seed: this.seed, type: this.params.type, params,
+      warp: this.params.warp, noiseSeed: this.params.noiseSeed,
+    };
+    worker.postMessage(req);
   }
 
   /** Toggle between the baked master and the live analytic terrain. */
@@ -682,6 +731,10 @@ export class PlanetGlobe {
     this.impostorMesh.visible = !near;
 
     if (near) {
+      // First close approach: start the height bake on a worker (once). Until it
+      // lands the live analytic path draws the same image, just costlier — measured
+      // ~231 ms/frame of the close-approach budget that the atlas removes.
+      this.bakeAsync();
       // Refresh quadtree from the camera's position in surface-local space.
       if (this.surfaceMat) {
         this.surfaceGroup.worldToLocal(_camLocal.copy(ctx.camera.position));
@@ -741,6 +794,10 @@ export class PlanetGlobe {
 
   dispose(): void {
     this.root.removeFromParent();
+    // Drop any in-flight bake — its result is meaningless once the globe is gone.
+    this.bakeWorker?.terminate();
+    this.bakeWorker = null;
+    this.bakePending = false;
     for (const g of this.nodeGeoCache.values()) g.dispose();
     this.nodeGeoCache.clear();
     this.atlasTex?.dispose();
