@@ -101,6 +101,7 @@ export class PlanetGlobe {
   private bakeWorker: Worker | null = null; // in-flight async height bake (see bakeAsync)
   private bakePending = false;
   private bakeAuto = true;  // cleared once setBaked() takes manual control
+  private bakeFailed = false; // a failed worker must not respawn every frame
   private seed: number; // mutable so the lab can reseed IN PLACE (keep the root)
   private spinPaused = false; // lab: stop the auto-spin to hand-turn the subject
 
@@ -398,7 +399,7 @@ export class PlanetGlobe {
    */
   bakeAsync(params: Partial<BakeParams> = {}): void {
     if (this.params.isGiant || !this.surfaceMat) return;
-    if (!this.bakeAuto || this.useBake || this.bakePending) return;
+    if (!this.bakeAuto || this.bakeFailed || this.useBake || this.bakePending) return;
     // Headless/test/SSR contexts have no Worker — stay on the live analytic path
     // rather than throwing out of the per-frame update.
     if (typeof Worker === 'undefined') return;
@@ -418,7 +419,9 @@ export class PlanetGlobe {
       this.bakeWorker = null;
     };
     worker.onerror = (): void => {
-      // Bake failed → stay on the live analytic path. Correct, just costlier.
+      // Bake failed → stay on the live analytic path (correct, just costlier) and
+      // DON'T retry: clearing bakePending alone would respawn a worker every frame.
+      this.bakeFailed = true;
       this.bakePending = false;
       if (this.bakeWorker === worker) { worker.terminate(); this.bakeWorker = null; }
     };
@@ -739,10 +742,13 @@ export class PlanetGlobe {
     this.impostorMesh.visible = !near;
 
     if (near) {
-      // First close approach: start the height bake on a worker (once). Until it
-      // lands the live analytic path draws the same image, just costlier — measured
-      // ~231 ms/frame of the close-approach budget that the atlas removes.
-      this.bakeAsync();
+      // NOTE: auto-bake-on-approach is deliberately NOT wired here yet. bakeAsync()
+      // exists and works, but firing it automatically regressed two things:
+      //   1. it overrides the lab's saved per-type `baked` preference, and
+      //   2. refreshParams() does not invalidate the atlas, so once baked, terrain
+      //      param edits silently stop affecting the surface ("my settings are gone").
+      // Wire it back only with: lab opt-out, bake invalidation on param/seed change,
+      // and a single shared bake queue so N globes can't spawn N workers at once.
       // Refresh quadtree from the camera's position in surface-local space.
       if (this.surfaceMat) {
         this.surfaceGroup.worldToLocal(_camLocal.copy(ctx.camera.position));
