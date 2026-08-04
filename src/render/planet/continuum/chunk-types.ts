@@ -192,8 +192,13 @@ export interface HeightfieldChunk {
 export interface ChunkHudStats {
   resident: number;
   pending: number;
+  coverPending: number;
+  warmPending: number;
   building: number;
   byLevel: Record<number, number>;
   tris: number;
+  medianTex: number;
+  coverAgeMs: number;
+  streaming: boolean;
   showChunks: boolean;
 }
