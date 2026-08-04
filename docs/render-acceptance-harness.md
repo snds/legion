@@ -87,6 +87,41 @@ For video recordings rather than PNG sequences, first extract PNG frames with `v
 the corresponding `--frames` command at that extracted directory. Sign the NORTHSTAR rows only when the
 native stills, toolkit outputs, motion extracts, and human scorecards are all present.
 
+## Continuum budget verification pack
+
+Framework #12 gate C for Continuum approach. Pose URLs and pass criteria live in [`BUDGET.md`](../BUDGET.md#continuum-approach-budget-gate-task-8). This section records capture commands only; **author hardware JSON is deferred** (same policy as Task 6 look pack).
+
+| Pose ID | Settled URL (`&perfcapture`) | Intended JSON store |
+|---|---|---|
+| `lab-continuum-0.8au` | `?lab=planet&engine=continuum&perfcapture&au=0.8&w=1280&h=720&dpr=2` | `refs/continuum/perf/lab-continuum-0.8au.json` |
+| `lab-continuum-0.3au` | `?lab=planet&engine=continuum&perfcapture&au=0.3&w=1280&h=720&dpr=2` | `refs/continuum/perf/lab-continuum-0.3au.json` |
+| `lab-continuum-approach` | Zoom 0.8→0.2 AU on `?lab=planet&engine=continuum&w=1280&h=720&dpr=2`; export JSON at each settled stop with `&perfcapture&au=<stop>` | `refs/continuum/perf/lab-continuum-approach.json` (composite notes + hitch log) |
+
+Optional query: `&warmup=90&samples=120`. Copy console JSON or `JSON.stringify(window.__perfCapture, null, 2)` after the harness panel completes.
+
+**Pass (author sign-off):** worst composite ≤ 16.67 ms at 0.8 AU settled; approach hitch frames logged and bounded (no multi-second freeze). Chunk HUD: `coverAgeMs` at `coverPending=0` within SLA under scripted approach.
+
+### Author capture commands (perf JSON)
+
+After saving exported `__perfCapture` JSON to the paths above:
+
+```bash
+cd ~/Projects/Workspace/03-skills/render-qa-toolkit
+python3 qa-suite.py --config configs/legion.yaml --output ~/Projects/Legion/refs/continuum/qa/lab-continuum-0.8au \
+  --perf ~/Projects/Legion/refs/continuum/perf/lab-continuum-0.8au.json \
+  --only frame_budget,pass_attribution
+python3 qa-suite.py --config configs/legion.yaml --output ~/Projects/Legion/refs/continuum/qa/lab-continuum-0.3au \
+  --perf ~/Projects/Legion/refs/continuum/perf/lab-continuum-0.3au.json \
+  --only frame_budget,pass_attribution
+python3 qa-suite.py --config configs/legion.yaml --output ~/Projects/Legion/refs/continuum/qa/lab-continuum-approach \
+  --perf ~/Projects/Legion/refs/continuum/perf/lab-continuum-approach.json \
+  --only frame_budget,pass_attribution
+```
+
+For the approach **motion** path, reuse the Task 6 `approach-surface` recording at `refs/continuum/motion/approach-surface/` and run `temporal_delta` / `motion_stress` (commands in [Continuum look verification pack](#continuum-look-verification-pack) above).
+
+Do not fabricate perf JSON or mark the budget gate signed until native Chrome captures exist on declared hardware.
+
 ## Fixture smoke status
 
 | Date | Result |

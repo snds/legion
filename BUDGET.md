@@ -22,12 +22,28 @@ From `docs/chunked-lod-60fps-plan.md` (Track 0). Device label required on every 
 |---|---|
 | lab-0.8au | `?lab=planet&perfcapture&au=0.8&w=1280&h=720&dpr=2` |
 | lab-continuum-0.8au | `?lab=planet&engine=continuum&perfcapture&au=0.8&w=1280&h=720&dpr=2` |
+| lab-continuum-0.3au | `?lab=planet&engine=continuum&perfcapture&au=0.3&w=1280&h=720&dpr=2` |
+| lab-continuum-approach | scripted 0.8→0.2 with perfcapture samples (see below) |
 | star-0.8au | `?demo=star&perfcapture=composite&au=0.8&w=1280&h=720&dpr=2` |
 | approach-low | `?demo=approach&perfcapture&w=1280&h=720&dpr=2` |
 
 Optional: `&warmup=90&samples=120`. Results: `window.__perfCapture` + console JSON. Harness: `src/render/perf-capture.ts`.
 
 Pass mode: `?perfcapture=passes` for per-EffectComposer-pass attribution.
+
+### Continuum approach budget gate (Task 8)
+
+**Settled poses:** export `window.__perfCapture` JSON from `lab-continuum-0.8au` and `lab-continuum-0.3au` after warmup. Pass when worst composite ≤ **16.67 ms** on declared hardware.
+
+**Approach path (`lab-continuum-approach`):** native Chrome, `?lab=planet&engine=continuum&w=1280&h=720&dpr=2` (no `&au=` lock). Start at HUD **0.8 AU**, zoom smoothly to **0.2 AU** over ~10 s. During zoom:
+
+- Watch chunk HUD (`coverAgeMs`, `coverPending`) — stream cover should clear within `APPROACH_COVER_SLA_SEC` (see continuum chunk pool)
+- Log hitch frames (Δt spikes); one origin-shift / LOD spike OK, sustained multi-second freeze fails
+- At **0.8 AU settled**, **0.3 AU settled**, and **0.2 AU settled**, re-open with `&perfcapture&au=<stop>` and paste JSON for toolkit `frame_budget`
+
+Motion evidence: record `approach-surface` (see [`docs/render-acceptance-harness.md`](docs/render-acceptance-harness.md#continuum-budget-verification-pack)) → `temporal_delta` / `motion_stress`.
+
+**Pending author capture:** JSON fixtures belong at `refs/continuum/perf/<pose-id>.json` once captured on native Chrome. Do not commit synthetic numbers. Harness cross-link: [`docs/render-acceptance-harness.md`](docs/render-acceptance-harness.md#continuum-budget-verification-pack).
 
 ## Flythrough budget
 
