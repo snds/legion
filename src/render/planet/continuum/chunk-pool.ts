@@ -13,11 +13,13 @@ import {
   CHUNK_BUILDS_PER_FRAME, CHUNK_BUILD_MS_BUDGET, LOD_FADE_SEC, LOD_HYSTERESIS,
   LOD_MIN_REBUILD_MS, LOD_SPIN_ANGLE, LOD_STICKY_MOVING, LOD_STICKY_PASSES,
   LOD_ZOOM_HYSTERESIS, MAX_RESIDENT_CHUNKS, MAX_WARM_CHUNKS, APPROACH_COVER_AU,
+  APPROACH_COVER_SLA_SEC,
   nodeFromKey, nodeKey, parentNodeKey,
   texResCoarseForLevel, texResStreamForLevel, texResNextUpgrade, texResCeilingForAu,
   meshGridForLevel, meshGridStreamForLevel, type ChunkHudStats,
 } from './chunk-types';
 import { continuumSurfaceFrag, continuumSurfaceVert } from './shaders';
+import { estimateCoverSeconds } from './stream-metrics';
 
 interface Resident {
   node: QuadNode;
@@ -33,6 +35,30 @@ interface Resident {
   fadeTarget: number;
   /** Prefetched for a closer zoom — keep resident even when not in desired. */
   warm: boolean;
+}
+
+export interface ChunkBuildQualityInput {
+  coverPending: boolean;
+  forceStream: boolean;
+  warm: boolean;
+  streaming: boolean;
+}
+
+/**
+ * First cover must never take an albedo upgrade or full-resolution path.
+ * Keeping this pure makes the cover quality contract unit-testable.
+ */
+export function selectChunkBuildQuality(
+  level: number,
+  input: ChunkBuildQualityInput,
+): { texRes: number; meshGrid: number; allowUpgrade: boolean } {
+  const streamOnly = input.coverPending || input.forceStream;
+  const stream = streamOnly || input.warm || input.streaming;
+  return {
+    texRes: stream ? texResStreamForLevel(level) : texResCoarseForLevel(level),
+    meshGrid: stream ? meshGridStreamForLevel(level) : meshGridForLevel(level),
+    allowUpgrade: !streamOnly,
+  };
 }
 
 /**
@@ -78,6 +104,8 @@ export class ChunkPool {
   private viewAu = 0.8;
   /** Frames since zoom/move stopped — gates expensive albedo polish. */
   private settledFrames = 0;
+  /** EMA throughput for stream-quality cover builds, initialized conservatively. */
+  private streamBuildsPerSec = 1;
 
   private readonly surfaceMat: ShaderMaterial;
   private readonly dummyAlbedo: DataTexture;
@@ -496,14 +524,16 @@ export class ChunkPool {
     this.building = 0;
     const t0 = performance.now();
     const coverBacklog = this.pending.length;
+    const catchUp = estimateCoverSeconds(coverBacklog, this.streamBuildsPerSec)
+      > APPROACH_COVER_SLA_SEC;
+    let streamBuilds = 0;
     if (this.moving || this.streaming || coverBacklog > 0) this.settledFrames = 0;
     else this.settledFrames++;
 
     // Catch-up: drain stream cover fast. Polish waits until cover is quiet.
-    const catchUp = coverBacklog > 12;
     const coverHot = coverBacklog > 0 || this.streaming;
     const budget = catchUp
-      ? 14
+      ? 12
       : (coverHot ? 8 : CHUNK_BUILD_MS_BUDGET);
     const maxBuilds = catchUp
       ? 4
@@ -518,11 +548,12 @@ export class ChunkPool {
       // Stream-cheap cover while queue/zoom is hot — never force stream just for AU.
       this.buildOne(node, false, /*forceStream*/ coverHot || catchUp);
       this.building++;
+      streamBuilds++;
       if (performance.now() - t0 >= budget) break;
     }
 
     // Idle warm — orbit only, stream-res, tiny queue.
-    if (!coverHot && this.pending.length === 0 && this.building < maxBuilds
+    if (!catchUp && !coverHot && this.pending.length === 0 && this.building < maxBuilds
       && this.viewAu >= 0.7 && this.settledFrames > 30) {
       while (this.building < maxBuilds && this.warmPending.length && performance.now() - t0 < budget) {
         const node = this.warmPending.shift()!;
@@ -543,7 +574,8 @@ export class ChunkPool {
 
     // Stepped fidelity climb whenever cover is quiet — closer AU raises the ceiling.
     // Do not require a long settle at mid-AU or fidelity freezes on stream-16 forever.
-    const canPolish = this.pending.length === 0 && !this.moving && this.settledFrames >= 4;
+    const canPolish = !catchUp
+      && this.pending.length === 0 && !this.moving && this.settledFrames >= 4;
     if (canPolish && this.building < maxBuilds) {
       while (this.building < maxBuilds && performance.now() - t0 < budget) {
         if (!this.upgradeOneAlbedo()) break;
@@ -552,6 +584,11 @@ export class ChunkPool {
     }
 
     this.streaming = this.moving || this.pending.length > 4;
+    const elapsedSec = (performance.now() - t0) / 1000;
+    if (streamBuilds > 0 && elapsedSec > 0) {
+      const instantRate = streamBuilds / elapsedSec;
+      this.streamBuildsPerSec = this.streamBuildsPerSec * 0.7 + instantRate * 0.3;
+    }
     this.updateCoverClock();
 
     this.applyVisibility();
@@ -607,17 +644,15 @@ export class ChunkPool {
     if (this.residents.has(id)) this.evict(id);
 
     const bundle = this.getBundle();
-    // Stream only while cover/zoom is hot — settled frames at close AU must upgrade.
-    const stream = forceStream || warm || this.streaming || this.pending.length > 0;
-    const coarse = stream
-      ? texResStreamForLevel(node.level)
-      : texResCoarseForLevel(node.level);
-    const meshGrid = stream
-      ? meshGridStreamForLevel(node.level)
-      : meshGridForLevel(node.level);
+    const quality = selectChunkBuildQuality(node.level, {
+      coverPending: this.pending.length > 0,
+      forceStream,
+      warm,
+      streaming: this.streaming,
+    });
     const chunk = sampleHeightfieldChunk(bundle, node, {
-      texRes: coarse,
-      meshGrid,
+      texRes: quality.texRes,
+      meshGrid: quality.meshGrid,
       skipRelief: true, // coast/relief is idle polish only — too expensive on approach
     });
     const seaLevel = bundle.params.seaLevel;
