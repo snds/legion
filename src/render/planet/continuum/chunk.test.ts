@@ -9,7 +9,7 @@ import { sampleHeightfieldChunk } from './chunk-sample';
 import { meshHeightfieldChunk } from './chunk-mesher';
 import {
   canPolishCover, canWarmPrefetch, coverCatchUpNeeded, coverTickLimits,
-  selectChunkBuildQuality,
+  readyIdealCoversLeaf, selectChunkBuildQuality, shouldKeepStickyLeaf,
 } from './chunk-pool';
 import { createGeneratorBundle, sampleSurface } from '../generators';
 import type { GenPlanet } from '../../../data/system-gen';
@@ -140,7 +140,33 @@ describe('continuum chunks', () => {
     expect(mid.some((n) => n.level >= 3)).toBe(true);
   });
 
-  it('collapseToCap never empties and stays under cap', async () => {
+  it('select under streamPressure does not reduce leafCap into hole territory', () => {
+    const a = selectChunkLeaves({ camLocal: [0, 0, 1.3], radius: 1, viewAu: 0.25, streamPressure: false });
+    const b = selectChunkLeaves({ camLocal: [0, 0, 1.3], radius: 1, viewAu: 0.25, streamPressure: true });
+    expect(b.length).toBeGreaterThanOrEqual(Math.min(72, a.length * 0.5));
+  });
+
+  it('holds sticky leaves until ready replacements cover them or their region is idle', () => {
+    const parent = rootNode(0);
+    const children = childNodes(parent);
+    const ready = new Set(children.slice(0, 3).map(nodeKey));
+
+    expect(readyIdealCoversLeaf(parent, children, ready)).toBe(false);
+    expect(shouldKeepStickyLeaf({
+      miss: 3, stickyLimit: 2, readyReplacement: false, regionPending: true,
+    })).toBe(true);
+
+    ready.add(nodeKey(children[3]!));
+    expect(readyIdealCoversLeaf(parent, children, ready)).toBe(true);
+    expect(shouldKeepStickyLeaf({
+      miss: 1, stickyLimit: 2, readyReplacement: true, regionPending: true,
+    })).toBe(false);
+    expect(shouldKeepStickyLeaf({
+      miss: 3, stickyLimit: 2, readyReplacement: false, regionPending: false,
+    })).toBe(false);
+  });
+
+  it('collapseToCap retains spatial coverage without face-order holes', async () => {
     const { collapseLeavesToCap, prefetchApproachLeaves } = await import('./chunk-lod');
     const dense = selectChunkLeaves({
       camLocal: [0, 0, 1.2],
@@ -150,6 +176,9 @@ describe('continuum chunks', () => {
     const capped = collapseLeavesToCap(dense, 40);
     expect(capped.length).toBeGreaterThan(0);
     expect(capped.length).toBeLessThanOrEqual(40);
+    for (const leaf of dense) {
+      expect(capped.some((cover) => nodeKey(cover) === nodeKey(leaf) || isDescendant(leaf, cover))).toBe(true);
+    }
     const warmFar = prefetchApproachLeaves({
       camLocal: [0, 0, 3.0],
       radius: 1,

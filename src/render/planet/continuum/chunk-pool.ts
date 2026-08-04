@@ -100,6 +100,46 @@ export function canPolishCover(
   return !catchUp && coverPending === 0 && !moving && settledFrames >= 4;
 }
 
+/** True when a ready ideal node completely replaces this leaf's tile. */
+export function readyIdealCoversLeaf(
+  leaf: QuadNode,
+  ideal: readonly QuadNode[],
+  readyKeys: ReadonlySet<string>,
+): boolean {
+  let coveredArea = 0;
+  const leafArea = leaf.size * leaf.size;
+  for (const candidate of ideal) {
+    const id = nodeKey(candidate);
+    if (!readyKeys.has(id)) continue;
+    if (nodeCovers(candidate, leaf)) return true;
+    if (isDescendant(candidate, leaf)) coveredArea += candidate.size * candidate.size;
+  }
+  return coveredArea >= leafArea - 1e-9;
+}
+
+/**
+ * A sticky leaf stays while its replacement cannot yet cover it. Once the
+ * replacement is ready, or the miss budget elapsed with no regional work,
+ * dropping it cannot expose an unmeshed tile.
+ */
+export function shouldKeepStickyLeaf(input: {
+  miss: number;
+  stickyLimit: number;
+  readyReplacement: boolean;
+  regionPending: boolean;
+}): boolean {
+  return !input.readyReplacement
+    && (input.miss <= input.stickyLimit || input.regionPending);
+}
+
+function nodeCovers(cover: QuadNode, target: QuadNode): boolean {
+  return nodeKey(cover) === nodeKey(target) || isDescendant(target, cover);
+}
+
+function nodeTouchesLeaf(node: QuadNode, leaf: QuadNode): boolean {
+  return nodeCovers(node, leaf) || isDescendant(node, leaf);
+}
+
 /**
  * Streaming heightfield chunk residency.
  * Parents stay until children ready; dithered fade softens LOD swaps.
@@ -462,6 +502,12 @@ export class ChunkPool {
 
   private applyIdeal(ideal: QuadNode[], sticky = false): void {
     const idealKeys = new Set(ideal.map(nodeKey));
+    const readyIdealKeys = new Set<string>();
+    for (const n of ideal) {
+      const id = nodeKey(n);
+      const r = this.residents.get(id);
+      if (r && r.fingerprint === this.fingerprint) readyIdealKeys.add(id);
+    }
 
     const stickyNodes: QuadNode[] = [];
     const stickyKeys = new Set<string>();
@@ -473,11 +519,14 @@ export class ChunkPool {
           this.stickyMiss.delete(id);
           continue;
         }
-        // Hold until a ready ideal descendant/sibling cover exists, or miss budget.
+        // Replace only after ready ideal coverage, or an idle regional miss budget.
         const miss = (this.stickyMiss.get(id) ?? 0) + 1;
         this.stickyMiss.set(id, miss);
-        const stillNeeded = miss <= stickyLimit || this.pending.length > 0;
-        if (stillNeeded) {
+        const readyReplacement = readyIdealCoversLeaf(n, ideal, readyIdealKeys);
+        const regionPending = ideal.some((candidate) => (
+          nodeTouchesLeaf(candidate, n) && !readyIdealKeys.has(nodeKey(candidate))
+        )) || this.pending.some((candidate) => nodeTouchesLeaf(candidate, n));
+        if (shouldKeepStickyLeaf({ miss, stickyLimit, readyReplacement, regionPending })) {
           stickyNodes.push(n);
           stickyKeys.add(id);
         } else {
