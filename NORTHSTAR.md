@@ -26,12 +26,17 @@ Movie-level / engine-class references that gate Legion visual acceptance (Worksp
 
 ## Project-local baselines
 
-| ID | Reference | Contract | Proves |
-|---|---|---|---|
-| `legion-continuum-ideal` | Continuum lab stills at `lab-continuum-0.8au` once look-signed | Literal | Regression bar for planet look after perf work |
-| `legion-fly-approach` | Recorded `approach-surface` path once signed | Literal | Motion/LOD acceptance |
+| ID | Reference | Contract | Status | Proves |
+|---|---|---|---|---|
+| `legion-continuum-ideal` | Planned native 1920×1080 lossless PNG set: `refs/continuum/stills/continuum-0.8-day.png`, `continuum-0.8-night.png`, `continuum-0.3-coast.png`, and `continuum-0.6-clouds.png` | Literal | **Unsigned, pending author capture** | Regression bar for planet look after perf work |
+| `legion-fly-approach` | Planned native/lossless motion extracts: `refs/continuum/motion/approach-surface/`, `orbit-0.8au/`, and `look-orient/` | Literal | **Unsigned, pending author capture** | Motion/LOD acceptance |
 
-Replace placeholders with concrete file paths as captures are signed off.
+The intended capture store is `refs/continuum/`: `stills/` for native PNGs, `motion/<path-id>/` for
+lossless frame sequences or extracted PNGs, and `qa/<pose-or-path-id>/` for toolkit output. Do not replace
+the pending status with a signed baseline until the capture set includes native 1920×1080 lossless PNGs,
+motion extracts, toolkit grids, and recorded scorecards. See
+[`docs/render-acceptance-harness.md`](docs/render-acceptance-harness.md#continuum-look-verification-pack)
+for the official poses and commands.
 
 ## Match protocol
 
