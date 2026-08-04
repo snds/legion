@@ -1,0 +1,52 @@
+import { describe, expect, it } from 'vitest';
+import {
+  continuumAtmosFrag,
+  continuumCloudShellFrag,
+  continuumSurfaceFrag,
+} from './shaders';
+
+describe('continuum C1/C2/C5 shader contract', () => {
+  it('C1 uses sun-dominant wrap (not chalk ambient)', () => {
+    expect(continuumSurfaceFrag).toContain('ndl * 0.94 + 0.028');
+    expect(continuumSurfaceFrag).toContain('smoothstep(-0.06, 0.14');
+  });
+
+  it('C2 emits HDR specular / limb peaks for AgX bloom', () => {
+    expect(continuumSurfaceFrag).toContain('* 1.55');
+    expect(continuumAtmosFrag).toContain('sunHorizon * 2.2');
+  });
+
+  it('C5 applies coast / limb fwidth AA', () => {
+    expect(continuumSurfaceFrag).toContain('fwidth(sea)');
+    expect(continuumAtmosFrag).toContain('fwidth(a)');
+  });
+
+  it('gates fragment micro-detail away from orbit (anti-mottling)', () => {
+    expect(continuumSurfaceFrag).toContain('detailAmt');
+    expect(continuumSurfaceFrag).toContain('Rgate * 0.22');
+  });
+
+  it('atmos rim uses abs(ndv) so BackSide does not fill the disk', () => {
+    expect(continuumAtmosFrag).toContain('abs(dot(N, V))');
+  });
+
+  it('aerial haze gates out at orbit distances', () => {
+    expect(continuumSurfaceFrag).toContain('nearAir');
+    expect(continuumSurfaceFrag).toContain('R * 2.4');
+  });
+
+  it('blends ocean normals toward radial (anti-facet specular)', () => {
+    expect(continuumSurfaceFrag).toContain('vNrad');
+    expect(continuumSurfaceFrag).toContain('mix(Nmesh, Nrad, seaW)');
+  });
+
+  it('night side gets atmospheric scatter fill', () => {
+    expect(continuumSurfaceFrag).toContain('skyFill');
+    expect(continuumSurfaceFrag).toContain('antiSun');
+  });
+
+  it('cloud shell uses day-gated lighting (not half-Lambert glow)', () => {
+    expect(continuumCloudShellFrag).toContain('smoothstep(-0.08, 0.16, ndl)');
+    expect(continuumCloudShellFrag).not.toContain('* 0.5 + 0.5');
+  });
+});
