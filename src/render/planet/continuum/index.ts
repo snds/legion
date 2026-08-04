@@ -316,7 +316,6 @@ export class ContinuumGlobe {
         this.chunkPool.updateLod(cam, tilt, this.spinGroup.rotation.y, this.lodForced);
         this.lodForced = false;
         this.chunkPool.tick(ctx.dt);
-        updateChunkHud(this.chunkPool.hud());
       } else if (this.clouds && this.cloudsVisible) {
         this.spinGroup.getWorldQuaternion(_q);
         _sunObj.copy(sunDir).applyQuaternion(_q.invert());
@@ -339,6 +338,8 @@ export class ContinuumGlobe {
         this.impostorColor[2] * b,
       );
     }
+
+    if (this.chunkPool) updateChunkHud(this.chunkPool.hud());
   }
 
   dispose(): void {
