@@ -176,6 +176,15 @@ describe('continuum chunks', () => {
     expect(texResNextUpgrade(16, 3, 0.3)).toBeLessThan(texResCeilingForAu(3, 0.3));
   });
 
+  it('0.3 AU ceiling allows >=96 and steps from 16 without jumping to full', async () => {
+    const { texResCeilingForAu, texResNextUpgrade } = await import('./chunk-types');
+    expect(texResCeilingForAu(3, 0.3)).toBeGreaterThanOrEqual(96);
+    expect(texResNextUpgrade(16, 3, 0.3)).toBeLessThanOrEqual(48);
+    let t = 16;
+    for (let i = 0; i < 8; i++) t = texResNextUpgrade(t, 3, 0.3);
+    expect(t).toBeGreaterThanOrEqual(96);
+  });
+
   it('caps all stream texture levels at 24', () => {
     for (let level = 0; level <= 8; level++) {
       expect(texResStreamForLevel(level)).toBeLessThanOrEqual(24);

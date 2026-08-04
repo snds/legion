@@ -21,6 +21,9 @@ import {
 import { continuumSurfaceFrag, continuumSurfaceVert } from './shaders';
 import { estimateCoverSeconds } from './stream-metrics';
 
+/** Idle fidelity cadence: spend remaining budget on facing albedo climbs. */
+const POLISH_UPGRADES_PER_FRAME = 3;
+
 interface Resident {
   node: QuadNode;
   mesh: Mesh;
@@ -610,7 +613,8 @@ export class ChunkPool {
       catchUp, this.pending.length, this.moving, this.settledFrames,
     );
     if (canPolish && this.building < maxBuilds) {
-      while (this.building < maxBuilds && performance.now() - t0 < budget) {
+      const polishBuildCap = Math.min(maxBuilds, this.building + POLISH_UPGRADES_PER_FRAME);
+      while (this.building < polishBuildCap && performance.now() - t0 < budget) {
         if (!this.upgradeOneAlbedo()) break;
         this.building++;
       }
@@ -792,8 +796,7 @@ export class ChunkPool {
       if (next <= r.texRes) continue;
       const d = nodeCenterDir(n);
       const facing = d[0] * cam[0] + d[1] * cam[1] + d[2] * cam[2];
-      // Facing leaves first; larger steps next; slight bias to coarser current.
-      const score = facing * 80 + (next - r.texRes) * 0.5 - r.texRes * 0.01;
+      const score = facing * 80 + (next - r.texRes);
       if (score > bestScore) {
         bestScore = score;
         best = r;
