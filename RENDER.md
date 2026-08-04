@@ -43,6 +43,17 @@ Still-only approval is an automatic fail for LOD, volumetrics, dither, TAA, casc
 
 Record visually lossless (or lossless) at native canvas resolution. Review **frame-by-frame** (`interactive-capture-eval` + `reference-video-review`).
 
+### `continuum-ab` protocol
+
+`engine=continuum` is a lab-only comparison path. Legacy remains the shipping default.
+
+1. Start from the same Terran state: identical seed, climate inputs, and `src/render/planet/lab-ideal.json` configuration.
+2. Reset the lab before each pass, then record the same `approach-surface` and `look-orient` camera inputs once on Legacy and once with `?engine=continuum`.
+3. Keep canvas dimensions, DPR, browser, hardware, capture method, warmup, and relevant lab controls identical. Record native still poses and visually lossless motion for both passes.
+4. Export `__perfCapture` for the equivalent settled and approach poses. Assess native still grids, motion frames, and budget results together in `docs/superpowers/specs/2026-08-03-continuum-ab-cutover-decision.md`.
+
+This protocol records evidence only. It does not establish ship readiness or change the default engine.
+
 ## Debug views expected
 
 When materials/lighting are in scope: albedo, normals, roughness/metalness, emissive, and final beauty — labeled captures.
