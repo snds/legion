@@ -100,6 +100,24 @@ export function canPolishCover(
   return !catchUp && coverPending === 0 && !moving && settledFrames >= 4;
 }
 
+/** Update the cover SLA clock without losing the most recently completed span. */
+export function coverTiming(
+  coverPending: number,
+  startedAt: number | null,
+  lastAgeMs: number,
+  now: number,
+): { startedAt: number | null; lastAgeMs: number; ageMs: number } {
+  if (coverPending > 0) {
+    const nextStartedAt = startedAt ?? now;
+    return { startedAt: nextStartedAt, lastAgeMs, ageMs: now - nextStartedAt };
+  }
+  if (startedAt !== null) {
+    const completedAgeMs = now - startedAt;
+    return { startedAt: null, lastAgeMs: completedAgeMs, ageMs: completedAgeMs };
+  }
+  return { startedAt: null, lastAgeMs, ageMs: lastAgeMs };
+}
+
 /** True when a ready ideal node completely replaces this leaf's tile. */
 export function readyIdealCoversLeaf(
   leaf: QuadNode,
@@ -178,7 +196,9 @@ export class ChunkPool {
   /** True while zooming / backlog — cheap cover only (masks approach hitch). */
   private streaming = false;
   /** Start time for the active visible-cover backlog. */
-  private coverStartedAt = 0;
+  private coverStartedAt: number | null = null;
+  /** Completed cover duration retained for HUD/SLA inspection until the next cover begins. */
+  private lastCoverAgeMs = 0;
   /** HUD AU from ContinuumGlobe — drives mid-orbit view-LOD. */
   private viewAu = 0.8;
   /** Frames since zoom/move stopped — gates expensive albedo polish. */
@@ -611,6 +631,7 @@ export class ChunkPool {
   tick(dt: number): void {
     this.building = 0;
     const t0 = performance.now();
+    this.updateCoverClock(t0);
     const coverBacklog = this.pending.length;
     const catchUp = coverCatchUpNeeded(coverBacklog, this.streamBuildsPerSec);
     let streamBuilds = 0;
@@ -697,7 +718,9 @@ export class ChunkPool {
       if (!r.mesh.visible || r.fade < 0.05) continue;
       byLevel[r.node.level] = (byLevel[r.node.level] ?? 0) + 1;
     }
-    const texRes = this.desired
+    const facingDesired = sortLeavesByFacing(this.desired, this.lodCamLocal);
+    const texRes = facingDesired
+      .slice(0, Math.ceil(facingDesired.length / 2))
       .map((n) => this.residents.get(nodeKey(n)))
       .filter((r): r is Resident => r?.fingerprint === this.fingerprint)
       .map((r) => r.texRes)
@@ -711,7 +734,12 @@ export class ChunkPool {
       byLevel,
       tris: this.tris,
       medianTex: median(texRes),
-      coverAgeMs: this.coverStartedAt ? performance.now() - this.coverStartedAt : 0,
+      coverAgeMs: coverTiming(
+        this.pending.length,
+        this.coverStartedAt,
+        this.lastCoverAgeMs,
+        performance.now(),
+      ).ageMs,
       streaming: this.streaming,
       showChunks: this.showChunks,
     };
@@ -1028,12 +1056,15 @@ export class ChunkPool {
     this.tris = t | 0;
   }
 
-  private updateCoverClock(): void {
-    if (this.pending.length > 0) {
-      if (!this.coverStartedAt) this.coverStartedAt = performance.now();
-    } else {
-      this.coverStartedAt = 0;
-    }
+  private updateCoverClock(now = performance.now()): void {
+    const timing = coverTiming(
+      this.pending.length,
+      this.coverStartedAt,
+      this.lastCoverAgeMs,
+      now,
+    );
+    this.coverStartedAt = timing.startedAt;
+    this.lastCoverAgeMs = timing.lastAgeMs;
   }
 
   private evict(id: string): void {

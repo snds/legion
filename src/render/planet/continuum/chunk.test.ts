@@ -9,7 +9,7 @@ import { sampleHeightfieldChunk } from './chunk-sample';
 import { meshHeightfieldChunk } from './chunk-mesher';
 import {
   canPolishCover, canWarmPrefetch, coverCatchUpNeeded, coverTickLimits,
-  readyIdealCoversLeaf, selectChunkBuildQuality, shouldKeepStickyLeaf,
+  coverTiming, readyIdealCoversLeaf, selectChunkBuildQuality, shouldKeepStickyLeaf,
 } from './chunk-pool';
 import { createGeneratorBundle, sampleSurface } from '../generators';
 import type { GenPlanet } from '../../../data/system-gen';
@@ -258,6 +258,20 @@ describe('continuum chunks', () => {
     expect(canPolishCover(true, 0, false, 4)).toBe(false);
     expect(canWarmPrefetch(false, false, 0, 0, 3, 0.8, 31)).toBe(true);
     expect(canPolishCover(false, 0, false, 4)).toBe(true);
+  });
+
+  it('preserves the completed cover age until a new cover begins', () => {
+    const started = coverTiming(3, null, 0, 100);
+    expect(started).toEqual({ startedAt: 100, lastAgeMs: 0, ageMs: 0 });
+
+    const active = coverTiming(1, started.startedAt, started.lastAgeMs, 650);
+    expect(active.ageMs).toBe(550);
+
+    const completed = coverTiming(0, active.startedAt, active.lastAgeMs, 900);
+    expect(completed).toEqual({ startedAt: null, lastAgeMs: 800, ageMs: 800 });
+
+    const settled = coverTiming(0, completed.startedAt, completed.lastAgeMs, 1100);
+    expect(settled.ageMs).toBe(800);
   });
 
   it('samples an L2 stream leaf within the soft 40ms guard', () => {

@@ -1,6 +1,6 @@
 # Continuum UX premortem — regression tripwires
 
-**Status:** Task 9 (2026-08-03)  
+**Status:** Task 9 (2026-08-03)
 **Scope:** Lab Continuum before declaring UX done. Each row is a failure mode that already burned a session; tripwire is the cheapest check that catches it before ship.
 
 ---

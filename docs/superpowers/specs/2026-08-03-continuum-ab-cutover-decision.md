@@ -1,6 +1,6 @@
 # Continuum vs Legacy A/B cutover decision
 
-**Status:** Recorded, not approved for ship (2026-08-03)  
+**Status:** Recorded, not approved for ship (2026-08-03)
 **Scope:** Compare the Legacy shipping renderer against the Continuum lab renderer. This is a cutover gate, not a release authorization.
 
 ## Decision

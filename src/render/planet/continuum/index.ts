@@ -281,6 +281,8 @@ export class ContinuumGlobe {
       if (this.chunkPool) {
         this.chunkPool.setSunDir(sunDir.x, sunDir.y, sunDir.z);
         this.chunkPool.setSurfaceLook(this.params.roughness, this.params.nightLights);
+        const cam: Vec3 = [_camLocal.x, _camLocal.y, _camLocal.z];
+        const tilt: Vec3 = [_camTilt.x, _camTilt.y, _camTilt.z];
         // Object-space sun for cloud-shadow ray (matches ContinuumClouds).
         this.spinGroup.getWorldQuaternion(_q);
         _sunObj.copy(sunDir).applyQuaternion(_q.clone().invert());
@@ -289,6 +291,11 @@ export class ContinuumGlobe {
         if (this.clouds && this.cloudsVisible) {
           this.clouds.update(ctx.dt, _sunObj, _camLocal);
         }
+        // Schedule and drain the current camera's cover before surface voxels
+        // decide whether they may spend a CPU bake this frame.
+        this.chunkPool.updateLod(cam, tilt, this.spinGroup.rotation.y, this.lodForced);
+        this.lodForced = false;
+        this.chunkPool.tick(ctx.dt);
         const stream = this.chunkPool.isStreaming || this.chunkPool.pendingCount > 0;
         if (this.surfaceVoxels) {
           // Warm/bake voxels when cover quiet; allow one warm bake even with light pending.
@@ -311,11 +318,6 @@ export class ContinuumGlobe {
         );
         this.chunkPool.setWorldRadius(worldRadius);
 
-        const cam: Vec3 = [_camLocal.x, _camLocal.y, _camLocal.z];
-        const tilt: Vec3 = [_camTilt.x, _camTilt.y, _camTilt.z];
-        this.chunkPool.updateLod(cam, tilt, this.spinGroup.rotation.y, this.lodForced);
-        this.lodForced = false;
-        this.chunkPool.tick(ctx.dt);
       } else if (this.clouds && this.cloudsVisible) {
         this.spinGroup.getWorldQuaternion(_q);
         _sunObj.copy(sunDir).applyQuaternion(_q.invert());
