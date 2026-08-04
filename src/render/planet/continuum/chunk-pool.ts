@@ -51,14 +51,50 @@ export interface ChunkBuildQualityInput {
 export function selectChunkBuildQuality(
   level: number,
   input: ChunkBuildQualityInput,
-): { texRes: number; meshGrid: number; allowUpgrade: boolean } {
-  const streamOnly = input.coverPending || input.forceStream;
-  const stream = streamOnly || input.warm || input.streaming;
+): { texRes: number; meshGrid: number } {
+  const stream = input.coverPending || input.forceStream || input.warm || input.streaming;
   return {
     texRes: stream ? texResStreamForLevel(level) : texResCoarseForLevel(level),
     meshGrid: stream ? meshGridStreamForLevel(level) : meshGridForLevel(level),
-    allowUpgrade: !streamOnly,
   };
+}
+
+export function coverCatchUpNeeded(coverPending: number, buildsPerSec: number): boolean {
+  return estimateCoverSeconds(coverPending, buildsPerSec) > APPROACH_COVER_SLA_SEC;
+}
+
+export function coverTickLimits(
+  catchUp: boolean,
+  coverHot: boolean,
+  coverBacklog: number,
+): { budgetMs: number; maxBuilds: number } {
+  if (catchUp) return { budgetMs: 12, maxBuilds: 4 };
+  return {
+    budgetMs: coverHot ? 8 : CHUNK_BUILD_MS_BUDGET,
+    maxBuilds: coverBacklog > 0 ? 3 : CHUNK_BUILDS_PER_FRAME,
+  };
+}
+
+export function canWarmPrefetch(
+  catchUp: boolean,
+  coverHot: boolean,
+  coverPending: number,
+  building: number,
+  maxBuilds: number,
+  viewAu: number,
+  settledFrames: number,
+): boolean {
+  return !catchUp && !coverHot && coverPending === 0
+    && building < maxBuilds && viewAu >= 0.7 && settledFrames > 30;
+}
+
+export function canPolishCover(
+  catchUp: boolean,
+  coverPending: number,
+  moving: boolean,
+  settledFrames: number,
+): boolean {
+  return !catchUp && coverPending === 0 && !moving && settledFrames >= 4;
 }
 
 /**
@@ -524,20 +560,14 @@ export class ChunkPool {
     this.building = 0;
     const t0 = performance.now();
     const coverBacklog = this.pending.length;
-    const catchUp = estimateCoverSeconds(coverBacklog, this.streamBuildsPerSec)
-      > APPROACH_COVER_SLA_SEC;
+    const catchUp = coverCatchUpNeeded(coverBacklog, this.streamBuildsPerSec);
     let streamBuilds = 0;
     if (this.moving || this.streaming || coverBacklog > 0) this.settledFrames = 0;
     else this.settledFrames++;
 
     // Catch-up: drain stream cover fast. Polish waits until cover is quiet.
     const coverHot = coverBacklog > 0 || this.streaming;
-    const budget = catchUp
-      ? 12
-      : (coverHot ? 8 : CHUNK_BUILD_MS_BUDGET);
-    const maxBuilds = catchUp
-      ? 4
-      : (coverBacklog > 0 ? 3 : CHUNK_BUILDS_PER_FRAME);
+    const { budgetMs: budget, maxBuilds } = coverTickLimits(catchUp, coverHot, coverBacklog);
 
     while (this.building < maxBuilds && this.pending.length) {
       if (this.building > 0 && performance.now() - t0 >= budget) break;
@@ -553,8 +583,10 @@ export class ChunkPool {
     }
 
     // Idle warm — orbit only, stream-res, tiny queue.
-    if (!catchUp && !coverHot && this.pending.length === 0 && this.building < maxBuilds
-      && this.viewAu >= 0.7 && this.settledFrames > 30) {
+    if (canWarmPrefetch(
+      catchUp, coverHot, this.pending.length, this.building, maxBuilds,
+      this.viewAu, this.settledFrames,
+    )) {
       while (this.building < maxBuilds && this.warmPending.length && performance.now() - t0 < budget) {
         const node = this.warmPending.shift()!;
         const id = nodeKey(node);
@@ -574,8 +606,9 @@ export class ChunkPool {
 
     // Stepped fidelity climb whenever cover is quiet — closer AU raises the ceiling.
     // Do not require a long settle at mid-AU or fidelity freezes on stream-16 forever.
-    const canPolish = !catchUp
-      && this.pending.length === 0 && !this.moving && this.settledFrames >= 4;
+    const canPolish = canPolishCover(
+      catchUp, this.pending.length, this.moving, this.settledFrames,
+    );
     if (canPolish && this.building < maxBuilds) {
       while (this.building < maxBuilds && performance.now() - t0 < budget) {
         if (!this.upgradeOneAlbedo()) break;

@@ -7,7 +7,10 @@ import {
 } from './chunk-types';
 import { sampleHeightfieldChunk } from './chunk-sample';
 import { meshHeightfieldChunk } from './chunk-mesher';
-import { selectChunkBuildQuality } from './chunk-pool';
+import {
+  canPolishCover, canWarmPrefetch, coverCatchUpNeeded, coverTickLimits,
+  selectChunkBuildQuality,
+} from './chunk-pool';
 import { createGeneratorBundle, sampleSurface } from '../generators';
 import type { GenPlanet } from '../../../data/system-gen';
 
@@ -188,7 +191,6 @@ describe('continuum chunks', () => {
     });
     expect(quality.texRes).toBe(texResStreamForLevel(2));
     expect(quality.meshGrid).toBeLessThanOrEqual(20);
-    expect(quality.allowUpgrade).toBe(false);
   });
 
   it('keeps forced stream builds off the full upgrade path', () => {
@@ -199,7 +201,25 @@ describe('continuum chunks', () => {
       streaming: false,
     });
     expect(quality.texRes).toBe(texResStreamForLevel(2));
-    expect(quality.allowUpgrade).toBe(false);
+  });
+
+  it('enters cover catch-up when projected cover exceeds the SLA', () => {
+    expect(coverCatchUpNeeded(96, 30)).toBe(true);
+  });
+
+  it('does not enter cover catch-up while projected cover is under the SLA', () => {
+    expect(coverCatchUpNeeded(89, 30)).toBe(false);
+  });
+
+  it('uses the raised budget and build cap during cover catch-up', () => {
+    expect(coverTickLimits(true, true, 96)).toEqual({ budgetMs: 12, maxBuilds: 4 });
+  });
+
+  it('skips warm prefetch and polish while cover catch-up is active', () => {
+    expect(canWarmPrefetch(true, false, 0, 0, 3, 0.8, 31)).toBe(false);
+    expect(canPolishCover(true, 0, false, 4)).toBe(false);
+    expect(canWarmPrefetch(false, false, 0, 0, 3, 0.8, 31)).toBe(true);
+    expect(canPolishCover(false, 0, false, 4)).toBe(true);
   });
 
   it('samples an L2 stream leaf within the soft 40ms guard', () => {
