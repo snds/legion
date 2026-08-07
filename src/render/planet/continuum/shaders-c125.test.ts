@@ -56,4 +56,30 @@ describe('continuum C1/C2/C5 shader contract', () => {
     expect(continuumCloudShellFrag).toContain('stormW');
     expect(continuumCloudShellFrag).toContain('floor(d * 28.0)');
   });
+
+  it('F1: cloud advection stays a continuous spherical-direction rotation (no cube/UV sampling)', () => {
+    // The cloud field must be a function of the normalized object-space direction
+    // only — never a cube-face UV or per-chunk coordinate — so it is seamless
+    // across the whole sphere including poles and face boundaries.
+    expect(continuumSurfaceFrag).toContain('float continuumCloudDens(vec3 d0)');
+    expect(continuumSurfaceFrag).toContain('vec3 d = normalize(d0);');
+    expect(continuumCloudShellFrag).toContain('vec3 d = normalize(vObj);');
+    // Forbid feeding chunk/face UV into the shared cloud field (cube-face bleed).
+    expect(continuumSurfaceFrag).not.toContain('continuumCloudDens(vUv');
+  });
+
+  it('F1: zonal differential shear is time-bounded (no frozen V/chevron seam)', () => {
+    // Regression: a constant (non-time-gated) per-latitude shear offset froze a
+    // mirrored V/chevron into the facing hemisphere (continuum-0.8-day.png,
+    // approach-surface motion). Bounding it with sin(time) — matching the
+    // Legacy pattern in glsl.ts GLSL_CLOUDS / weather-provider.ts — gates the
+    // shear to zero at the default lab pose (uTime = 0) instead of baking a
+    // permanent fold into the deck.
+    expect(continuumSurfaceFrag).toContain(
+      'float adv = uCloudTime * 0.02 * flow + zonal * 0.35 * flow * sin(uCloudTime * 0.0044);',
+    );
+    expect(continuumCloudShellFrag).toContain(
+      'float adv = uTime * 0.02 * flow + zonal * 0.35 * flow * sin(uTime * 0.0044);',
+    );
+  });
 });

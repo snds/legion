@@ -54,9 +54,15 @@ const continuumCloudFieldGlsl = /* glsl */ `
     if (uCloudCover <= 0.001) return 0.0;
     vec3 d = normalize(d0);
     float lat = d.y;
+    // Zonal shear is a spherical-domain rotation of d (Y-axis), never a cube/UV
+    // projection — continuous everywhere including the poles. The per-latitude
+    // offset must stay time-bounded (sin gate): a constant offset here freezes a
+    // permanent differential-shear fold into the deck that reads as a mirrored
+    // V/chevron through the facing hemisphere (Task F1). Matches the bounded
+    // oscillation already used by Legacy (glsl.ts GLSL_CLOUDS, weather-provider.ts).
     float zonal = 0.6 * cos(lat * 4.712) + 0.15 * cos(lat * 12.566);
     float flow = max(uCloudFlow, 0.05);
-    float adv = uCloudTime * 0.02 * flow + zonal * 0.35 * flow;
+    float adv = uCloudTime * 0.02 * flow + zonal * 0.35 * flow * sin(uCloudTime * 0.0044);
     float ca = cos(adv), sa = sin(adv);
     vec3 p = vec3(ca * d.x + sa * d.z, d.y, -sa * d.x + ca * d.z);
     float det = max(uCloudDetail, 0.35);
@@ -381,9 +387,11 @@ export const continuumCloudShellFrag = /* glsl */ `
     if (uCover <= 0.001) discard;
     vec3 d = normalize(vObj);
     float lat = d.y;
+    // See continuumCloudDens above — the sin() gate bounds the per-latitude
+    // shear so it cannot freeze into a static V/chevron through disc center.
     float zonal = 0.6 * cos(lat * 4.712) + 0.15 * cos(lat * 12.566);
     float flow = max(uFlow, 0.05);
-    float adv = uTime * 0.02 * flow + zonal * 0.35 * flow;
+    float adv = uTime * 0.02 * flow + zonal * 0.35 * flow * sin(uTime * 0.0044);
     float ca = cos(adv), sa = sin(adv);
     vec3 p = vec3(ca * d.x + sa * d.z, d.y, -sa * d.x + ca * d.z);
     float det = max(uDetail, 0.35);
