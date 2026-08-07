@@ -184,6 +184,15 @@ export const continuumSurfaceFrag = /* glsl */ `
       float landVar = mix(1.0, mix(0.94 + 0.05 * micro, 0.98 + 0.02 * meso, snowish), detailAmt);
       albedo *= landVar;
       albedo = mix(albedo, albedo * vec3(1.02, 1.01, 0.97), 0.05 * (meso - 0.45) * (1.0 - snowish) * detailAmt);
+
+      // F8 — side-light microrelief/material cue: raking light exaggerates bump
+      // and biome-patch contrast that front light flattens (real terrain
+      // self-shadow read). Parabola peaks at ndl=0.5 (pure side light) and is
+      // zero at full front (ndl=1) AND at the terminator/night (ndl->0), so it
+      // only ever adds contrast on the already-lit side — it cannot wash night
+      // (multiplied into albedo before the wrap/atmos night-fill terms below).
+      float sideLight = 4.0 * ndl * (1.0 - ndl);
+      albedo *= 1.0 + (0.10 * (micro - 0.5) + 0.07 * (meso - 0.5)) * sideLight * (1.0 - snowish) * detailAmt;
     }
 
     if (uDebugChunks > 0.5) {

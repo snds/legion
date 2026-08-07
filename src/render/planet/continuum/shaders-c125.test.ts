@@ -162,4 +162,35 @@ describe('continuum C1/C2/C5 shader contract', () => {
     expect(continuumCloudShellFrag).toContain('stormW');
     expect(continuumCloudShellFrag).not.toContain('uTime * 17.3 + dens');
   });
+
+  it('F8: land gets a side-light microrelief/material cue peaking at grazing (not front) sun', () => {
+    // Parabola in ndl: 0 at full front (ndl=1) and at terminator/night (ndl=0),
+    // peak at ndl=0.5 — reads as raking-light bump/biome contrast, never a
+    // uniform (sun-angle-independent) tint.
+    expect(continuumSurfaceFrag).toContain('float sideLight = 4.0 * ndl * (1.0 - ndl);');
+    expect(continuumSurfaceFrag).toContain(
+      'albedo *= 1.0 + (0.10 * (micro - 0.5) + 0.07 * (meso - 0.5)) * sideLight * (1.0 - snowish) * detailAmt;',
+    );
+  });
+
+  it('F8: side-light cue lives in the land branch only (ocean path untouched)', () => {
+    // Regression guard: the cue must sit after the land-only landVar/tint block
+    // and before that branch's closing brace, never inside the seaW>0.5 branch,
+    // so C5/C7 ocean glint + coast AA stay byte-identical.
+    const landBranch = continuumSurfaceFrag.slice(
+      continuumSurfaceFrag.indexOf('} else {'),
+      continuumSurfaceFrag.indexOf('if (uDebugChunks > 0.5)'),
+    );
+    expect(landBranch).toContain('float sideLight = 4.0 * ndl * (1.0 - ndl);');
+    expect(continuumSurfaceFrag.indexOf('oceanVar')).toBeLessThan(
+      continuumSurfaceFrag.indexOf('float sideLight = 4.0 * ndl'),
+    );
+  });
+
+  it('F8: microrelief cue cannot fire at night (gated to zero as ndl clamps to 0)', () => {
+    // ndl is already max(dot(N,L),0) upstream, so at night sideLight=4*0*1=0 —
+    // no separate night guard needed. Lock that ndl (not a raw/unclamped dot)
+    // feeds the parabola.
+    expect(continuumSurfaceFrag).toContain('float ndl = max(dot(N, L), 0.0);');
+  });
 });
