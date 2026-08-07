@@ -299,8 +299,20 @@ export const continuumAtmosFrag = /* glsl */ `
     float ndv = abs(dot(N, V));
     float fres = pow(1.0 - ndv, 2.6);
     float soft = pow(1.0 - ndv, 1.35);
-    float sunFacing = clamp(dot(N, L) * 0.5 + 0.5, 0.0, 1.0);
-    float sunHorizon = pow(clamp(dot(V, L), 0.0, 1.0), 8.0) * soft;
+    float ndl = dot(N, L);
+    float sunFacing = clamp(ndl * 0.5 + 0.5, 0.0, 1.0);
+    // F2 — sun-horizon glow keys off the SURFACE POINT vs the day/night
+    // terminator (ndl ~ 0), not the view direction. At orbit/space distances the
+    // camera-to-fragment direction V barely changes across the whole visible
+    // disc, so a view-direction-only term (old: pow(dot(V,L),8)) went bright
+    // almost everywhere the sun was roughly behind the camera — saturating
+    // the *entire* rim instead of a graze at the terminator. Combined with
+    // the un-tonemapped HDR boost below, every channel clipped flat to white,
+    // which is the reported hard white/cream limb. Gating on ndl instead
+    // localizes the warm glow to where the terminator great circle actually
+    // crosses the visible silhouette (SE eclipse diamond-ring language).
+    float terminator = 1.0 - smoothstep(0.0, 0.22, abs(ndl));
+    float sunHorizon = terminator * soft;
     vec3 rayleigh = mix(uColor, vec3(0.35, 0.55, 0.95), 0.35);
     vec3 mie = vec3(1.0, 0.72, 0.42);
     vec3 col = mix(rayleigh, mie, clamp(sunHorizon * 1.4, 0.0, 0.85));

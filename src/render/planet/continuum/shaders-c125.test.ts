@@ -82,4 +82,35 @@ describe('continuum C1/C2/C5 shader contract', () => {
       'float adv = uTime * 0.02 * flow + zonal * 0.35 * flow * sin(uTime * 0.0044);',
     );
   });
+
+  it('F2: sun-horizon glow is keyed off the terminator (surface N vs L), not view direction', () => {
+    // Regression: `pow(clamp(dot(V, L), 0, 1), 8) * soft` used the camera-to-
+    // fragment direction, which barely varies across the whole visible disc at
+    // orbit/space distances — so the warm mie term saturated the *entire* rim
+    // (not a graze) whenever the sun was roughly behind the camera. Combined
+    // with the un-tonemapped HDR boost, that clipped every channel flat to
+    // white — the reported hard white/cream limb. The glow must instead be a
+    // function of the surface point's own position relative to the day/night
+    // terminator (ndl = dot(N, L) ~ 0).
+    expect(continuumAtmosFrag).toContain('float ndl = dot(N, L);');
+    expect(continuumAtmosFrag).toContain('float terminator = 1.0 - smoothstep(0.0, 0.22, abs(ndl));');
+    expect(continuumAtmosFrag).toContain('float sunHorizon = terminator * soft;');
+    expect(continuumAtmosFrag).not.toContain('dot(V, L)');
+  });
+
+  it('F2: day limb defaults to Rayleigh cyan/blue, not full mie wash', () => {
+    // Away from the terminator (sunHorizon ~ 0), col must resolve to the
+    // rayleigh mix — never fully to the warm `mie` constant — so the general
+    // day-side graze reads as thin cyan/blue instead of hard white/cream.
+    expect(continuumAtmosFrag).toContain('vec3 rayleigh = mix(uColor, vec3(0.35, 0.55, 0.95), 0.35);');
+    expect(continuumAtmosFrag).toContain('vec3 mie = vec3(1.0, 0.72, 0.42);');
+    expect(continuumAtmosFrag).toContain('vec3 col = mix(rayleigh, mie, clamp(sunHorizon * 1.4, 0.0, 0.85));');
+  });
+
+  it('F2: night-side rim keeps a non-zero alpha floor (readable, not chalk/blank)', () => {
+    // sunFacing floors at 0 on the night side of the ring; alpha must still
+    // carry a base term (0.35) so the rim doesn't vanish before F3 wires real
+    // night posing/energy.
+    expect(continuumAtmosFrag).toContain('(0.35 + 0.65 * sunFacing)');
+  });
 });
