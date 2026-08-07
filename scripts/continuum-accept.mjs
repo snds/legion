@@ -232,6 +232,13 @@ async function captureMotionFrames(page, {
   await page.evaluate(async () => {
     await window.__continuumAccept.waitSettled(30000, 1500);
   });
+  // F9: motion frames leaked lab chrome (HUD/dock/Planet Lab switcher) because
+  // this capture never hid it — only captureStill did. Hide once before the
+  // frame loop; same settle as stills (100ms + two rAFs) so the first frame
+  // isn't captured mid-transition from chrome visible → hidden.
+  await hideLabChrome(page);
+  await waitMs(page, 100);
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
 
   const frames = Math.max(2, Math.round(durationSec * MOTION_FPS));
   const dt = durationSec / (frames - 1);
