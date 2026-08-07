@@ -49,4 +49,11 @@ describe('continuum C1/C2/C5 shader contract', () => {
     expect(continuumCloudShellFrag).toContain('smoothstep(-0.08, 0.16, ndl)');
     expect(continuumCloudShellFrag).not.toContain('* 0.5 + 0.5');
   });
+
+  it('cloud lightning is storm-gated (no dens-seeded whole-deck flash)', () => {
+    // Regression: dens in the strobe hash made every cloud core flicker.
+    expect(continuumCloudShellFrag).not.toContain('uTime * 17.3 + dens');
+    expect(continuumCloudShellFrag).toContain('stormW');
+    expect(continuumCloudShellFrag).toContain('floor(d * 28.0)');
+  });
 });

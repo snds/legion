@@ -43,7 +43,7 @@ Pass mode: `?perfcapture=passes` for per-EffectComposer-pass attribution.
 
 Motion evidence: record `approach-surface` (see [`docs/render-acceptance-harness.md`](docs/render-acceptance-harness.md#continuum-budget-verification-pack)) → `temporal_delta` / `motion_stress`.
 
-**Pending author capture:** JSON fixtures belong at `refs/continuum/perf/<pose-id>.json` once captured on native Chrome. Do not commit synthetic numbers. Harness cross-link: [`docs/render-acceptance-harness.md`](docs/render-acceptance-harness.md#continuum-budget-verification-pack).
+**Author capture (2026-08-06):** JSON at `refs/continuum/perf/lab-continuum-0.8au.json` and `lab-continuum-0.3au.json`. Judge the `worst` row `gpuMedianMs` (do not sum `worst`+`baked`+`noplanet` — those are alternate phases). Measured: **0.8 AU 15.139 ms PASS**; **0.3 AU 32.032 ms FAIL** (clouds/atmos attribution ~26 ms). Toolkit reports under `refs/continuum/qa/`. Approach scripted JSON still pending. Harness: [`docs/render-acceptance-harness.md`](docs/render-acceptance-harness.md#continuum-budget-verification-pack).
 
 ## Flythrough budget
 

@@ -416,13 +416,27 @@ export const continuumCloudShellFrag = /* glsl */ `
     vec3 nightCol = vec3(0.05, 0.07, 0.12);
     vec3 col = mix(nightCol, dayCol, clamp(litAmt, 0.0, 1.2));
     col += dayCol * twilight * 0.10;
-    // Storm-core lightning flicker
+    // Lightning: storm eyewalls only. Never seed the strobe with dens —
+    // density drifts every frame from uTime fbm, so dens-hash flashes every
+    // cloud core (P-LOOK flash across the deck; orbit-0.8au / look-orient).
     float flash = 0.0;
-    if (uLightning > 0.01) {
-      float pulse = step(0.985, fract(sin(uTime * 17.3 + dens * 40.0) * 43758.5453));
-      flash = pulse * uLightning * dens * dens;
+    if (uLightning > 0.01 && dens > 0.22) {
+      float stormW = max(
+        max(storm(d, uStorm0, uStormS0, uStormSize),
+            storm(d, uStorm1, uStormS1, uStormSize)),
+        storm(d, uStorm2, uStormS2, uStormSize));
+      float w = clamp(stormW * 2.5, 0.0, 1.0);
+      if (w > 0.05) {
+        vec3 cell = floor(d * 28.0);
+        float g = hash(cell + 5.1);
+        if (g < 0.35) {
+          float ph = hash(cell + 2.7);
+          float strobe = fract(uTime * (2.5 + 3.0 * ph) + ph);
+          flash = exp(-strobe * 24.0) * w * dens * uLightning;
+        }
+      }
     }
-    col += vec3(0.95, 0.97, 1.0) * flash;
+    col += vec3(0.95, 0.97, 1.0) * clamp(flash, 0.0, 1.6);
     // Night clouds thinner in alpha so they read as silhouette, not emissive fog.
     // Regression lock target: continuum-0.6-clouds (Task 6 pose).
     float a = dens * mix(0.32, 0.72, day);

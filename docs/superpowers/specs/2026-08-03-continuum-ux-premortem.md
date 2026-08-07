@@ -36,6 +36,7 @@
 | **P-LOOK-03** | Ocean specular facets | Sea uses mesh normals only (radial blend dropped) | `shaders-c125.test.ts` — `mix(Nmesh, Nrad, seaW)`; still `continuum-0.3-coast` |
 | **P-LOOK-04** | Visible bathymetry | Ocean depth ramp widened again | Still `continuum-0.3-coast` tile assess (bathymetry hide score 0–1 fails); coast AA in same pose |
 | **P-LOOK-05** | Atmos disk wash | BackSide fresnel fills disc; aerial haze ungated at orbit | `shaders-c125.test.ts` — `abs(dot(N, V))` rim + `nearAir` / `R * 2.4`; still `continuum-0.8-day` |
+| **P-LOOK-06** | Whole-deck cloud flash / shimmer | Cloud lightning strobe seeded with `dens` (drifts every frame) instead of storm eyewalls | `shaders-c125.test.ts` — `cloud lightning is storm-gated`; motion `orbit-0.8au` / `look-orient` frame-by-frame |
 
 ---
 

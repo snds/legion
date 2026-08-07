@@ -28,15 +28,14 @@ Movie-level / engine-class references that gate Legion visual acceptance (Worksp
 
 | ID | Reference | Contract | Status | Proves |
 |---|---|---|---|---|
-| `legion-continuum-ideal` | Planned native 1920×1080 lossless PNG set: `refs/continuum/stills/continuum-0.8-day.png`, `continuum-0.8-night.png`, `continuum-0.3-coast.png`, and `continuum-0.6-clouds.png` | Literal | **Unsigned, pending author capture** | Regression bar for planet look after perf work |
-| `legion-fly-approach` | Planned native/lossless motion extracts: `refs/continuum/motion/approach-surface/`, `orbit-0.8au/`, and `look-orient/` | Literal | **Unsigned, pending author capture** | Motion/LOD acceptance |
+| `legion-continuum-ideal` | Captures present: `refs/continuum/stills/continuum-0.8-day.png`, `continuum-0.8-night.png`, `continuum-0.3-coast.png`, `continuum-0.6-clouds.png` (window PNGs ~1.8–2.3k, not locked 1920×1080) | Literal | **Unsigned — look hold** (cloud-deck flash P-LOOK; re-capture after lightning fix) | Regression bar for planet look after perf work |
+| `legion-fly-approach` | Captures present: `refs/continuum/motion/{approach-surface,orbit-0.8au,look-orient}.mp4` + extracted `f_*.png` folders; QA under `refs/continuum/qa/` | Literal | **Unsigned — motion hold** (cloud flash visible frame-by-frame; re-record after fix) | Motion/LOD acceptance |
 
-The intended capture store is `refs/continuum/`: `stills/` for native PNGs, `motion/<path-id>/` for
-lossless frame sequences or extracted PNGs, and `qa/<pose-or-path-id>/` for toolkit output. Do not replace
-the pending status with a signed baseline until the capture set includes native 1920×1080 lossless PNGs,
-motion extracts, toolkit grids, and recorded scorecards. See
-[`docs/render-acceptance-harness.md`](docs/render-acceptance-harness.md#continuum-look-verification-pack)
-for the official poses and commands.
+Capture store: `refs/continuum/` (`stills/`, `motion/`, `perf/`, `qa/`). Do **not** mark signed until:
+(1) cloud lightning is storm-gated and re-captured motion shows no whole-deck flash,
+(2) stills are native 1920×1080 (or documented backing-store size) with scorecard ≥2 on all P-LOOK axes,
+(3) budget: `lab-continuum-0.8au` worst ≤16.67 ms **and** `lab-continuum-0.3au` addressed or explicitly waived.
+See [`docs/render-acceptance-harness.md`](docs/render-acceptance-harness.md#continuum-look-verification-pack).
 
 ## Match protocol
 
