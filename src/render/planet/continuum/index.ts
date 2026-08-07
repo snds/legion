@@ -25,6 +25,7 @@ const _camLocal = new Vector3();
 const _camTilt = new Vector3();
 const _tmpSun = new Vector3();
 const _sunObj = new Vector3();
+const _viewAxis = new Vector3();
 const _camRight = new Vector3();
 const _camUp = new Vector3();
 const _q = new Quaternion();
@@ -168,6 +169,11 @@ export class ContinuumGlobe {
     if (pitch) this.tiltGroup.rotateX(pitch);
   }
 
+  /** Accept harness / HUD stats (null when giant impostor path). */
+  hudStats() {
+    return this.chunkPool?.hud() ?? null;
+  }
+
   stormsMature(): void {
     // Weather provider regenerates slots; nudge clock by invalidating.
     this.bundle.weather.invalidate();
@@ -262,6 +268,13 @@ export class ContinuumGlobe {
       this.atmosMesh.visible = near && this.params.hasAtmosphere && this.params.atmosphereDensity > 0.01;
       if (this.atmosMat) {
         (this.atmosMat.uniforms.uSunDir.value as Vector3).copy(sunDir);
+        // I1 — camera-to-planet direction, same (unrotated) frame as uSunDir
+        // (atmosMesh hangs off `root`, not the tilt/spin groups), so the shader
+        // can tell a day/night pose (sun ~ ±viewAxis, degenerate false-terminator
+        // ring) from a lateral/terminator pose (sun ⟂ viewAxis, real arc).
+        const viewAxis = _viewAxis.copy(ctx.camera.position).sub(_planetWorld);
+        if (viewAxis.lengthSq() < 1e-12) viewAxis.set(0, 0, 1); else viewAxis.normalize();
+        (this.atmosMat.uniforms.uViewAxis.value as Vector3).copy(viewAxis);
       }
     }
     this.impostorMesh.visible = !near;
@@ -376,6 +389,7 @@ export class ContinuumGlobe {
         uSunDir: { value: new Vector3(0.6, 0.35, 0.72) },
         uColor: { value: new Vector3(...p.atmosphere) },
         uDensity: { value: p.hasAtmosphere ? p.atmosphereDensity : 0 },
+        uViewAxis: { value: new Vector3(0, 0, 1) },
       },
       vertexShader: continuumAtmosVert,
       fragmentShader: continuumAtmosFrag,

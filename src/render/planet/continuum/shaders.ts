@@ -301,6 +301,7 @@ export const continuumAtmosFrag = /* glsl */ `
   uniform vec3 uSunDir;
   uniform vec3 uColor;
   uniform float uDensity;
+  uniform vec3 uViewAxis;
   varying vec3 vObj;
   varying vec3 vWorldPos;
   void main() {
@@ -328,7 +329,19 @@ export const continuumAtmosFrag = /* glsl */ `
     // localizes the warm glow to where the terminator great circle actually
     // crosses the visible silhouette (SE eclipse diamond-ring language).
     float terminator = 1.0 - smoothstep(0.0, 0.22, abs(ndl));
-    float sunHorizon = terminator * soft;
+    // I1 — but ndl~0 is ALSO what every point on the silhouette reads when the
+    // sun sits on the view axis (day pose: sun toward camera; night pose: sun
+    // away from camera), because the limb normal is ~perpendicular to the
+    // view axis all the way around. That made the terminator variable read as
+    // 1.0 for the WHOLE rim instead of just the true day/night arc — the
+    // reported white/cream day-pose limb. The real terminator only ever traces a
+    // (non-degenerate) arc across the disc when the sun is lateral to the
+    // view axis, so fade the warm mie term out as the sun approaches either
+    // end of the view axis and let the day limb fall back to Rayleigh cyan/
+    // blue; it blooms again once the sun swings lateral (terminator pose).
+    float sunViewAlign = abs(dot(L, normalize(uViewAxis)));
+    float lateral = 1.0 - smoothstep(0.55, 0.92, sunViewAlign);
+    float sunHorizon = terminator * soft * lateral;
     vec3 rayleigh = mix(uColor, vec3(0.35, 0.55, 0.95), 0.35);
     vec3 mie = vec3(1.0, 0.72, 0.42);
     vec3 col = mix(rayleigh, mie, clamp(sunHorizon * 1.4, 0.0, 0.85));

@@ -74,20 +74,17 @@ describe('physical record shifts the look', () => {
   });
 });
 
-describe('F4 - Continuum Terran cloud cover / ground shadow', () => {
-  it('ocean archetype cold-load cover stays thin enough to read through (Continuum ice-ball fix)', () => {
-    // The Continuum cloud-shell coverage curve additively folds cloudTurb /
-    // cloudRegion into its noise sum (continuum/shaders.ts), so this preset's
-    // 0.44 saturated to >70% opaque-white on Continuum even though it looked
-    // fine on Legacy's independent curve. Guard the thinned value so a future
-    // "looks a bit sparse, bump it back up" edit doesn't reintroduce the
-    // ice-ball regression.
-    expect(PRESETS.ocean.cloudCover).toBeLessThanOrEqual(0.3);
-    expect(PRESETS.ocean.cloudCover).toBeGreaterThan(0);
-  });
-
-  it('ocean archetype cloudShadow was raised to keep ground shadows visible at the lower cover', () => {
-    expect(PRESETS.ocean.cloudShadow).toBeGreaterThanOrEqual(0.7);
+describe('C1 - shared ocean preset ships the pre-F4 cover (Continuum thinning lives in lab-ideal.json)', () => {
+  it('ocean archetype cloudCover/cloudShadow match the shipping (Legacy) baseline', () => {
+    // F4 (2026-08-06) had cut these here to fix a Continuum-only whiteout, but
+    // PRESETS is shared — derivePlanetParams() feeds real, non-lab Legacy
+    // gameplay from this same object, so thinning it here also thinned every
+    // Legacy ocean world. Continuum's own thinning is scoped to the Generator
+    // Lab via lab-ideal.json's override (see shaders-c125.test.ts), applied
+    // onto PRESETS before a Continuum globe is ever built. Lock the shipping
+    // value here so a future Continuum-motivated edit doesn't regress Legacy.
+    expect(PRESETS.ocean.cloudCover).toBeCloseTo(0.55, 5);
+    expect(PRESETS.ocean.cloudShadow).toBeCloseTo(0.6, 5);
   });
 });
 

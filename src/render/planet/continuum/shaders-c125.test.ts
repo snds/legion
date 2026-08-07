@@ -4,7 +4,7 @@ import {
   continuumCloudShellFrag,
   continuumSurfaceFrag,
 } from './shaders';
-import { PRESETS } from '../presets';
+import labIdeal from '../lab-ideal.json';
 
 describe('continuum C1/C2/C5 shader contract', () => {
   it('C1 uses sun-dominant wrap (not chalk ambient)', () => {
@@ -95,7 +95,7 @@ describe('continuum C1/C2/C5 shader contract', () => {
     // terminator (ndl = dot(N, L) ~ 0).
     expect(continuumAtmosFrag).toContain('float ndl = dot(N, L);');
     expect(continuumAtmosFrag).toContain('float terminator = 1.0 - smoothstep(0.0, 0.22, abs(ndl));');
-    expect(continuumAtmosFrag).toContain('float sunHorizon = terminator * soft;');
+    expect(continuumAtmosFrag).toContain('float sunHorizon = terminator * soft * lateral;');
     expect(continuumAtmosFrag).not.toContain('dot(V, L)');
   });
 
@@ -115,6 +115,54 @@ describe('continuum C1/C2/C5 shader contract', () => {
     expect(continuumAtmosFrag).toContain('(0.35 + 0.65 * sunFacing)');
   });
 
+  it('I1: warm sun-horizon glow is gated by sun-vs-view alignment (uViewAxis), not just ndl', () => {
+    // Regression: ndl~0 (the `terminator` trigger) is what EVERY point on the
+    // silhouette reads whenever the sun sits along the view axis — day pose
+    // (sun toward camera) and night pose (sun away from camera) alike, since
+    // the limb normal is ~perpendicular to the view axis all the way around.
+    // That painted the warm mie term around the WHOLE rim instead of only the
+    // true day/night arc — the reported white/cream day-pose limb. Lock the
+    // extra `lateral` factor (built from |dot(L, viewAxis)|) that fades the
+    // glow out near either end of the view axis and only lets it bloom when
+    // the sun is genuinely lateral (terminator pose).
+    expect(continuumAtmosFrag).toContain('uniform vec3 uViewAxis;');
+    expect(continuumAtmosFrag).toContain('float sunViewAlign = abs(dot(L, normalize(uViewAxis)));');
+    expect(continuumAtmosFrag).toContain('float lateral = 1.0 - smoothstep(0.55, 0.92, sunViewAlign);');
+  });
+
+  it('I1: day-pose limb (sun on view axis) falls back to near-zero warm mix (Rayleigh cyan/blue)', () => {
+    // Evaluate the actual gating formula the shader uses (not just string
+    // presence) for the degenerate day-pose case: L aligned with viewAxis.
+    const sunViewAlign = 1.0; // day pose: L === viewAxis
+    const smoothstep = (edge0: number, edge1: number, x: number) => {
+      const t = Math.min(1, Math.max(0, (x - edge0) / (edge1 - edge0)));
+      return t * t * (3 - 2 * t);
+    };
+    const lateral = 1.0 - smoothstep(0.55, 0.92, sunViewAlign);
+    expect(lateral).toBe(0);
+  });
+
+  it('I1: lateral (terminator) pose keeps the warm glow fully lit', () => {
+    const sunViewAlign = 0.0; // terminator pose: L ⟂ viewAxis
+    const smoothstep = (edge0: number, edge1: number, x: number) => {
+      const t = Math.min(1, Math.max(0, (x - edge0) / (edge1 - edge0)));
+      return t * t * (3 - 2 * t);
+    };
+    const lateral = 1.0 - smoothstep(0.55, 0.92, sunViewAlign);
+    expect(lateral).toBe(1);
+  });
+
+  it('I1: night rim alpha floor (P-LOOK-05) is untouched by the lateral gate', () => {
+    // The lateral gate only scopes the warm `sunHorizon` color/HDR terms; the
+    // base rim alpha (`0.35 + 0.65 * sunFacing`) must stay independent of it
+    // so the night-side rim never goes fully transparent/chalk.
+    const alphaLine = continuumAtmosFrag
+      .split('\n')
+      .find((l) => l.includes('(0.35 + 0.65 * sunFacing)'));
+    expect(alphaLine).toBeDefined();
+    expect(alphaLine).not.toContain('lateral');
+  });
+
   it('F4: ground-shadow cloud field keeps its own (lower) coverage threshold, decoupled from the shell', () => {
     // The ground-shadow field (continuumCloudDens) has no turb/region terms,
     // so it sits fainter than the shell at the same uCloudCover. Once F4
@@ -132,9 +180,16 @@ describe('continuum C1/C2/C5 shader contract', () => {
     expect(continuumCloudShellFrag).toContain('float a = dens * mix(0.32, 0.72, day);');
   });
 
-  it('F4: Terran/ocean archetype default cover+shadow match the calibrated Continuum values', () => {
-    expect(PRESETS.ocean.cloudCover).toBeCloseTo(0.22, 5);
-    expect(PRESETS.ocean.cloudShadow).toBeCloseTo(0.75, 5);
+  it('F4/C1: Continuum-path (lab-ideal.json) ocean cover+shadow keep the calibrated thinned values', () => {
+    // C1 reverted the SHARED PRESETS.ocean back to its pre-F4 shipping values
+    // (presets.test.ts) because Legacy reads that same object for real
+    // gameplay. Continuum only ever runs inside the Generator Lab
+    // (continuum/index.ts), which applies this lab-ideal.json guidepost onto
+    // PRESETS before building the globe (planet-lab.ts applyLab) — so the F4
+    // calibration for Continuum's saturating cloud-shell curve still needs to
+    // live here, not in the shared preset.
+    expect(labIdeal.presets.ocean.cloudCover).toBeCloseTo(0.22, 5);
+    expect(labIdeal.presets.ocean.cloudShadow).toBeCloseTo(0.75, 5);
   });
 
   it('F5: cloud shell applies a day-gated thickness/self-shadow cue (cheap, no raymarch)', () => {
