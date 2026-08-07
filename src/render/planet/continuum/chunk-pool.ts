@@ -13,7 +13,7 @@ import {
   CHUNK_BUILDS_PER_FRAME, CHUNK_BUILD_MS_BUDGET, LOD_FADE_SEC, LOD_HYSTERESIS,
   LOD_MIN_REBUILD_MS, LOD_SPIN_ANGLE, LOD_STICKY_MOVING, LOD_STICKY_PASSES,
   LOD_ZOOM_HYSTERESIS, MAX_RESIDENT_CHUNKS, MAX_WARM_CHUNKS, APPROACH_COVER_AU,
-  APPROACH_COVER_SLA_SEC,
+  APPROACH_COVER_SLA_SEC, APPROACH_FIDELITY_MIN_TEX_AT_03AU,
   nodeFromKey, nodeKey, parentNodeKey,
   texResCoarseForLevel, texResStreamForLevel, texResNextUpgrade, texResCeilingForAu,
   meshGridForLevel, meshGridStreamForLevel, type ChunkHudStats,
@@ -98,6 +98,44 @@ export function canPolishCover(
   settledFrames: number,
 ): boolean {
   return !catchUp && coverPending === 0 && !moving && settledFrames >= 4;
+}
+
+export interface PolishCandidate {
+  key: string;
+  node: QuadNode;
+  texRes: number;
+}
+
+/**
+ * Facing-first, but leaves still below the SLA fidelity floor always outrank
+ * ones already past it (F6). A pure facing+delta score let a handful of
+ * center-of-view leaves climb toward their full ceiling while most of the
+ * facing population never got a single upgrade, pinning the HUD median near
+ * stream resolution even after a long idle settle.
+ */
+export function pickPolishCandidate(
+  candidates: readonly PolishCandidate[],
+  cam: Vec3,
+  viewAu: number,
+  floor = APPROACH_FIDELITY_MIN_TEX_AT_03AU,
+): { key: string; next: number } | null {
+  let best: PolishCandidate | null = null;
+  let bestNext = 0;
+  let bestScore = -Infinity;
+  for (const c of candidates) {
+    const next = texResNextUpgrade(c.texRes, c.node.level, viewAu);
+    if (next <= c.texRes) continue;
+    const d = nodeCenterDir(c.node);
+    const facing = d[0] * cam[0] + d[1] * cam[1] + d[2] * cam[2];
+    const belowFloor = c.texRes < floor ? 1000 : 0;
+    const score = belowFloor + facing * 80 + (next - c.texRes);
+    if (score > bestScore) {
+      bestScore = score;
+      best = c;
+      bestNext = next;
+    }
+  }
+  return best ? { key: best.key, next: bestNext } : null;
 }
 
 /** Update the cover SLA clock without losing the most recently completed span. */
@@ -859,27 +897,20 @@ export class ChunkPool {
     if (isWarmOnly) this.warmKeys.add(id);
   }
 
-  /** Replace albedo only — stepped climb toward AU ceiling (facing first). */
+  /** Replace albedo only — stepped climb toward AU ceiling (facing first, below-floor priority). */
   private upgradeOneAlbedo(): boolean {
     const cam = norm3(this.lodCamLocal);
-    let best: Resident | null = null;
-    let bestScore = -1e9;
-    let bestNext = 0;
+    const candidates: PolishCandidate[] = [];
     for (const n of this.desired) {
       const id = nodeKey(n);
       const r = this.residents.get(id);
       if (!r || r.fingerprint !== this.fingerprint || r.fade < 0.5) continue;
-      const next = texResNextUpgrade(r.texRes, n.level, this.viewAu);
-      if (next <= r.texRes) continue;
-      const d = nodeCenterDir(n);
-      const facing = d[0] * cam[0] + d[1] * cam[1] + d[2] * cam[2];
-      const score = facing * 80 + (next - r.texRes);
-      if (score > bestScore) {
-        bestScore = score;
-        best = r;
-        bestNext = next;
-      }
+      candidates.push({ key: id, node: n, texRes: r.texRes });
     }
+    const picked = pickPolishCandidate(candidates, cam, this.viewAu);
+    if (!picked) return false;
+    const best = this.residents.get(picked.key);
+    const bestNext = picked.next;
     if (!best || bestNext <= best.texRes) return false;
 
     const bundle = this.getBundle();

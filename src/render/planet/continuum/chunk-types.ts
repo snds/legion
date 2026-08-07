@@ -127,10 +127,21 @@ export function texResCeilingForAu(level: number, viewAu: number): number {
 /**
  * Next stepped upgrade from `current` toward the AU ceiling.
  * Never jumps 16→256 in one bake (that was the multi-minute hitch).
+ *
+ * F6: below the SLA fidelity floor, jump straight to it in one bake instead
+ * of three small steps (16→48→80→112). Measured bake cost is ~quadratic in
+ * texRes (16²≈20ms, 48²≈55ms, 80²≈143ms, 96²≈204ms) — three small steps to
+ * clear 96 cost ~470ms of serial CPU per leaf vs. ~200ms for one direct
+ * jump, and the facing population needs most of its leaves past the floor
+ * before the HUD median can pass. Steps past the floor stay small (this is
+ * cosmetic climb toward the full ceiling, not SLA-critical).
  */
 export function texResNextUpgrade(current: number, level: number, viewAu: number): number {
   const ceiling = texResCeilingForAu(level, viewAu);
   if (current >= ceiling) return current;
+  if (current < APPROACH_FIDELITY_MIN_TEX_AT_03AU && ceiling >= APPROACH_FIDELITY_MIN_TEX_AT_03AU) {
+    return Math.min(ceiling, APPROACH_FIDELITY_MIN_TEX_AT_03AU);
+  }
   let step = 32;
   if (current >= 128) step = 64;
   else if (current >= 64) step = 32;

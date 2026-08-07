@@ -10,6 +10,7 @@ import { meshHeightfieldChunk } from './chunk-mesher';
 import {
   canPolishCover, canWarmPrefetch, coverCatchUpNeeded, coverTickLimits,
   coverTiming, readyIdealCoversLeaf, selectChunkBuildQuality, shouldKeepStickyLeaf,
+  pickPolishCandidate, type PolishCandidate,
 } from './chunk-pool';
 import { createGeneratorBundle, sampleSurface } from '../generators';
 import type { GenPlanet } from '../../../data/system-gen';
@@ -198,20 +199,31 @@ describe('continuum chunks', () => {
     expect(texResCeilingForAu(2, 0.8)).toBeGreaterThanOrEqual(256);
     expect(texResCeilingForAu(3, 0.3)).toBeGreaterThanOrEqual(128);
     expect(texResNextUpgrade(16, 3, 0.3)).toBeGreaterThan(16);
-    expect(texResNextUpgrade(16, 3, 0.3)).toBeLessThanOrEqual(48);
-    expect(texResNextUpgrade(48, 3, 0.3)).toBeGreaterThan(48);
+    expect(texResNextUpgrade(96, 3, 0.3)).toBeGreaterThan(96);
     // Never jump straight to full ceiling from stream.
     expect(texResNextUpgrade(16, 2, 0.8)).toBeLessThan(256);
     expect(texResNextUpgrade(16, 3, 0.3)).toBeLessThan(texResCeilingForAu(3, 0.3));
   });
 
-  it('0.3 AU ceiling allows >=96 and steps from 16 without jumping to full', async () => {
-    const { texResCeilingForAu, texResNextUpgrade } = await import('./chunk-types');
+  // F6: population median stalled ~20 because 16→48→80→112 cost ~470ms of
+  // serial CPU per leaf (measured) before any leaf cleared the SLA floor.
+  // One direct jump to the floor when the ceiling supports it lands in one
+  // ~200ms bake instead of three, without ever exceeding the AU ceiling.
+  it('0.3 AU: single upgrade from stream reaches the SLA floor directly (F6)', async () => {
+    const {
+      texResCeilingForAu, texResNextUpgrade, APPROACH_FIDELITY_MIN_TEX_AT_03AU,
+    } = await import('./chunk-types');
     expect(texResCeilingForAu(3, 0.3)).toBeGreaterThanOrEqual(96);
-    expect(texResNextUpgrade(16, 3, 0.3)).toBeLessThanOrEqual(48);
+    expect(texResNextUpgrade(16, 3, 0.3)).toBe(APPROACH_FIDELITY_MIN_TEX_AT_03AU);
+    expect(texResNextUpgrade(48, 3, 0.3)).toBe(APPROACH_FIDELITY_MIN_TEX_AT_03AU);
+    expect(texResNextUpgrade(80, 3, 0.3)).toBe(APPROACH_FIDELITY_MIN_TEX_AT_03AU);
+    // Jump target never exceeds the AU ceiling, even at the floor's boundary.
+    expect(texResNextUpgrade(16, 0, 0.05)).toBeLessThanOrEqual(texResCeilingForAu(0, 0.05));
     let t = 16;
-    for (let i = 0; i < 8; i++) t = texResNextUpgrade(t, 3, 0.3);
+    let steps = 0;
+    while (t < 96 && steps < 8) { t = texResNextUpgrade(t, 3, 0.3); steps++; }
     expect(t).toBeGreaterThanOrEqual(96);
+    expect(steps).toBe(1);
   });
 
   it('caps all stream texture levels at 24', () => {
@@ -287,5 +299,50 @@ describe('continuum chunks', () => {
     expect(chunk.texRes).toBe(16);
     // Soft enough for normal CI variance, strict enough to catch accidental full bakes.
     expect(elapsedMs).toBeLessThan(40);
+  });
+
+  // F6: a pure facing+delta score let a few center-of-view leaves keep
+  // climbing toward their full ceiling while most of the facing population
+  // never cleared the SLA floor even once — starving the HUD median.
+  it('polish scheduler prioritizes below-floor leaves over more-facing above-floor ones (F6)', () => {
+    const cam: [number, number, number] = [0, 0, 1]; // faces +Z root (face 4)
+    const facingAboveFloor: PolishCandidate = {
+      key: 'above', node: rootNode(4), texRes: 96, // fully facing, already at the floor
+    };
+    const sideBelowFloor: PolishCandidate = {
+      key: 'below', node: rootNode(1), texRes: 16, // near-perpendicular, still at stream res
+    };
+    const picked = pickPolishCandidate([facingAboveFloor, sideBelowFloor], cam, 0.3);
+    expect(picked?.key).toBe('below');
+    expect(picked?.next).toBeGreaterThanOrEqual(96);
+  });
+
+  it('polish scheduler still prefers facing among leaves on the same side of the floor', () => {
+    const cam: [number, number, number] = [0, 0, 1];
+    const facing: PolishCandidate = { key: 'facing', node: rootNode(4), texRes: 16 };
+    const side: PolishCandidate = { key: 'side', node: rootNode(1), texRes: 16 };
+    const picked = pickPolishCandidate([facing, side], cam, 0.3);
+    expect(picked?.key).toBe('facing');
+  });
+
+  it('F6: one direct-to-floor bake costs less serial CPU than three small steps', () => {
+    const bundle = createGeneratorBundle(ocean);
+    const node = childNodes(childNodes(childNodes(rootNode(0))[0]!)[0]!)[0]!;
+    const meshGrid = meshGridForLevel(node.level);
+
+    const j0 = performance.now();
+    sampleHeightfieldChunk(bundle, node, { texRes: 96, meshGrid, skipRelief: true });
+    const oneJumpMs = performance.now() - j0;
+
+    const s0 = performance.now();
+    sampleHeightfieldChunk(bundle, node, { texRes: 48, meshGrid, skipRelief: true });
+    sampleHeightfieldChunk(bundle, node, { texRes: 80, meshGrid, skipRelief: true });
+    sampleHeightfieldChunk(bundle, node, { texRes: 112, meshGrid, skipRelief: true });
+    const threeStepMs = performance.now() - s0;
+
+    // Measured on author hardware: ~200ms (one jump) vs ~470ms (three steps)
+    // to clear the 96 floor — three small steps cost ~2.3x more serial CPU
+    // per leaf, which is why the facing population stalled near stream res.
+    expect(oneJumpMs).toBeLessThan(threeStepMs);
   });
 });
