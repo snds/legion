@@ -178,7 +178,16 @@ export const PRESETS: Record<PlanetVisualType, Preset> = {
     roughness: 0.4,
     bandColorA: G0, bandColorB: G0, bandCount: 0, bandTurbulence: 0, stormChance: 0,
     hasAtmosphere: true, atmosphere: [0.30, 0.52, 0.92], atmosphereDensity: 1.0, nightLights: 0.8,
-    cloudCover: 0.55, cloudShadow: 0.6, cloudFlow: 0.7, cloudTurb: 0.55, cyclones: 0.5, cloudTerrain: 0.6, cloudDetail: 1.8, cloudSpeed: 0.12, cycloneSize: 0.13, cloudWisp: 0.6, cloudRegion: 0.65, lightning: 0.8,
+    // F4: Continuum's cloud-shell coverage curve compounds cloudTurb/cloudRegion
+    // additively into its noise sum (see continuum/shaders.ts); at this preset's
+    // runtime default (lab-ideal.json overrides these on boot: cloudTurb 0.91,
+    // cloudRegion 0.82) a nominal cloudCover of 0.44 saturated to >70% opaque-white
+    // on Continuum (Monte Carlo calibration: mean shell density 0.86). 0.22 keeps
+    // ocean/land readable through breaks at 0.8 AU day. cloudShadow raised to
+    // compensate, since the ground-shadow field's own baseline is fainter than the
+    // shell's (no turb/region terms), so it needed a bigger multiplier AND its own
+    // threshold recalibration (continuumCloudDens) to stay visible at the lower cover.
+    cloudCover: 0.22, cloudShadow: 0.75, cloudFlow: 0.7, cloudTurb: 0.55, cyclones: 0.5, cloudTerrain: 0.6, cloudDetail: 1.8, cloudSpeed: 0.12, cycloneSize: 0.13, cloudWisp: 0.6, cloudRegion: 0.65, lightning: 0.8,
     emissive: G0, emissiveStrength: 0,
   },
   desert: {

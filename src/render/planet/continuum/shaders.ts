@@ -70,8 +70,15 @@ const continuumCloudFieldGlsl = /* glsl */ `
     f += 0.28 * cFbm(p * (18.0 * det) + vec3(uCloudTime * 0.03 * flow, 0.0, 0.0));
     float region = cFbm(p * 1.8 + 9.0);
     f += (region - 0.5) * 0.25;
+    // F4: this field has no turb/region-driven amplitude (cheap ground-shadow
+    // approximation), so its raw f sits lower on average than the cloud shell's
+    // (Monte Carlo: mean ~0.62 vs ~0.79). At the shell's 0.14 window offset the
+    // shadow term was nearly always zero once F4 lowered uCloudCover for the
+    // shell's own overcast fix, so a 0.25 offset restores visible ground-shadow
+    // contrast at the new lower cover without touching the shear/advection
+    // above (F1 gate) or the shell's own curve.
     float c0 = 1.0 - uCloudCover * 0.85;
-    float t = clamp((f - (c0 - 0.14)) / 0.28, 0.0, 1.0);
+    float t = clamp((f - (c0 - 0.25)) / 0.28, 0.0, 1.0);
     return t * t * (3.0 - 2.0 * t);
   }
 `;

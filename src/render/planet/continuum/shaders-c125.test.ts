@@ -4,6 +4,7 @@ import {
   continuumCloudShellFrag,
   continuumSurfaceFrag,
 } from './shaders';
+import { PRESETS } from '../presets';
 
 describe('continuum C1/C2/C5 shader contract', () => {
   it('C1 uses sun-dominant wrap (not chalk ambient)', () => {
@@ -112,5 +113,27 @@ describe('continuum C1/C2/C5 shader contract', () => {
     // carry a base term (0.35) so the rim doesn't vanish before F3 wires real
     // night posing/energy.
     expect(continuumAtmosFrag).toContain('(0.35 + 0.65 * sunFacing)');
+  });
+
+  it('F4: ground-shadow cloud field keeps its own (lower) coverage threshold, decoupled from the shell', () => {
+    // The ground-shadow field (continuumCloudDens) has no turb/region terms,
+    // so it sits fainter than the shell at the same uCloudCover. Once F4
+    // lowered the Terran cover to fix the shell whiteout, the shadow term
+    // needed its own threshold offset (0.25, not the shell's 0.14) or it
+    // would go invisible. Assert the two curves are NOT sharing one constant.
+    expect(continuumSurfaceFrag).toContain('float t = clamp((f - (c0 - 0.25)) / 0.28, 0.0, 1.0);');
+    expect(continuumCloudShellFrag).toContain('float t = clamp((f - (c0 - 0.14)) / 0.28, 0.0, 1.0);');
+  });
+
+  it('F4: cloud shell keeps a real day-gated alpha ceiling below fully opaque (breaks stay readable)', () => {
+    // a = dens * mix(0.32, 0.72, day): even at dens=1 the day-side shell
+    // tops out at 0.72 alpha, so a single overcast patch never fully hides
+    // the surface underneath (P-LOOK ice-ball regression guard).
+    expect(continuumCloudShellFrag).toContain('float a = dens * mix(0.32, 0.72, day);');
+  });
+
+  it('F4: Terran/ocean archetype default cover+shadow match the calibrated Continuum values', () => {
+    expect(PRESETS.ocean.cloudCover).toBeCloseTo(0.22, 5);
+    expect(PRESETS.ocean.cloudShadow).toBeCloseTo(0.75, 5);
   });
 });

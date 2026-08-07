@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { GenPlanet, PlanetVisualType } from '../../data/system-gen';
-import { derivePlanetParams, hasStorm } from './presets';
+import { derivePlanetParams, hasStorm, PRESETS } from './presets';
 
 function planet(over: Partial<GenPlanet> = {}): GenPlanet {
   return {
@@ -71,6 +71,23 @@ describe('physical record shifts the look', () => {
     const cold = derivePlanetParams(planet({ type: 'rocky', insolation: 0.1 }));
     const hot = derivePlanetParams(planet({ type: 'rocky', insolation: 3 }));
     expect(cold.latitudeIce).toBeGreaterThan(hot.latitudeIce);
+  });
+});
+
+describe('F4 - Continuum Terran cloud cover / ground shadow', () => {
+  it('ocean archetype cold-load cover stays thin enough to read through (Continuum ice-ball fix)', () => {
+    // The Continuum cloud-shell coverage curve additively folds cloudTurb /
+    // cloudRegion into its noise sum (continuum/shaders.ts), so this preset's
+    // 0.44 saturated to >70% opaque-white on Continuum even though it looked
+    // fine on Legacy's independent curve. Guard the thinned value so a future
+    // "looks a bit sparse, bump it back up" edit doesn't reintroduce the
+    // ice-ball regression.
+    expect(PRESETS.ocean.cloudCover).toBeLessThanOrEqual(0.3);
+    expect(PRESETS.ocean.cloudCover).toBeGreaterThan(0);
+  });
+
+  it('ocean archetype cloudShadow was raised to keep ground shadows visible at the lower cover', () => {
+    expect(PRESETS.ocean.cloudShadow).toBeGreaterThanOrEqual(0.7);
   });
 });
 
