@@ -87,7 +87,7 @@ export function createProceduralStar(opts: { record: StarRecord; bodyRadiusWU: n
       uSpotStr: { value: spotStr },
     },
   });
-  const surfaceMesh = new Mesh(new SphereGeometry(bodyRadiusWU, 96, 96), surfaceMat);
+  const surfaceMesh = new Mesh(new SphereGeometry(bodyRadiusWU, 64, 64), surfaceMat);
   surfaceMesh.renderOrder = 0;
   group.add(surfaceMesh);
 
@@ -116,7 +116,7 @@ export function createProceduralStar(opts: { record: StarRecord; bodyRadiusWU: n
       uRb: { value: bodyRadiusWU * CORONA_R },
     },
   });
-  const coronaMesh = new Mesh(new SphereGeometry(bodyRadiusWU * CORONA_R, 32, 32), coronaMat);
+  const coronaMesh = new Mesh(new SphereGeometry(bodyRadiusWU * CORONA_R, 24, 24), coronaMat);
   coronaMesh.renderOrder = 1;
   coronaMesh.frustumCulled = false;
   group.add(coronaMesh);

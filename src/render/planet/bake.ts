@@ -50,6 +50,13 @@ export const DEFAULT_BAKE: BakeParams = {
   droplets: 40000, erosionStrength: 0.3, thermalIters: 8, talus: 0.006,
 };
 
+/** Near-zone height cache for the shipping path — no erosion, lower res.
+ *  Kills the live per-fragment terrainHeight×3 fill; erosion stays lab/manual. */
+export const CACHE_BAKE: BakeParams = {
+  res: 128, detailScale: 3, detailAmp: 0.35,
+  droplets: 0, erosionStrength: 0, thermalIters: 0, talus: 0.006,
+};
+
 /** One eroded cube face: a res×res Float32 height grid in [0,1]. */
 export interface BakedCube {
   res: number;

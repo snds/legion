@@ -280,12 +280,20 @@ void main(){
   // surface point crosses the cloud shell (thin-shell intersection at 1.03R in
   // unit-dir space), and shade only the DIRECT light — the clouds overhead cast
   // their own shapes onto the ground.
+  // cDensOver is shared with lightning underglow (avoids a 2nd full cloudDensity).
+  float cDensOver = 0.0;
   float cshadow = 1.0;
   if (uCloudCover > 0.0 && uCloudShadow > 0.0){
     float b = dot(dir, uSunDirObj);
     float s = -b + sqrt(max(b * b + 0.0609, 0.0)); // 1.03^2 - 1 = 0.0609
     vec3 cdir = normalize(dir + s * uSunDirObj);
-    cshadow = 1.0 - uCloudShadow * cloudDensity(cdir);
+    // Cheap path: approximate shadow from overhead density (skips sun-ray sample).
+    if (uCloudCheap > 0.5) {
+      cDensOver = cloudDensity(dir);
+      cshadow = 1.0 - uCloudShadow * cDensOver;
+    } else {
+      cshadow = 1.0 - uCloudShadow * cloudDensity(cdir);
+    }
   }
 
   // Lambert + soft terminator.
@@ -297,7 +305,8 @@ void main(){
   // and clock as the cloud shell, so the ground flickers in step with the bolt
   // above it. Night-side only — daylight drowns it.
   if (uLightning > 0.0){
-    float bolt = lightningFlash(dir, cloudDensity(dir));
+    if (uCloudCover > 0.0 && cDensOver <= 0.0) cDensOver = cloudDensity(dir);
+    float bolt = lightningFlash(dir, cDensOver);
     lit += vec3(0.45, 0.58, 0.9) * bolt * 0.35 * (1.0 - day);
   }
 
@@ -371,11 +380,14 @@ void main(){
         // SUB-PIXEL with the planet full-screen, which shimmers under the
         // planet's own rotation instead of reading as steady city lights.
         float n1 = snoise(dir * 150.0 + uNoiseSeed * 3.1) * 0.5 + 0.5;
-        float n2 = snoise(dir * 300.0 + uNoiseSeed * 7.7) * 0.5 + 0.5;
         float t1 = mix(0.985, 0.60, dens);                     // core: easy to light
-        float t2 = mix(0.995, 0.72, dens);                     // outliers: rarer
         float core  = smoothstep(t1, t1 + 0.035, n1);
-        float small = smoothstep(t2, t2 + 0.02, n2) * 0.65;    // satellite towns
+        float small = 0.0;
+        if (uCloudCheap <= 0.5) {
+          float n2 = snoise(dir * 300.0 + uNoiseSeed * 7.7) * 0.5 + 0.5;
+          float t2 = mix(0.995, 0.72, dens);                   // outliers: rarer
+          small = smoothstep(t2, t2 + 0.02, n2) * 0.65;        // satellite towns
+        }
         float lights = max(core, small) * night;
         // Sodium-warm in the dense cores, cooler at the sparse edges.
         vec3 tint = mix(vec3(0.86, 0.90, 1.0), vec3(1.0, 0.76, 0.40), smoothstep(0.15, 0.7, dens));

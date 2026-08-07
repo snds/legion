@@ -173,12 +173,24 @@ export const PRESETS: Record<PlanetVisualType, Preset> = {
       { at: 0.85, color: [0.40, 0.38, 0.36] },  // grey scree
       { at: 1.0, color: [0.92, 0.94, 0.97] },   // snow
     ],
+    // Guidepost: lab-ideal.json (Sean, 2026-07-30) — flat relief + softer ice + denser weather.
     seaLevel: 0.55, oceanShallow: [0.10, 0.42, 0.52], oceanDeep: [0.02, 0.09, 0.22],
-    displacement: 0.03, ridged: 0.45, warp: 0.6, latitudeIce: 0.5, moisture: 1.0, aridBelts: 0.8, rainShadow: 0.65, orographic: 0.7, lapseRate: 0.55, treeline: 0.09, windBearing: 0.25, continental: 0.5, altitudeDry: 0.55, patchiness: 0.4, lushDepth: 1.0, snowfall: 0.75,
-    roughness: 0.4,
+    displacement: 0, ridged: 0.45, warp: 0.6, latitudeIce: 0.3, moisture: 1.0, aridBelts: 0.8, rainShadow: 0.65, orographic: 0.7, lapseRate: 0.55, treeline: 0.09, windBearing: 0.25, continental: 0.5, altitudeDry: 0.55, patchiness: 0.4, lushDepth: 1.0, snowfall: 0.75,
+    roughness: 0.25,
     bandColorA: G0, bandColorB: G0, bandCount: 0, bandTurbulence: 0, stormChance: 0,
     hasAtmosphere: true, atmosphere: [0.30, 0.52, 0.92], atmosphereDensity: 1.0, nightLights: 0.8,
-    cloudCover: 0.55, cloudShadow: 0.6, cloudFlow: 0.7, cloudTurb: 0.55, cyclones: 0.5, cloudTerrain: 0.6, cloudDetail: 1.8, cloudSpeed: 0.12, cycloneSize: 0.13, cloudWisp: 0.6, cloudRegion: 0.65, lightning: 0.8,
+    // F4 (2026-08-06) briefly cut cloudCover 0.55->0.22 / raised cloudShadow
+    // 0.6->0.75 here to fix a Continuum-only whiteout — but this Preset is
+    // SHARED (Legacy + Continuum both call derivePlanetParams against it for
+    // real, non-lab gameplay), so that thinned every Legacy ocean world too.
+    // Reverted to the pre-F4 shipping values. Continuum's cloud-shell curve
+    // additively folds cloudTurb/cloudRegion into its noise sum (see
+    // continuum/shaders.ts) and saturates at this cover, but Continuum only
+    // ever runs inside the Generator Lab (continuum/index.ts header), which
+    // applies lab-ideal.json's cloudCover:0.22/cloudShadow:0.75 override onto
+    // PRESETS *before* the globe is built (planet-lab.ts applyLab) — so the
+    // Continuum-only thinning still lands there without touching Legacy.
+    cloudCover: 0.55, cloudShadow: 0.6, cloudFlow: 0.7, cloudTurb: 0.91, cyclones: 0.34, cloudTerrain: 0.8, cloudDetail: 1.45, cloudSpeed: 0.12, cycloneSize: 0.13, cloudWisp: 0.6, cloudRegion: 0.82, lightning: 0.8,
     emissive: G0, emissiveStrength: 0,
   },
   desert: {
@@ -296,7 +308,9 @@ export function derivePlanetParams(planet: GenPlanet): PlanetRenderParams {
     ridged: base.ridged,
     warp: base.warp * range(ter, 0.8, 1.25),
     latitudeIce: Math.max(0, Math.min(1, base.latitudeIce + coldBias)),
-    moisture: Math.max(0, Math.min(1, base.moisture + range(pal, -0.1, 0.1))),
+    // Lab slider max is 1.5 — do NOT clamp to 1.0 (that made "Base humidity"
+    // dead above 1.0: value stuck + fingerprint unchanged → no Continuum remesh).
+    moisture: Math.max(0, Math.min(1.5, base.moisture + range(pal, -0.1, 0.1))),
     // Climate modifiers: jitter the ones that make worlds feel different (belt
     // depth, shadow strength, wind bearing, patchiness); keep the rest stable.
     aridBelts: Math.max(0, Math.min(1.5, base.aridBelts * range(ter, 0.8, 1.2))),
@@ -308,8 +322,8 @@ export function derivePlanetParams(planet: GenPlanet): PlanetRenderParams {
     continental: base.continental,
     altitudeDry: base.altitudeDry,
     patchiness: Math.max(0, Math.min(1.5, base.patchiness * range(ter, 0.85, 1.2))),
-    lushDepth: base.lushDepth,
-    snowfall: base.snowfall,
+    lushDepth: Math.max(0, Math.min(1.5, base.lushDepth)),
+    snowfall: Math.max(0, Math.min(1.5, base.snowfall)),
     roughness: base.roughness,
     noiseSeed: seedOffset(seed),
     bandColorA: jitterRGB(base.bandColorA, pal, 0.05),

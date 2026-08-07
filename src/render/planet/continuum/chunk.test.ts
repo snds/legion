@@ -1,0 +1,348 @@
+import { describe, expect, it } from 'vitest';
+import { rootNode, childNodes } from '../cube-sphere';
+import { allNodesAtLevel, isDescendant, selectChunkLeaves, uniformLevelForDistance } from './chunk-lod';
+import {
+  parentNodeKey, nodeFromKey, nodeKey, CHUNK_MESH_GRID, meshGridForLevel,
+  texResForLevel, texResCoarseForLevel, texResStreamForLevel,
+} from './chunk-types';
+import { sampleHeightfieldChunk } from './chunk-sample';
+import { meshHeightfieldChunk } from './chunk-mesher';
+import {
+  canPolishCover, canWarmPrefetch, coverCatchUpNeeded, coverTickLimits,
+  coverTiming, readyIdealCoversLeaf, selectChunkBuildQuality, shouldKeepStickyLeaf,
+  pickPolishCandidate, type PolishCandidate,
+} from './chunk-pool';
+import { createGeneratorBundle, sampleSurface } from '../generators';
+import type { GenPlanet } from '../../../data/system-gen';
+
+const ocean: GenPlanet = {
+  type: 'ocean', kind: 'rocky', au: 1, massEarth: 1, radiusEarth: 1,
+  insolation: 1, isGasGiant: false, hasRings: false, inHZ: true, seed: 2002,
+};
+
+describe('continuum chunks', () => {
+  it('selects a bounded leaf set at 0.8 AU-ish distance', () => {
+    const radius = 1;
+    const leaves = selectChunkLeaves({
+      camLocal: [0, 0, radius * 2.5],
+      radius,
+    });
+    expect(leaves.length).toBeGreaterThan(0);
+    expect(leaves.length).toBeLessThanOrEqual(120);
+    // Orbit band → uniform full-sphere preload
+    expect(uniformLevelForDistance(radius * 2.5, radius)).toBe(2);
+    expect(leaves.length).toBe(allNodesAtLevel(2).length);
+  });
+
+  it('engages view-LOD densify below ~1.55R (B2)', () => {
+    expect(uniformLevelForDistance(1.5, 1)).toBe(-1);
+    expect(uniformLevelForDistance(1.6, 1)).toBe(2);
+    const close = selectChunkLeaves({ camLocal: [0, 0, 1.15], radius: 1 });
+    expect(close.length).toBeGreaterThan(0);
+    expect(close.length).toBeLessThanOrEqual(128);
+    expect(close.some((n) => n.level >= 3)).toBe(true);
+  });
+
+  it('parent/child handoff helpers', () => {
+    const root = rootNode(0);
+    const [c0] = childNodes(root);
+    expect(isDescendant(c0, root)).toBe(true);
+    expect(parentNodeKey(c0)).toBe(nodeKey(root));
+    const back = nodeFromKey(nodeKey(c0));
+    expect(back).toEqual(c0);
+  });
+
+  it('samples dense albedo bake + meshes a heightfield chunk', () => {
+    const bundle = createGeneratorBundle(ocean);
+    const chunk = sampleHeightfieldChunk(bundle, rootNode(0));
+    const dim = CHUNK_MESH_GRID + 1;
+    expect(chunk.heights.length).toBe(dim * dim);
+    const texRes = texResForLevel(0);
+    expect(chunk.albedoRGBA.length).toBe(texRes * texRes * 4);
+    const geo = meshHeightfieldChunk(chunk, 1, 0.04, { skirts: true, seaLevel: 0.5 });
+    expect(geo.getAttribute('position').count).toBeGreaterThan(dim * dim);
+    expect(geo.getAttribute('uv')).toBeTruthy();
+    expect(geo.getAttribute('aColor')).toBeTruthy();
+    const rgba = chunk.albedoRGBA;
+    let hasBlueish = false;
+    for (let i = 0; i < rgba.length; i += 4) {
+      if (rgba[i + 2] > rgba[i] && rgba[i + 2] > 40) { hasBlueish = true; break; }
+    }
+    expect(hasBlueish).toBe(true);
+    geo.dispose();
+  });
+
+  it('mesh grid densifies at high levels (B2)', () => {
+    expect(meshGridForLevel(2)).toBe(CHUNK_MESH_GRID);
+    expect(meshGridForLevel(5)).toBeGreaterThan(CHUNK_MESH_GRID);
+    expect(meshGridForLevel(8)).toBeGreaterThan(meshGridForLevel(5));
+  });
+
+  it('crater macro changes height when coverage rises (A4)', () => {
+    const bundle = createGeneratorBundle(ocean);
+    const dir: [number, number, number] = [0.6, 0.2, 0.75];
+    const len = Math.hypot(...dir);
+    const d: [number, number, number] = [dir[0] / len, dir[1] / len, dir[2] / len];
+    bundle.refreshParams(bundle.params, {
+      ...bundle.macro, craters: 0, craterDepth: 0.12, craterFreq: 6,
+    });
+    const h0 = sampleSurface(bundle, d).height;
+    bundle.refreshParams(bundle.params, {
+      ...bundle.macro, craters: 0.85, craterDepth: 0.14, craterFreq: 6,
+    });
+    const h1 = sampleSurface(bundle, d).height;
+    // Not every dir hits a crater — sample several dirs for variance.
+    let spread = Math.abs(h1 - h0);
+    for (let i = 0; i < 24; i++) {
+      const a = (i / 24) * Math.PI * 2;
+      const dd: [number, number, number] = [
+        Math.cos(a) * 0.8, 0.15, Math.sin(a) * 0.8,
+      ];
+      const L = Math.hypot(...dd);
+      dd[0] /= L; dd[1] /= L; dd[2] /= L;
+      bundle.refreshParams(bundle.params, {
+        ...bundle.macro, craters: 0, craterDepth: 0.12,
+      });
+      const a0 = sampleSurface(bundle, dd).height;
+      bundle.refreshParams(bundle.params, {
+        ...bundle.macro, craters: 0.9, craterDepth: 0.14, craterFreq: 7,
+      });
+      const a1 = sampleSurface(bundle, dd).height;
+      spread = Math.max(spread, Math.abs(a1 - a0));
+    }
+    expect(spread).toBeGreaterThan(0.004);
+  });
+
+  it('coarse albedo res is cheaper than full (progressive upgrade ladder)', () => {
+    for (const L of [0, 1, 2, 4, 7]) {
+      expect(texResCoarseForLevel(L)).toBeLessThanOrEqual(texResForLevel(L));
+      expect(texResCoarseForLevel(L)).toBeGreaterThanOrEqual(32);
+    }
+    expect(texResCoarseForLevel(2)).toBeLessThan(texResForLevel(2));
+  });
+
+  it('orbit albedo denser (FPS headroom → texel density)', () => {
+    expect(texResForLevel(2)).toBeGreaterThanOrEqual(256);
+    expect(texResCoarseForLevel(2)).toBeLessThanOrEqual(64);
+    expect(texResCoarseForLevel(2)).toBeLessThan(texResForLevel(2));
+  });
+
+  it('mid-AU densifies with view-LOD; far mid stays uniform L2', () => {
+    expect(uniformLevelForDistance(2.5, 1, 0.6)).toBe(2);
+    expect(uniformLevelForDistance(2.5, 1, 0.3)).toBe(-1);
+    expect(uniformLevelForDistance(2.5, 1, 0.8)).toBe(2);
+    const mid = selectChunkLeaves({
+      camLocal: [0, 0, 2.5],
+      radius: 1,
+      viewAu: 0.3,
+    });
+    expect(mid.length).toBeGreaterThan(0);
+    expect(mid.length).toBeLessThanOrEqual(128);
+    expect(mid.some((n) => n.level >= 3)).toBe(true);
+  });
+
+  it('select under streamPressure does not reduce leafCap into hole territory', () => {
+    const a = selectChunkLeaves({ camLocal: [0, 0, 1.3], radius: 1, viewAu: 0.25, streamPressure: false });
+    const b = selectChunkLeaves({ camLocal: [0, 0, 1.3], radius: 1, viewAu: 0.25, streamPressure: true });
+    expect(b.length).toBeGreaterThanOrEqual(Math.min(72, a.length * 0.5));
+  });
+
+  it('holds sticky leaves until ready replacements cover them or their region is idle', () => {
+    const parent = rootNode(0);
+    const children = childNodes(parent);
+    const ready = new Set(children.slice(0, 3).map(nodeKey));
+
+    expect(readyIdealCoversLeaf(parent, children, ready)).toBe(false);
+    expect(shouldKeepStickyLeaf({
+      miss: 3, stickyLimit: 2, readyReplacement: false, regionPending: true,
+    })).toBe(true);
+
+    ready.add(nodeKey(children[3]!));
+    expect(readyIdealCoversLeaf(parent, children, ready)).toBe(true);
+    expect(shouldKeepStickyLeaf({
+      miss: 1, stickyLimit: 2, readyReplacement: true, regionPending: true,
+    })).toBe(false);
+    expect(shouldKeepStickyLeaf({
+      miss: 3, stickyLimit: 2, readyReplacement: false, regionPending: false,
+    })).toBe(false);
+  });
+
+  it('collapseToCap retains spatial coverage without face-order holes', async () => {
+    const { collapseLeavesToCap, prefetchApproachLeaves } = await import('./chunk-lod');
+    const dense = selectChunkLeaves({
+      camLocal: [0, 0, 1.2],
+      radius: 1,
+      viewAu: 0.12,
+    });
+    const capped = collapseLeavesToCap(dense, 40);
+    expect(capped.length).toBeGreaterThan(0);
+    expect(capped.length).toBeLessThanOrEqual(40);
+    for (const leaf of dense) {
+      expect(capped.some((cover) => nodeKey(cover) === nodeKey(leaf) || isDescendant(leaf, cover))).toBe(true);
+    }
+    const warmFar = prefetchApproachLeaves({
+      camLocal: [0, 0, 3.0],
+      radius: 1,
+      viewAu: 0.8,
+    });
+    expect(warmFar.length).toBeLessThanOrEqual(12);
+    const warmNear = prefetchApproachLeaves({
+      camLocal: [0, 0, 2.5],
+      radius: 1,
+      viewAu: 0.4,
+    });
+    expect(warmNear.length).toBe(0);
+  });
+
+  it('upgrade ladder climbs as AU decreases (stepped, not frozen)', async () => {
+    const { texResCeilingForAu, texResNextUpgrade } = await import('./chunk-types');
+    expect(texResCeilingForAu(2, 0.8)).toBeGreaterThanOrEqual(256);
+    expect(texResCeilingForAu(3, 0.3)).toBeGreaterThanOrEqual(128);
+    expect(texResNextUpgrade(16, 3, 0.3)).toBeGreaterThan(16);
+    expect(texResNextUpgrade(96, 3, 0.3)).toBeGreaterThan(96);
+    // Never jump straight to full ceiling from stream.
+    expect(texResNextUpgrade(16, 2, 0.8)).toBeLessThan(256);
+    expect(texResNextUpgrade(16, 3, 0.3)).toBeLessThan(texResCeilingForAu(3, 0.3));
+  });
+
+  // F6: population median stalled ~20 because 16→48→80→112 cost ~470ms of
+  // serial CPU per leaf (measured) before any leaf cleared the SLA floor.
+  // One direct jump to the floor when the ceiling supports it lands in one
+  // ~200ms bake instead of three, without ever exceeding the AU ceiling.
+  it('0.3 AU: single upgrade from stream reaches the SLA floor directly (F6)', async () => {
+    const {
+      texResCeilingForAu, texResNextUpgrade, APPROACH_FIDELITY_MIN_TEX_AT_03AU,
+    } = await import('./chunk-types');
+    expect(texResCeilingForAu(3, 0.3)).toBeGreaterThanOrEqual(96);
+    expect(texResNextUpgrade(16, 3, 0.3)).toBe(APPROACH_FIDELITY_MIN_TEX_AT_03AU);
+    expect(texResNextUpgrade(48, 3, 0.3)).toBe(APPROACH_FIDELITY_MIN_TEX_AT_03AU);
+    expect(texResNextUpgrade(80, 3, 0.3)).toBe(APPROACH_FIDELITY_MIN_TEX_AT_03AU);
+    // Jump target never exceeds the AU ceiling, even at the floor's boundary.
+    expect(texResNextUpgrade(16, 0, 0.05)).toBeLessThanOrEqual(texResCeilingForAu(0, 0.05));
+    let t = 16;
+    let steps = 0;
+    while (t < 96 && steps < 8) { t = texResNextUpgrade(t, 3, 0.3); steps++; }
+    expect(t).toBeGreaterThanOrEqual(96);
+    expect(steps).toBe(1);
+  });
+
+  it('caps all stream texture levels at 24', () => {
+    for (let level = 0; level <= 8; level++) {
+      expect(texResStreamForLevel(level)).toBeLessThanOrEqual(24);
+    }
+  });
+
+  it('uses stream-only quality and bans upgrades during cover', () => {
+    const quality = selectChunkBuildQuality(2, {
+      coverPending: true,
+      forceStream: false,
+      warm: false,
+      streaming: false,
+    });
+    expect(quality.texRes).toBe(texResStreamForLevel(2));
+    expect(quality.meshGrid).toBeLessThanOrEqual(20);
+  });
+
+  it('keeps forced stream builds off the full upgrade path', () => {
+    const quality = selectChunkBuildQuality(2, {
+      coverPending: false,
+      forceStream: true,
+      warm: false,
+      streaming: false,
+    });
+    expect(quality.texRes).toBe(texResStreamForLevel(2));
+  });
+
+  it('enters cover catch-up when projected cover exceeds the SLA', () => {
+    expect(coverCatchUpNeeded(96, 30)).toBe(true);
+  });
+
+  it('does not enter cover catch-up while projected cover is under the SLA', () => {
+    expect(coverCatchUpNeeded(89, 30)).toBe(false);
+  });
+
+  it('uses the raised budget and build cap during cover catch-up', () => {
+    expect(coverTickLimits(true, true, 96)).toEqual({ budgetMs: 12, maxBuilds: 4 });
+  });
+
+  it('skips warm prefetch and polish while cover catch-up is active', () => {
+    expect(canWarmPrefetch(true, false, 0, 0, 3, 0.8, 31)).toBe(false);
+    expect(canPolishCover(true, 0, false, 4)).toBe(false);
+    expect(canWarmPrefetch(false, false, 0, 0, 3, 0.8, 31)).toBe(true);
+    expect(canPolishCover(false, 0, false, 4)).toBe(true);
+  });
+
+  it('preserves the completed cover age until a new cover begins', () => {
+    const started = coverTiming(3, null, 0, 100);
+    expect(started).toEqual({ startedAt: 100, lastAgeMs: 0, ageMs: 0 });
+
+    const active = coverTiming(1, started.startedAt, started.lastAgeMs, 650);
+    expect(active.ageMs).toBe(550);
+
+    const completed = coverTiming(0, active.startedAt, active.lastAgeMs, 900);
+    expect(completed).toEqual({ startedAt: null, lastAgeMs: 800, ageMs: 800 });
+
+    const settled = coverTiming(0, completed.startedAt, completed.lastAgeMs, 1100);
+    expect(settled.ageMs).toBe(800);
+  });
+
+  it('samples an L2 stream leaf within the soft 40ms guard', () => {
+    const bundle = createGeneratorBundle(ocean);
+    const node = childNodes(childNodes(rootNode(0))[0]!)[0]!;
+    const t0 = performance.now();
+    const chunk = sampleHeightfieldChunk(bundle, node, {
+      texRes: 16,
+      meshGrid: 20,
+      skipRelief: true,
+    });
+    const elapsedMs = performance.now() - t0;
+    expect(chunk.texRes).toBe(16);
+    // Soft enough for normal CI variance, strict enough to catch accidental full bakes.
+    expect(elapsedMs).toBeLessThan(40);
+  });
+
+  // F6: a pure facing+delta score let a few center-of-view leaves keep
+  // climbing toward their full ceiling while most of the facing population
+  // never cleared the SLA floor even once — starving the HUD median.
+  it('polish scheduler prioritizes below-floor leaves over more-facing above-floor ones (F6)', () => {
+    const cam: [number, number, number] = [0, 0, 1]; // faces +Z root (face 4)
+    const facingAboveFloor: PolishCandidate = {
+      key: 'above', node: rootNode(4), texRes: 96, // fully facing, already at the floor
+    };
+    const sideBelowFloor: PolishCandidate = {
+      key: 'below', node: rootNode(1), texRes: 16, // near-perpendicular, still at stream res
+    };
+    const picked = pickPolishCandidate([facingAboveFloor, sideBelowFloor], cam, 0.3);
+    expect(picked?.key).toBe('below');
+    expect(picked?.next).toBeGreaterThanOrEqual(96);
+  });
+
+  it('polish scheduler still prefers facing among leaves on the same side of the floor', () => {
+    const cam: [number, number, number] = [0, 0, 1];
+    const facing: PolishCandidate = { key: 'facing', node: rootNode(4), texRes: 16 };
+    const side: PolishCandidate = { key: 'side', node: rootNode(1), texRes: 16 };
+    const picked = pickPolishCandidate([facing, side], cam, 0.3);
+    expect(picked?.key).toBe('facing');
+  });
+
+  it('F6: one direct-to-floor bake costs less serial CPU than three small steps', () => {
+    const bundle = createGeneratorBundle(ocean);
+    const node = childNodes(childNodes(childNodes(rootNode(0))[0]!)[0]!)[0]!;
+    const meshGrid = meshGridForLevel(node.level);
+
+    const j0 = performance.now();
+    sampleHeightfieldChunk(bundle, node, { texRes: 96, meshGrid, skipRelief: true });
+    const oneJumpMs = performance.now() - j0;
+
+    const s0 = performance.now();
+    sampleHeightfieldChunk(bundle, node, { texRes: 48, meshGrid, skipRelief: true });
+    sampleHeightfieldChunk(bundle, node, { texRes: 80, meshGrid, skipRelief: true });
+    sampleHeightfieldChunk(bundle, node, { texRes: 112, meshGrid, skipRelief: true });
+    const threeStepMs = performance.now() - s0;
+
+    // Measured on author hardware: ~200ms (one jump) vs ~470ms (three steps)
+    // to clear the 96 floor — three small steps cost ~2.3x more serial CPU
+    // per leaf, which is why the facing population stalled near stream res.
+    expect(oneJumpMs).toBeLessThan(threeStepMs);
+  });
+});

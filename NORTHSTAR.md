@@ -20,18 +20,26 @@ Movie-level / engine-class references that gate Legion visual acceptance (Worksp
 
 | ID | Reference | Contract | Proves |
 |---|---|---|---|
-| `se-planet` | SpaceEngine — planet approach / surface flythrough | Literal (within WebGPU) | Atmosphere limb, terrain scale continuity, approach without LOD pop chaos |
+| `se-planet` | SpaceEngine — planet approach / surface flythrough. Durable refs: `refs/continuum/stills/NORTHSTAR/space engine/`, motion `refs/continuum/motion/NORTHSTAR/space engine/source.mp4` (review copies under `refs/continuum/qa/northstar-review/se/` + `motion-se/`). Same-pose Earth day/coast plates for `reference_match` still needed under `refs/northstars/se-planet/`. | Literal (within WebGPU) | Atmosphere limb, terrain scale continuity, approach without LOD pop chaos |
 | `se-star` | SpaceEngine — star close views | Spirit / Literal mix | Photosphere energy, corona restraint, exposure |
 | `aaa-atmos` | Modern AAA atmospheric demos (e.g. Hillaire-class real-time skies) | Spirit | Multiple scattering sky, horizon energy |
 
 ## Project-local baselines
 
-| ID | Reference | Contract | Proves |
-|---|---|---|---|
-| `legion-continuum-ideal` | Continuum lab stills at `lab-continuum-0.8au` once look-signed | Literal | Regression bar for planet look after perf work |
-| `legion-fly-approach` | Recorded `approach-surface` path once signed | Literal | Motion/LOD acceptance |
+| ID | Reference | Contract | Status | Proves |
+|---|---|---|---|---|
+| `legion-continuum-ideal` | Captures present: `refs/continuum/stills/continuum-0.8-day.png`, `continuum-0.8-night.png`, `continuum-0.3-coast.png`, `continuum-0.6-clouds.png` (window PNGs ~1.8–2.3k, not locked 1920×1080) | Literal | **Unsigned — look hold** (cloud-deck flash P-LOOK; re-capture after lightning fix) | Regression bar for planet look after perf work |
+| `legion-fly-approach` | Captures present: `refs/continuum/motion/{approach-surface,orbit-0.8au,look-orient}.mp4` + extracted `f_*.png` folders; QA under `refs/continuum/qa/` | Literal | **Unsigned — motion hold** (cloud flash visible frame-by-frame; re-record after fix) | Motion/LOD acceptance |
 
-Replace placeholders with concrete file paths as captures are signed off.
+Capture store: `refs/continuum/` (`stills/`, `motion/`, `perf/`, `qa/`).  
+Spirit / technique companions (not a Literal `se-planet` substitute): Star Citizen stills + motion under `refs/continuum/{stills,motion}/NORTHSTAR/star citizen/`; Planet Tech V5 audio transcript at `refs/continuum/qa/northstar-review/sc-planet-tech-v5-transcript.md`.
+
+Do **not** mark signed until:
+(1) cloud lightning is storm-gated and re-captured motion shows no whole-deck flash,
+(2) stills are native 1920×1080 (or documented backing-store size) with scorecard ≥2 on all P-LOOK axes,
+(3) budget: `lab-continuum-0.8au` worst ≤16.67 ms **and** `lab-continuum-0.3au` addressed or explicitly waived,
+(4) for `se-planet` `reference_match`: same-pose SE Earth day / coast / terminator plates exist and Continuum stills clear cloud-seam + hard-white-limb + night≠day gates.
+See [`docs/render-acceptance-harness.md`](docs/render-acceptance-harness.md#continuum-look-verification-pack) and [`docs/superpowers/specs/2026-08-06-continuum-fidelity-qa-notes.md`](docs/superpowers/specs/2026-08-06-continuum-fidelity-qa-notes.md).
 
 ## Match protocol
 

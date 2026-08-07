@@ -54,7 +54,7 @@ export const DEMOS: readonly DemoDef[] = [
     label: 'Procedural star surface',
     source: 'PR #158 · procedural-star',
     blurb: 'The live system star — granulation, limb darkening, spectral colour and corona.',
-    targetZoom: 0.11, // low-orbit: pulled in tight so the star fills the frame, surface detail resolves
+    targetZoom: 0.1205, // HUD ≈ 0.8 AU — official close-zoom perf / lab replicate distance
     focusAbs: new Vector3(0, 0, 0), // star sits at the home local-tier root
   },
   {

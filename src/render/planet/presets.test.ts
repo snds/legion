@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { GenPlanet, PlanetVisualType } from '../../data/system-gen';
-import { derivePlanetParams, hasStorm } from './presets';
+import { derivePlanetParams, hasStorm, PRESETS } from './presets';
 
 function planet(over: Partial<GenPlanet> = {}): GenPlanet {
   return {
@@ -71,6 +71,20 @@ describe('physical record shifts the look', () => {
     const cold = derivePlanetParams(planet({ type: 'rocky', insolation: 0.1 }));
     const hot = derivePlanetParams(planet({ type: 'rocky', insolation: 3 }));
     expect(cold.latitudeIce).toBeGreaterThan(hot.latitudeIce);
+  });
+});
+
+describe('C1 - shared ocean preset ships the pre-F4 cover (Continuum thinning lives in lab-ideal.json)', () => {
+  it('ocean archetype cloudCover/cloudShadow match the shipping (Legacy) baseline', () => {
+    // F4 (2026-08-06) had cut these here to fix a Continuum-only whiteout, but
+    // PRESETS is shared — derivePlanetParams() feeds real, non-lab Legacy
+    // gameplay from this same object, so thinning it here also thinned every
+    // Legacy ocean world. Continuum's own thinning is scoped to the Generator
+    // Lab via lab-ideal.json's override (see shaders-c125.test.ts), applied
+    // onto PRESETS before a Continuum globe is ever built. Lock the shipping
+    // value here so a future Continuum-motivated edit doesn't regress Legacy.
+    expect(PRESETS.ocean.cloudCover).toBeCloseTo(0.55, 5);
+    expect(PRESETS.ocean.cloudShadow).toBeCloseTo(0.6, 5);
   });
 });
 

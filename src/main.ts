@@ -44,7 +44,7 @@ import {
 import { updateSystemStar } from './render/star';
 import { CameraController } from './core/camera';
 import { InputManager } from './core/input';
-import { Game, getCamDist } from './core/state';
+import { Game, getCamDist, zoomForPhysicalAu, PERF_BASELINE_AU } from './core/state';
 import { Events } from './core/events';
 import { world, createSystemEntity } from './core/world';
 import { runSystems, type FrameContext } from './core/systems';
@@ -102,6 +102,7 @@ import { activeDemoId, demoById, HERO_BLACKHOLE_ABS } from './render/demos';
 import { activeLabId } from './ui/labs';
 import { createPlanetLab, type PlanetLabHandle } from './render/planet/planet-lab';
 import { createApproachPlanet, type ApproachPlanet } from './render/planet/approach';
+import { installPerfCapture } from './render/perf-capture';
 import { initDemoMenu } from './ui/demo-menu';
 import { PlanetState, Identity, EntityType, BobState, Personality, StarSystem } from './core/components';
 
@@ -551,9 +552,10 @@ async function boot(): Promise<void> {
   if (activeLabId() === 'planet') {
     planetLab = createPlanetLab(layers.local);
     // Clean room: the curated system + lab globes share layers.local, so hide
-    // every local child that isn't a lab globe (star, planets, moons, orbits).
+    // every local child that isn't a lab globe or the lab key-light sun.
     for (const child of layers.local.children) {
-      if (child.userData?.type !== 'planet-globe') child.visible = false;
+      const t = child.userData?.type;
+      if (t !== 'planet-globe' && t !== 'lab-sun') child.visible = false;
     }
     camCtrl.trackObject(null);
     Game.data.zoomLevel = planetLab.framingZoom;
@@ -908,6 +910,11 @@ async function boot(): Promise<void> {
     // 10. Render (post-processing pipeline) — bounded shader clock
     postCtx.render(shaderTime);
 
+    // 10a. Continuum lab overlays (ray-sphere atmos, volume clouds, path trace)
+    if (planetLab) {
+      planetLab.renderOverlays(renderCtx.renderer, camera);
+    }
+
     // 10b. GPU/CPU profiling overlay (opt-in: dev, or ?stats on the live demo)
     if (gpuStats) {
       gpuStats.update();
@@ -920,8 +927,10 @@ async function boot(): Promise<void> {
 
   // ── Profiling baseline (stats-gl): GPU ms via EXT_disjoint_timer_query_webgl2.
   // Opt-in so the live demo stays clean: enabled in dev or with ?stats in the URL.
+  // ?perfcapture claims the single TIME_ELAPSED query slot — stats-gl can't coexist, so it wins.
   const showStats =
-    import.meta.env.DEV || new URLSearchParams(location.search).has('stats');
+    (import.meta.env.DEV || new URLSearchParams(location.search).has('stats')) &&
+    !new URLSearchParams(location.search).has('perfcapture');
   if (showStats) {
     try {
       const { default: Stats } = await import('stats-gl');
@@ -933,6 +942,39 @@ async function boot(): Promise<void> {
     } catch (err) {
       console.warn('[Legion] stats-gl unavailable:', err);
     }
+  }
+
+  // ── GPU profiling / close-zoom capture harness (?perfcapture) — additive, off by default.
+  //    CAPTURE: planet globe from ?lab=planet or ?demo=approach. COMPOSITE: any scene (star).
+  //    Locks HUD baseline AU (default 0.8). Mutually exclusive with stats-gl (gated above).
+  if (new URLSearchParams(location.search).has('perfcapture')) {
+    const params = new URLSearchParams(location.search);
+    const hasExplicitAu = params.has('au');
+    const auRaw = Number(params.get('au'));
+    // Lab/star default 0.8 AU. Approach keeps true-scale low-orbit unless &au= overrides.
+    const applyAu = hasExplicitAu || activeDemoId() !== 'approach';
+    const baselineAu = hasExplicitAu && Number.isFinite(auRaw) && auRaw > 0
+      ? auRaw
+      : PERF_BASELINE_AU;
+    const labGlobe = planetLab?.selectedGlobe() ?? null;
+    const setBaselineAu = (au: number): void => {
+      const z = zoomForPhysicalAu(au);
+      Game.data.zoomLevel = z;
+      Game.data.targetZoom = z;
+      // Untrack so HUD AU == framing distance (focusScale would shrink true-scale bodies).
+      camCtrl.trackObject(null);
+      Game.data.camFocusTarget = { x: 0, y: 0, z: 0 };
+    };
+    installPerfCapture({
+      renderer: renderCtx.renderer,
+      postCtx,
+      planetRoot: approach?.root ?? labGlobe?.root ?? null,
+      globe: approach?.globe ?? labGlobe ?? null,
+      freezeSim: () => Game.setTimeSpeed(0),
+      setBaselineAu: applyAu ? setBaselineAu : null,
+      onViewport: (w, h) => updateOrbitLineResolution(w, h),
+    });
+    if (applyAu) setBaselineAu(baselineAu);
   }
 
   // Start the loop

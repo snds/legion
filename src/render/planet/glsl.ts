@@ -107,6 +107,7 @@ vec3  hash33(vec3 p3){ p3 = fract(p3 * vec3(0.1031, 0.1030, 0.0973)); p3 += dot(
  *  before this chunk. */
 export const GLSL_CLOUDS = /* glsl */ `
 uniform float uCloudCover;    // 0..1 sky coverage (0 = clear)
+uniform float uCloudCheap;    // 0 = full FBM, 1 = lite (drop fine octaves / plateMacro)
 uniform float uCloudTime;     // raw clock (seconds) — scaled by uCloudSpeed below
 uniform float uCloudSpeed;    // weather-clock scale (default near-imperceptible)
 uniform float uCloudFlow;     // zonal circulation strength (trade winds / jets)
@@ -167,16 +168,22 @@ float cloudDensity(vec3 d0){
   // detail setting.
   float det = max(uCloudDetail, 0.25);
   vec3 p = d * 3.2 * det + uNoiseSeed * 0.31;
+  bool cheap = uCloudCheap > 0.5;
   if (uCloudTurb > 0.0){
     float tt = T * 0.02;
-    p += uCloudTurb * 0.55 * vec3(fbm2(d * 1.6 + vec3(tt, 7.0, 0.0)),
-                                  fbm2(d * 1.6 + vec3(0.0, tt + 23.0, 5.0)),
-                                  fbm2(d * 1.6 + vec3(11.0, 0.0, tt + 41.0)));
+    if (cheap) {
+      // One cheap warp axis instead of three fbm2 triples.
+      p += uCloudTurb * 0.45 * vec3(fbm2(d * 1.6 + vec3(tt, 7.0, 0.0)), 0.0, 0.0);
+    } else {
+      p += uCloudTurb * 0.55 * vec3(fbm2(d * 1.6 + vec3(tt, 7.0, 0.0)),
+                                    fbm2(d * 1.6 + vec3(0.0, tt + 23.0, 5.0)),
+                                    fbm2(d * 1.6 + vec3(11.0, 0.0, tt + 41.0)));
+    }
   }
   float f = fbm(p) * 0.5 + 0.5;                        // broad weather systems
   f += 0.4  * (fbm(p * 3.6 + 17.3) * 0.5 + 0.5);       // billow detail
-  f += 0.22 * (fbm(p * 8.8 + 31.7) * 0.5 + 0.5);       // fine cauliflower texture
-  f /= 1.62;
+  if (!cheap) f += 0.22 * (fbm(p * 8.8 + 31.7) * 0.5 + 0.5); // fine cauliflower
+  f /= cheap ? 1.4 : 1.62;
 
   // ── Terrain / climate coupling: the wet equator and mid-latitude belts breed
   // cloud and the dry subtropics clear it (the SAME belts as the surface biomes);
@@ -184,9 +191,12 @@ float cloudDensity(vec3 d0){
   if (uCloudTerrain > 0.0){
     float al = abs(lat);
     float latB = 1.0 - 0.7 * smoothstep(0.22, 0.42, al) * (1.0 - smoothstep(0.5, 0.72, al));
-    float macroH = plateMacro(d0);
     f += uCloudTerrain * 0.16 * (latB - 0.5);
-    f -= uCloudTerrain * 0.35 * smoothstep(0.72, 0.92, macroH);
+    // plateMacro is expensive; cheap path keeps lat belts only.
+    if (!cheap) {
+      float macroH = plateMacro(d0);
+      f -= uCloudTerrain * 0.35 * smoothstep(0.72, 0.92, macroH);
+    }
   }
 
   // ── Synoptic regionality: an ultra-low-frequency moisture field pushes whole

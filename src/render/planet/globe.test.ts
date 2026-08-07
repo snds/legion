@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { Group, Vector3, Mesh, Matrix4 } from 'three';
 import type { GenPlanet, GenSystem } from '../../data/system-gen';
-import { buildNodeGeometry, PlanetGlobe } from './globe';
+import { buildNodeGeometry, mergeLeafGeometries, PlanetGlobe } from './globe';
 import { rootNode } from './cube-sphere';
 import { PlanetGlobes, visualRadius, orbitalPosition } from './index';
 
@@ -69,11 +69,44 @@ describe('visual calibration', () => {
 describe('PlanetGlobe assembly', () => {
   it('builds a cube-sphere surface for terrestrials, rings when flagged', () => {
     const g = new PlanetGlobe(planet({ type: 'ocean', hasRings: true }), 0.5);
-    // Coarse initial selection = 6 face-root leaf meshes + atmosphere + impostor.
+    // Merged surface (1 draw) + cloud + atmosphere + impostor + rings.
     let meshCount = 0;
     g.root.traverse((o) => { if ((o as Mesh).isMesh) meshCount++; });
-    expect(meshCount).toBeGreaterThan(6);
+    expect(meshCount).toBeGreaterThanOrEqual(4);
+    expect(meshCount).toBeLessThan(12); // must NOT be one-mesh-per-leaf
     expect(g.rings).not.toBeNull();
+    g.dispose();
+  });
+
+  it('mergeLeafGeometries concatenates leaf verts and remaps indices', () => {
+    const a = buildNodeGeometry(rootNode(0), 1, 4);
+    const b = buildNodeGeometry(rootNode(1), 1, 4);
+    const m = mergeLeafGeometries([a, b]);
+    expect(m.getAttribute('position').count).toBe(
+      a.getAttribute('position').count + b.getAttribute('position').count,
+    );
+    expect(m.getIndex()!.count).toBe(a.getIndex()!.count + b.getIndex()!.count);
+    m.dispose();
+    a.dispose();
+    b.dispose();
+  });
+
+  it('does not thrash LOD under daily spin with a fixed world camera', () => {
+    const g = new PlanetGlobe(planet({ type: 'ocean' }), 1);
+    const camPos = new Vector3(0, 0, 4);
+    const mw = new Matrix4().makeTranslation(camPos.x, camPos.y, camPos.z);
+    const ctx = {
+      camera: { position: camPos, matrixWorld: { elements: mw.elements } },
+      sunWorldPos: new Vector3(10, 5, 0),
+      dt: 1 / 60,
+      fovYRad: 0.9,
+      viewportH: 720,
+    };
+    g.update(ctx); // initial rebuild
+    const afterInit = g.lodRebuildCount;
+    // ~2 s of spin at fixed camera — pre-fix was ~2 rebuilds/s (~4+ here).
+    for (let i = 0; i < 120; i++) g.update(ctx);
+    expect(g.lodRebuildCount - afterInit).toBeLessThanOrEqual(4);
     g.dispose();
   });
 

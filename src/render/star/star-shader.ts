@@ -306,7 +306,7 @@ vec2 raySphere(vec3 ro, vec3 rd, float rad) {
   return vec2(-b - h, -b + h);
 }
 
-const int STEPS = 12;
+const int STEPS = 8;
 
 void main() {
   #include <logdepthbuf_fragment>
