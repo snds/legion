@@ -184,14 +184,11 @@ motion,qa}/` (untracked, per Task F9/F10 convention).
   clearly through cloud breaks at both 0.3 AU (`coast`) and 0.8 AU
   (`day`/`night`); no longer the solid white ice-ball from the pre-F4 notes.
   F4/F7 hold.
-- **Limb cyan — partial, residual gap.** The limb still reads mostly
-  white/cream in these front-lit poses rather than a clearly cyan/blue
-  Rayleigh graze; F2's own report already flagged this as an intentional
-  narrowing (only the terminator-crossing glow was relocated off warm-white,
-  the rest of the day-side rim is nominally on "the Rayleigh cyan/blue mix"
-  per the shader diagnosis) but that blue tint isn't visually reading at
-  capture exposure. Needs either a stronger cyan bias on the non-terminator
-  rim or acceptance that the effect is intentionally subtle at this AU range.
+- **Limb cyan — partial at F10 capture; post-review fix landed.** F10 stills
+  still showed white/cream day limb because `sunHorizon` saturated when
+  sun||view (every limb point has `ndl≈0`). Commit `66558e2` gates warm mie
+  by sun-versus-view lateral factor so day limb falls back to Rayleigh
+  cyan/blue. **Re-capture day/terminator stills before treating limb as closed.**
 
 ### Residual gaps (carried forward, not fixed by this task)
 
@@ -202,11 +199,9 @@ motion,qa}/` (untracked, per Task F9/F10 convention).
    `frame_budget` finding this run is the known worst+baked+noplanet
    false-sum (see Numbers table), not new evidence of a regression — still
    worth a real off-thread bake pass before trusting 0.3 AU under load.
-2. **Legacy ocean cover unverified.** F4's `cloudCover: 0.44 → 0.22` change
-   lands via the shared `PRESETS.ocean`, so Legacy's default ocean look
-   thinned too, but F4 had no browser access to visually confirm Legacy and
-   this harness only exercises the Continuum lab route (`?lab=planet&engine=
-   continuum`) — Legacy is still unverified after this run.
+2. **Legacy ocean cover — Critical closed in `66558e2`.** Shared
+   `PRESETS.ocean` restored to shipping `0.55`/`0.6`; Continuum lab thinning
+   stays on `lab-ideal.json` (`0.22`/`0.75`) applied only in planet-lab.
 3. **NORTHSTAR remains unsigned** (not signed by this task, per brief).
    `reference_match` still blocked on missing same-pose SE Earth day/coast/
    terminator plates under `refs/northstars/se-planet/`; on the Continuum
