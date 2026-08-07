@@ -114,7 +114,14 @@ export function createClimateProvider(paramsRef: { current: PlanetRenderParams }
           p.oceanDeep[0] * 0.72, p.oceanDeep[1] * 0.72, p.oceanDeep[2] * 0.72,
         ];
         color = mixRgb(color, abyss, smoothstep(0.10, 0.55, depth));
-        const darken = mix(1, 0.72, smoothstep(0.45, 1, depth));
+        // F7: this second darken term used to span smoothstep(0.45, 1, depth) —
+        // a 0.55-wide window covering most of the open-ocean floor, so ordinary
+        // seafloor undulation (well short of true trenches) still traced a
+        // visible light/dark gradient into orbit albedo (P-LOOK-04). Narrowed
+        // to the same 0.10 width as the shelf fringe above and pushed to the
+        // deepest slice only — open ocean between the shelf and the abyssal
+        // floor now reads as one flat colour; only the deepest trenches darken.
+        const darken = mix(1, 0.72, smoothstep(0.90, 1.0, depth));
         color = [color[0] * darken, color[1] * darken, color[2] * darken];
         if (ice > 0.02) {
           const seaIce: RGB = [0.72, 0.82, 0.94];
