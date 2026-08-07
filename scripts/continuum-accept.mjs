@@ -7,7 +7,13 @@
  *   npm run accept:continuum -- --only stills,perf
  *   npm run accept:continuum -- --only motion --skip-qa
  *
- * Requires: Vite lab running, Chrome installed, `npx playwright` available.
+ * Requires: Vite lab running, `npx playwright` available.
+ * Browser: prefers the system Chrome channel (`channel: 'chrome'`) for capture
+ * fidelity closest to what a human reviewer sees; falls back to the Playwright
+ * -managed Chromium (`npx playwright install chrome` not required in that case)
+ * when system Chrome isn't installed — see `main()` below. Either way a
+ * `[accept] using system Chrome channel` / `[accept] system Chrome unavailable`
+ * line is logged so you know which one ran.
  * Writes under refs/continuum/{stills,motion,perf}/ then optionally runs toolkit QA.
  */
 
@@ -90,7 +96,21 @@ async function waitAccept(page, timeout = 60000) {
   }, null, { timeout });
 }
 
-/** Hide lab chrome so screenshots are planet-only (never touch canvas ancestors). */
+/**
+ * Hide lab chrome so screenshots/motion frames are planet-only (never touch
+ * canvas ancestors). F9: the old version had two leaks —
+ *   1. `body > div` missed chrome mounted as `<button>` (the "🚩 Planet Lab"
+ *      switcher `#demo-menu-btn`, the `.gen-lab-toggle` flyout button).
+ *   2. The `right > 40px` skip was meant to spare "not a right-dock panel"
+ *      elements, but `#hud`'s CSS reads `right: var(--lab-dock-w, 0px)` —
+ *      with the generator-lab panel docked open (the normal accept state)
+ *      that's 200-340px, so the game HUD/dock/top-bar was NEVER hidden.
+ * Fixed by dropping the position-guess heuristic: on these lab-only accept
+ * routes, ANY fixed/absolute element parented to <body> that doesn't touch
+ * the canvas is chrome by definition, so it's unconditionally hidden. Known
+ * ids/classes stay as an explicit belt-and-suspenders list in case a future
+ * chrome root isn't fixed/absolute (e.g. static-flow markup).
+ */
 async function hideLabChrome(page) {
   await page.evaluate(() => {
     const canvas = document.querySelector('canvas');
@@ -98,14 +118,26 @@ async function hideLabChrome(page) {
       if (!el || !(el instanceof HTMLElement)) return;
       if (canvas && (el === canvas || el.contains(canvas) || canvas.contains(el))) return;
       el.style.setProperty('visibility', 'hidden', 'important');
+      el.style.setProperty('pointer-events', 'none', 'important');
     };
-    hide(document.getElementById('continuum-chunk-hud'));
-    document.querySelectorAll('[id*="lab"], [class*="lab-dock"], [class*="control-panel"]').forEach(hide);
-    // Right-dock panels from mountControlPanel (fixed, right edge) — skip if they wrap canvas.
-    document.querySelectorAll('body > div').forEach((el) => {
-      const s = getComputedStyle(el);
-      if (s.position !== 'fixed') return;
-      if (parseInt(s.right, 10) > 40) return;
+    // Explicit known chrome: game HUD (top bar/docks/notif stack/pause overlay
+    // all nest inside #hud), continuum chunk HUD, F3 debug/FPS overlay, the
+    // Planet Lab switcher button + its menu + demo caption, dest-mode crosshair.
+    [
+      'hud', 'continuum-chunk-hud', 'debug-overlay',
+      'demo-menu-btn', 'demo-menu', 'demo-caption', 'dest-mode-indicator',
+    ].forEach((id) => hide(document.getElementById(id)));
+    // Generator-lab dock panel (mountControlPanel): panel body, collapsed
+    // re-open tab, and flyout toggle button (all `.gen-lab-*`, not `div`-only).
+    document.querySelectorAll('.gen-lab-panel, .gen-lab-tab, .gen-lab-toggle, [class*="lab-dock"]')
+      .forEach(hide);
+    // Safety net for anything not caught above: every fixed/absolute element
+    // parented directly to <body> — no exemption by edge distance, since that
+    // heuristic is what caused the #hud leak above.
+    document.querySelectorAll('body > *').forEach((el) => {
+      if (!(el instanceof HTMLElement)) return;
+      const pos = getComputedStyle(el).position;
+      if (pos !== 'fixed' && pos !== 'absolute') return;
       hide(el);
     });
   });
