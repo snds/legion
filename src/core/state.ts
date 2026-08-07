@@ -11,7 +11,7 @@
 
 import { Events } from './events';
 import { gameTimeToEt } from './time';
-import { WU_PER_PC, SYSTEM_TIER_SCALE } from './metrics';
+import { AU_PER_PC, WU_PER_PC, SYSTEM_TIER_SCALE } from './metrics';
 
 // ── Zoom Step Definitions ────────────────────────────────────────
 
@@ -189,6 +189,32 @@ export function getCamDist(z: number): number {
 export function physicalDistancePc(z: number): number {
   return getCamDist(z) / WU_PER_PC;
 }
+
+/** Physical camera distance in AU for a zoom level — matches the HUD AU readout
+ *  (viewScale ← physicalDistancePc), so Sean's "0.8 AU" lab pose is reproducible. */
+export function physicalAuFromZoom(z: number): number {
+  return physicalDistancePc(z) * AU_PER_PC;
+}
+
+/**
+ * Inverse of physicalAuFromZoom: zoom axis that puts the HUD at `au` AU.
+ * Binary search over the monotonic getCamDist curve. Used to lock the close-zoom
+ * perf baseline (default 0.8 AU — the planet/star lab replicate distance).
+ */
+export function zoomForPhysicalAu(au: number): number {
+  const targetPc = Math.max(1e-12, au) / AU_PER_PC;
+  let lo = 0;
+  let hi = 1;
+  for (let i = 0; i < 48; i++) {
+    const mid = (lo + hi) * 0.5;
+    if (physicalDistancePc(mid) < targetPc) lo = mid;
+    else hi = mid;
+  }
+  return (lo + hi) * 0.5;
+}
+
+/** Official close-zoom perf baseline — HUD ≈ 0.8 AU (planet lab + star lab). */
+export const PERF_BASELINE_AU = 0.8;
 
 // ── State Shape ──────────────────────────────────────────────────
 

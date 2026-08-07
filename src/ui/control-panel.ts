@@ -22,6 +22,10 @@ export interface SliderCtrl {
   /** Displayed value = real / scale (e.g. show millions). */
   scale?: number;
   unit?: string;
+  /** When true, the label shows a rebake badge (atlas / erosion regen on release). */
+  rebake?: boolean;
+  /** Short tooltip: expected visual change when adjusting this control. */
+  help?: string;
   get(): number;
   set(v: number): void;
   /** Fired on release (the input's `change` event) — for expensive labs that
@@ -48,6 +52,10 @@ export interface PickerCtrl {
 export interface ToggleCtrl {
   kind: 'toggle';
   label: string;
+  /** When true, the label shows a rebake badge. */
+  rebake?: boolean;
+  /** Short tooltip: expected visual change when adjusting this control. */
+  help?: string;
   get(): boolean;
   set(v: boolean): void;
 }
@@ -55,6 +63,8 @@ export interface SelectCtrl {
   kind: 'select';
   label: string;
   options: readonly string[];
+  /** Short tooltip: expected visual change when adjusting this control. */
+  help?: string;
   get(): string;
   set(v: string): void;
 }
@@ -62,8 +72,14 @@ export interface SelectCtrl {
 export interface ColorCtrl {
   kind: 'color';
   label: string;
+  /** When true, the label shows a rebake badge. */
+  rebake?: boolean;
+  /** Short tooltip: expected visual change when adjusting this control. */
+  help?: string;
   get(): readonly [number, number, number];
   set(v: [number, number, number]): void;
+  /** Fired when the colour picker commits (change) — atlas regen for continuum. */
+  commit?(): void;
 }
 export type LabCtrl = SliderCtrl | ToggleCtrl | SelectCtrl | ColorCtrl | InfoCtrl | PickerCtrl;
 
@@ -219,12 +235,43 @@ export function mountControlPanel(
 
   const changed = (): void => { activeSchema.onChange?.(); };
 
+  /** Amber circle — marks controls that regenerate the planet atlas on release. */
+  const rebakeBadge = (): HTMLSpanElement => {
+    const b = document.createElement('span');
+    b.title = 'Rebake on release (renderer may pause briefly)';
+    b.setAttribute('aria-label', 'rebake');
+    b.style.cssText = 'display:inline-block;margin-left:6px;width:7px;height:7px;border-radius:50%;'
+      + 'background:#f0b45a;box-shadow:0 0 0 1px #6a4a18;flex:0 0 auto;vertical-align:middle';
+    return b;
+  };
+  /** Compact ? icon with native tooltip for expected visual change. */
+  const helpIcon = (tip: string): HTMLSpanElement => {
+    const h = document.createElement('span');
+    h.textContent = '?';
+    h.title = tip;
+    h.setAttribute('aria-label', tip);
+    h.style.cssText = 'display:inline-flex;align-items:center;justify-content:center;margin-left:5px;'
+      + 'width:12px;height:12px;border-radius:50%;font-size:9px;font-weight:700;line-height:1;'
+      + 'background:#2a3544;color:#9fb0c3;border:1px solid #3d4d60;cursor:help;flex:0 0 auto';
+    return h;
+  };
+  const labeledName = (label: string, rebake?: boolean, help?: string): HTMLSpanElement => {
+    const name = document.createElement('span');
+    name.style.cssText = 'display:inline-flex;align-items:center;min-width:0';
+    const text = document.createElement('span');
+    text.textContent = label;
+    name.appendChild(text);
+    if (help) name.appendChild(helpIcon(help));
+    if (rebake) name.appendChild(rebakeBadge());
+    return name;
+  };
+
   const addSlider = (host: HTMLElement, c: SliderCtrl): void => {
     const row = document.createElement('div');
     row.style.cssText = 'margin-top:6px;display:flex;justify-content:space-between';
-    const name = document.createElement('span'); name.textContent = c.label;
+    const name = labeledName(c.label, c.rebake, c.help);
     const val = document.createElement('span');
-    val.style.cssText = 'opacity:0.8;cursor:text;border-bottom:1px dotted transparent';
+    val.style.cssText = 'opacity:0.8;cursor:text;border-bottom:1px dotted transparent;flex:0 0 auto';
     val.title = 'Click to type an exact value';
     val.addEventListener('mouseenter', () => { val.style.borderBottomColor = '#5a6a7c'; });
     val.addEventListener('mouseleave', () => { val.style.borderBottomColor = 'transparent'; });
@@ -319,7 +366,7 @@ export function mountControlPanel(
   const addToggle = (host: HTMLElement, c: ToggleCtrl): void => {
     const row = document.createElement('label');
     row.style.cssText = 'margin-top:6px;display:flex;justify-content:space-between;align-items:center;cursor:pointer';
-    const name = document.createElement('span'); name.textContent = c.label;
+    const name = labeledName(c.label, c.rebake, c.help);
     const box = document.createElement('input');
     box.type = 'checkbox'; box.style.cssText = 'accent-color:#6aa3ff;width:14px;height:14px;margin:0';
     const sync = (): void => { box.checked = c.get(); };
@@ -332,7 +379,7 @@ export function mountControlPanel(
   const addSelect = (host: HTMLElement, c: SelectCtrl): void => {
     const row = document.createElement('div');
     row.style.cssText = 'margin-top:6px;display:flex;justify-content:space-between;align-items:center;gap:8px';
-    const name = document.createElement('span'); name.textContent = c.label;
+    const name = labeledName(c.label, false, c.help);
     const sel = document.createElement('select');
     sel.style.cssText = 'flex:1;min-width:0;background:#1c2530;color:#cfd8e3;border:1px solid #34404e;'
       + 'border-radius:4px;padding:3px 4px;font:inherit;font-size:11px;cursor:pointer';
@@ -349,13 +396,14 @@ export function mountControlPanel(
   const addColor = (host: HTMLElement, c: ColorCtrl): void => {
     const row = document.createElement('label');
     row.style.cssText = 'margin-top:6px;display:flex;justify-content:space-between;align-items:center;cursor:pointer';
-    const name = document.createElement('span'); name.textContent = c.label;
+    const name = labeledName(c.label, c.rebake, c.help);
     const inp = document.createElement('input');
     inp.type = 'color';
     inp.style.cssText = 'width:34px;height:18px;padding:0;border:1px solid #34404e;border-radius:4px;background:none;cursor:pointer';
     const sync = (): void => { inp.value = linToHex(c.get()); };
     sync();
     inp.addEventListener('input', () => { c.set(hexToLin(inp.value)); changed(); });
+    if (c.commit) inp.addEventListener('change', () => { c.commit!(); });
     row.append(name, inp); host.appendChild(row);
     syncers.push(sync);
   };

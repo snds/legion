@@ -22,7 +22,11 @@ export interface RendererContext {
 export async function createRenderer(
   container: HTMLElement,
 ): Promise<RendererContext> {
+  // ?accept=1 (Continuum capture harness) needs buffer reads / reliable screenshots.
+  const acceptCapture = typeof location !== 'undefined'
+    && new URLSearchParams(location.search).has('accept');
   const renderer = new WebGLRenderer({
+    preserveDrawingBuffer: acceptCapture,
     // GPU hardware acceleration: ask the browser for the discrete / high-perf
     // GPU rather than the integrated one (the default on dual-GPU laptops). Big
     // win on MacBook Pro / gaming laptops; no-op on single-GPU machines.

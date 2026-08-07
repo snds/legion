@@ -68,7 +68,26 @@ scores from locator captures.
 | `orbit-0.8au` | Native/lossless 10–20 s orbit at 0.8 AU | `refs/continuum/motion/orbit-0.8au/` | Extract 1 fps plus dense lighting-change frames |
 | `look-orient` | Native/lossless pitch, yaw, and roll at fixed distance | `refs/continuum/motion/look-orient/` | Flag temporal crawl, cascade swim, and dither crawl |
 
-### Author capture commands
+### Automated capture (preferred)
+
+With the Vite lab running (`npm run dev -- --host 127.0.0.1 --port 5174`):
+
+```bash
+# once: npm i && npx playwright install chrome
+npm run accept:continuum -- --base http://127.0.0.1:5174
+# subsets:
+npm run accept:continuum:stills -- --base http://127.0.0.1:5174
+npm run accept:continuum:perf -- --base http://127.0.0.1:5174
+npm run accept:continuum:motion -- --base http://127.0.0.1:5174 --skip-qa
+```
+
+This launches **system Chrome** via Playwright (not the IDE browser), drives
+`window.__continuumAccept`, writes `refs/continuum/{stills,motion,perf}/`, then runs
+`render-qa-toolkit` unless `--skip-qa`. Pose sun facing (day/night/terminator) is
+auto-searched; coast uses a fixed yaw offset (human scorecard still required vs `se-planet`).
+Optional SE plates: drop under `refs/northstars/se-planet/` for a later `reference_match` pass.
+
+### Author capture commands (manual fallback)
 
 After saving the PNGs and native/lossless recordings to the paths above, run:
 

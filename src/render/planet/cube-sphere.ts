@@ -121,6 +121,8 @@ export interface SelectParams {
    *  when `cullHorizon`; pushes the horizon out so a peak near the limb is never
    *  wrongly culled. */
   readonly maxElevation?: number;
+  /** Extra radians beyond geometric + elevation horizon (rotate / approach warm). */
+  readonly horizonPad?: number;
 }
 
 /**
@@ -133,7 +135,7 @@ export interface SelectParams {
  * visible one — the failure the old code avoided by disabling frustum culling wholesale.
  */
 export function nodeBelowHorizon(
-  n: QuadNode, camLocal: Vec3, radius: number, maxElevation = 0,
+  n: QuadNode, camLocal: Vec3, radius: number, maxElevation = 0, horizonPad = 0,
 ): boolean {
   const d = Math.sqrt(camLocal[0] * camLocal[0] + camLocal[1] * camLocal[1] + camLocal[2] * camLocal[2]);
   if (d <= radius) return false; // camera at/inside the surface → the whole sphere is potentially visible
@@ -145,7 +147,7 @@ export function nodeBelowHorizon(
   // Horizon half-angle from the sub-camera point, widened by the tallest terrain.
   const thetaHorizon = Math.acos(Math.min(1, radius / d));
   const elevSlop = Math.acos(Math.min(1, 1 / (1 + Math.max(0, maxElevation))));
-  return angleCenter - nodeAngularRadius(n) > thetaHorizon + elevSlop;
+  return angleCenter - nodeAngularRadius(n) > thetaHorizon + elevSlop + Math.max(0, horizonPad);
 }
 
 /**
@@ -161,7 +163,9 @@ export function selectFace(face: number, p: SelectParams): QuadNode[] {
     // Prune whole subtrees hidden behind the horizon before spending split work on
     // them — this is what removes the far hemisphere (and, at close zoom, most of
     // the near one) from the ~12k-leaf close-approach set.
-    if (p.cullHorizon && nodeBelowHorizon(n, p.camLocal, p.radius, p.maxElevation ?? 0)) return;
+    if (p.cullHorizon && nodeBelowHorizon(
+      n, p.camLocal, p.radius, p.maxElevation ?? 0, p.horizonPad ?? 0,
+    )) return;
     if (n.level >= p.maxLevel || !shouldSplit(n, p)) {
       out.push(n);
       return;
@@ -175,7 +179,10 @@ export function selectFace(face: number, p: SelectParams): QuadNode[] {
 /** All six faces' active leaves. */
 export function selectSphere(p: SelectParams): QuadNode[] {
   const out: QuadNode[] = [];
-  for (let f = 0; f < 6; f++) out.push(...selectFace(f, p));
+  for (let f = 0; f < 6; f++) {
+    const face = selectFace(f, p);
+    for (let i = 0; i < face.length; i++) out.push(face[i]);
+  }
   return out;
 }
 

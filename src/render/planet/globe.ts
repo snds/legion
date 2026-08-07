@@ -7,8 +7,8 @@
 //        ├─ atmosphere shell (P2)
 //        └─ impostor billboard (far LOD — analytic ray-sphere, one draw)
 //
-// Surface worlds get the cube-sphere QUADTREE (selectSphere → per-leaf meshes,
-// GPU-displaced by ONE shared material); giants get the banded-cloud sphere.
+// Surface worlds get the cube-sphere QUADTREE (selectSphere → merged leaf geo,
+// one draw, GPU-displaced by ONE shared material); giants get the banded-cloud sphere.
 // LOD hands off globe↔impostor by apparent pixel size, dimming the impostor
 // below a pixel so far planets fade instead of piling up. Deterministic: every
 // look derives from planet.seed; rotation is the only time-varying, cosmetic bit.
@@ -32,8 +32,9 @@ import {
   type PlateField,
 } from './plates';
 import { warpDir } from './simplex';
-import { bakeCube, type BakeParams } from './bake';
+import { bakeCube, CACHE_BAKE, type BakeParams } from './bake';
 import type { BakeRequest, BakeResponse } from './bake-worker';
+import { enqueueBake, cancelBake, bakeFinished } from './bake-queue';
 import { generateRings, densityLUT, type RingSystem } from './rings';
 import { channel, range } from './rng';
 import { stageForPx, apparentRadiusPx, dotBrightness, LodStage } from './lod';
@@ -53,14 +54,26 @@ export interface UpdateCtx {
 
 const NODE_RES = 16;    // grid resolution per quadtree leaf
 // Planet v2 Phase 1: subdivide by SCREEN error, deep near the camera. DETAIL is
-// the target on-screen angular size of a leaf (radians) — 0.02 ≈ 1.1°. Only
+// the target on-screen angular size of a leaf (radians) — 0.035 ≈ 2°. Only
 // camera-facing leaves reach MAX_LEVEL, so total count stays bounded by screen
-// coverage. (The "missing faces" that looked like LOD cracks were actually
-// inverted winding on the ±Y cube faces — see buildNodeGeometry — not
-// under-sampling, so no need for heavy over-tessellation here.)
-const MAX_LEVEL = 9;
-const DETAIL = 0.02;
-const MAX_LEAF_CACHE = 1400; // evict beyond this so deep dives don't grow unbounded
+// coverage. (Raised from 0.02 / level-9 after the 0.8 AU lab baseline showed
+// ~1300 leaves / ~1300 draws — per-fragment shading keeps silhouette crisp.)
+const MAX_LEVEL = 7;
+const DETAIL = 0.035;
+/** Hard leaf cap — coarsen detail until the active set fits (60 fps budget). */
+const MAX_LEAVES = 320;
+const MAX_LEAF_CACHE = 800; // evict beyond this so deep dives don't grow unbounded
+/** Rebuild LOD only after the camera moves this fraction of radius (approach-stable). */
+const LOD_HYSTERESIS = 0.06;
+/**
+ * Daily spin moves the camera in surface-local space even when the world camera is
+ * idle — that used to thrash mergeLeafGeometries (~2 rebuilds/s → hitching). Rebuild
+ * for spin only after this much yaw so facing detail stays correct without per-tick cost.
+ * ~12° ≈ 1–6 s between spin-driven rebuilds at typical spinRate (0.02–0.12 rad/s).
+ */
+const LOD_SPIN_ANGLE = 0.22;
+/** Hard cap: never rewrite the merged surface mesh more often than this (ms). */
+const LOD_MIN_REBUILD_MS = 120;
 const RING_SEGMENTS = 96;
 const LUT_N = 128;
 
@@ -68,6 +81,7 @@ const _camRight = new Vector3();
 const _camUp = new Vector3();
 const _planetWorld = new Vector3();
 const _camLocal = new Vector3();
+const _camTilt = new Vector3();
 const _qTmp = new Quaternion();
 const _worldScale = new Vector3();
 
@@ -89,6 +103,7 @@ export class PlanetGlobe {
   private readonly giantMesh: Mesh | null = null;
   private readonly atmosMesh: Mesh | null = null;
   private cloudMesh: Mesh | null = null;
+  private cloudsVisible = true;
   private readonly ringMesh: Mesh | null = null;
   private readonly impostorMesh: Mesh;
   private readonly impostorMat: ShaderMaterial;
@@ -96,14 +111,33 @@ export class PlanetGlobe {
   private readonly spinRate: number;
   private activeIds = '';
   private readonly nodeGeoCache = new Map<string, BufferGeometry>();
+  /** Single merged surface mesh (one draw) — rebuilt when the active leaf set changes. */
+  private surfaceMesh: Mesh | null = null;
+  private mergedGeo: BufferGeometry | null = null;
+  /** Camera position (tilt-local) at last LOD rebuild — approach/orbit hysteresis. */
+  private lodCamTilt: Vec3 | null = null;
+  /** spinGroup.rotation.y at last LOD rebuild — spin-driven refresh gate. */
+  private lodSpinYaw = 0;
+  private lodRebuildAt = 0;
+  /** Debug: how many times the merged leaf set was rebuilt (lab hitch diagnosis). */
+  lodRebuildCount = 0;
   private atlasTex: DataTexture | null = null; // stacked 6-face eroded height atlas
   private useBake = false;
   private bakeWorker: Worker | null = null; // in-flight async height bake (see bakeAsync)
   private bakePending = false;
-  private bakeAuto = true;  // cleared once setBaked() takes manual control
+  private bakeAuto = true;  // cleared once setBaked() takes manual control (lab A/B)
   private bakeFailed = false; // a failed worker must not respawn every frame
+  /** Fingerprint of height-affecting params — change invalidates the atlas. */
+  private bakeFp = '';
+  /** Pending CACHE_BAKE params for the queued worker start. */
+  private bakeCacheParams: Partial<BakeParams> = CACHE_BAKE;
   private seed: number; // mutable so the lab can reseed IN PLACE (keep the root)
   private spinPaused = false; // lab: stop the auto-spin to hand-turn the subject
+
+  /** Stable id for the single-flight bake queue. */
+  private get bakeJobId(): string {
+    return `globe-${this.seed}-${this.params.type}`;
+  }
 
   // ── CPU weather: cyclone placement/lifecycle (ocean-gated, respawning) ──
   private cloudClock = 0;                       // raw seconds; shader scales by uCloudSpeed
@@ -118,6 +152,7 @@ export class PlanetGlobe {
   ) {
     this.seed = planet.seed;
     this.params = derivePlanetParams(planet);
+    this.bakeFp = this.terrainFingerprint();
     this.root.name = `globe-${planet.seed}`;
     this.root.userData.type = 'planet-globe';
     this.root.userData.seed = planet.seed;
@@ -151,13 +186,14 @@ export class PlanetGlobe {
 
     // Atmosphere shell (P2).
     if (this.params.hasAtmosphere) {
-      this.atmosMesh = new Mesh(new IcosahedronGeometry(radius * 1.035, 6), this.buildAtmosMat());
+      this.atmosMesh = new Mesh(new IcosahedronGeometry(radius * 1.035, 4), this.buildAtmosMat());
       this.root.add(this.atmosMesh);
     }
     // Cloud shell (surface worlds): lives in the SPIN frame — the same object
     // space the surface samples for its cloud shadows, so they always align.
+    // Detail is fragment-shader FBM; keep geometry coarse (one draw, few tris).
     if (!this.params.isGiant) {
-      this.cloudMesh = new Mesh(new IcosahedronGeometry(radius * 1.03, 5), this.buildCloudMat());
+      this.cloudMesh = new Mesh(new IcosahedronGeometry(radius * 1.03, 3), this.buildCloudMat());
       this.spinGroup.add(this.cloudMesh);
     }
 
@@ -195,6 +231,7 @@ export class PlanetGlobe {
         uCanyonFreq: { value: macroParams(p.type).canyonFreq },
         uCanyonDepth: { value: macroParams(p.type).canyonDepth },
         uCloudCover: { value: p.cloudCover },
+        uCloudCheap: { value: 0 },
         uCloudShadow: { value: p.cloudShadow },
         uCloudFlow: { value: p.cloudFlow },
         uCloudTurb: { value: p.cloudTurb },
@@ -367,12 +404,15 @@ export class PlanetGlobe {
     // Warp the bake with the SAME simplex + noiseSeed the live shader uses, so a
     // baked world's coasts/ranges land exactly where the live view drew them.
     const cube = bakeCube(this.seed, this.params.type, params, this.params.warp, this.params.noiseSeed);
-    this.applyBakedCube(cube.res, cube.faces);
+    // CACHE-style (no erosion) → cheaper cloud/night fragment path. Full lab bake keeps quality.
+    const merged = { droplets: 40000, thermalIters: 8, ...params };
+    const cheapFrag = merged.droplets === 0 && merged.thermalIters === 0;
+    this.applyBakedCube(cube.res, cube.faces, cheapFrag);
   }
 
   /** Upload a baked 6-face height set as the atlas and switch the shader onto the
    *  baked branch. Shared by the synchronous `bake()` (lab) and the worker path. */
-  private applyBakedCube(res: number, faces: readonly Float32Array[]): void {
+  private applyBakedCube(res: number, faces: readonly Float32Array[], cheapFrag = false): void {
     if (!this.surfaceMat) return;
     // Stack the 6 faces vertically into one atlas (res wide × 6·res tall); face f
     // owns rows [f·res, (f+1)·res). The shader maps (aFace, faceUV) into it.
@@ -388,42 +428,106 @@ export class PlanetGlobe {
     this.surfaceMat.uniforms.uHeightRes.value = res;
     this.useBake = true;
     this.surfaceMat.uniforms.uUseBake.value = 1;
+    this.setCloudCheap(cheapFrag ? 1 : 0);
+  }
+
+  /** Drop atlas + cancel in-flight bake so live terrain takes over again. */
+  private invalidateBake(): void {
+    cancelBake(this.bakeJobId);
+    if (this.bakePending) bakeFinished(this.bakeJobId);
+    this.bakeWorker?.terminate();
+    this.bakeWorker = null;
+    this.bakePending = false;
+    this.bakeFailed = false;
+    this.useBake = false;
+    if (this.surfaceMat) this.surfaceMat.uniforms.uUseBake.value = 0;
+    this.atlasTex?.dispose();
+    this.atlasTex = null;
+    this.setCloudCheap(0);
+  }
+
+  /** Fingerprint of everything the height bake samples. Change → invalidate. */
+  private terrainFingerprint(): string {
+    const m = macroParams(this.params.type);
+    const p = this.params;
+    return [
+      this.seed, p.type, p.warp, p.ridged, p.noiseSeed.join(','),
+      m.plateCount, m.continents, m.landCoverage, m.sizeVariety, m.uplift, m.rangeWidth,
+      m.detailScale, m.coastAmp, m.coastFreq, m.rangeVar,
+      m.craters, m.craterFreq, m.craterDepth, m.canyons, m.canyonFreq, m.canyonDepth,
+    ].join('|');
+  }
+
+  private setCloudCheap(v: number): void {
+    if (this.surfaceMat) this.surfaceMat.uniforms.uCloudCheap.value = v;
+    if (this.cloudMesh) {
+      (this.cloudMesh.material as ShaderMaterial).uniforms.uCloudCheap.value = v;
+    }
+  }
+
+  /** Lab / harness: stand auto-bake down so A/B toggles stay under manual control. */
+  setBakeAuto(on: boolean): void {
+    this.bakeAuto = on;
+    if (!on) {
+      cancelBake(this.bakeJobId);
+      if (this.bakePending && !this.useBake) {
+        this.bakeWorker?.terminate();
+        this.bakeWorker = null;
+        this.bakePending = false;
+        bakeFinished(this.bakeJobId);
+      }
+    }
   }
 
   /**
-   * Kick the height bake onto a WORKER, keeping the live analytic terrain on screen
-   * until it lands. The bake is ~4 s of CPU at res 256, so it can never run inline —
-   * this is the only way the shipping path gets the baked branch without freezing
-   * the tab. Idempotent (one bake per globe) and safe to fire every frame; the
-   * result is dropped if the globe is disposed while it runs.
+   * Kick the height bake onto a WORKER via the single-flight queue. Live analytic
+   * terrain stays on screen until the atlas lands. Uses CACHE_BAKE by default
+   * (no erosion) — lab manual bake keeps DEFAULT_BAKE via setBaked.
    */
-  bakeAsync(params: Partial<BakeParams> = {}): void {
+  bakeAsync(params: Partial<BakeParams> = CACHE_BAKE): void {
     if (this.params.isGiant || !this.surfaceMat) return;
     if (!this.bakeAuto || this.bakeFailed || this.useBake || this.bakePending) return;
-    // Headless/test/SSR contexts have no Worker — stay on the live analytic path
-    // rather than throwing out of the per-frame update.
     if (typeof Worker === 'undefined') return;
+    this.bakeCacheParams = params;
+    enqueueBake({
+      id: this.bakeJobId,
+      start: () => this.startBakeWorker(this.bakeCacheParams),
+    });
+  }
+
+  private startBakeWorker(params: Partial<BakeParams>): void {
+    if (this.params.isGiant || !this.surfaceMat || this.useBake || this.bakeFailed) {
+      bakeFinished(this.bakeJobId);
+      return;
+    }
     let worker: Worker;
     try {
       worker = new Worker(new URL('./bake-worker.ts', import.meta.url), { type: 'module' });
     } catch {
-      return; // worker construction blocked (CSP, unsupported) → live path stands
+      this.bakeFailed = true;
+      bakeFinished(this.bakeJobId);
+      return;
     }
     this.bakePending = true;
     this.bakeWorker = worker;
+    const jobId = this.bakeJobId;
     worker.onmessage = (e: MessageEvent<BakeResponse>): void => {
       this.bakePending = false;
-      if (this.bakeWorker !== worker) return; // disposed/superseded while baking
-      this.applyBakedCube(e.data.res, e.data.faces);
+      if (this.bakeWorker !== worker) {
+        bakeFinished(jobId);
+        return;
+      }
+      // Auto cache path → cheap fragment tier (clouds lite). Manual lab bake keeps full.
+      this.applyBakedCube(e.data.res, e.data.faces, /* cheapFrag */ this.bakeAuto);
       worker.terminate();
       this.bakeWorker = null;
+      bakeFinished(jobId);
     };
     worker.onerror = (): void => {
-      // Bake failed → stay on the live analytic path (correct, just costlier) and
-      // DON'T retry: clearing bakePending alone would respawn a worker every frame.
       this.bakeFailed = true;
       this.bakePending = false;
       if (this.bakeWorker === worker) { worker.terminate(); this.bakeWorker = null; }
+      bakeFinished(jobId);
     };
     const req: BakeRequest = {
       seed: this.seed, type: this.params.type, params,
@@ -438,12 +542,15 @@ export class PlanetGlobe {
    *  and silently corrupt an A/B measurement. */
   setBaked(on: boolean, params: Partial<BakeParams> = {}): void {
     this.bakeAuto = false;
+    cancelBake(this.bakeJobId);
+    if (this.bakePending) bakeFinished(this.bakeJobId);
     this.bakeWorker?.terminate();
     this.bakeWorker = null;
     this.bakePending = false;
     if (on) { this.bake(params); return; }
     this.useBake = false;
     if (this.surfaceMat) this.surfaceMat.uniforms.uUseBake.value = 0;
+    this.setCloudCheap(0);
   }
 
   /** Re-jitter the terrain from a new seed IN PLACE (keeps the root, so a camera
@@ -468,6 +575,16 @@ export class PlanetGlobe {
   refreshParams(): void {
     this.params = derivePlanetParams({ ...this.planet, seed: this.seed });
     const p = this.params;
+    const fp = this.terrainFingerprint();
+    if (fp !== this.bakeFp) {
+      this.bakeFp = fp;
+      // Height-affecting edit while baked (or baking): drop atlas and re-queue if auto.
+      if (this.useBake || this.bakePending) {
+        const requeue = this.bakeAuto;
+        this.invalidateBake();
+        if (requeue) this.bakeAsync(CACHE_BAKE);
+      }
+    }
     if (this.surfaceMat) {
       const u = this.surfaceMat.uniforms;
       (u.uNoiseSeed.value as Vector3).set(...p.noiseSeed);
@@ -484,7 +601,7 @@ export class PlanetGlobe {
       u.uCanyons.value = macroParams(p.type).canyons;
       u.uCanyonFreq.value = macroParams(p.type).canyonFreq;
       u.uCanyonDepth.value = macroParams(p.type).canyonDepth;
-      u.uCloudCover.value = p.cloudCover;
+      u.uCloudCover.value = this.cloudsVisible ? p.cloudCover : 0;
       u.uCloudShadow.value = p.cloudShadow;
       u.uCloudFlow.value = p.cloudFlow;
       u.uCloudTurb.value = p.cloudTurb;
@@ -496,7 +613,7 @@ export class PlanetGlobe {
       u.uCycSize.value = p.cycloneSize;
       if (this.cloudMesh) {
         const cm = (this.cloudMesh.material as ShaderMaterial).uniforms;
-        cm.uCloudCover.value = p.cloudCover;
+        cm.uCloudCover.value = this.cloudsVisible ? p.cloudCover : 0;
         cm.uCloudFlow.value = p.cloudFlow;
         cm.uCloudTurb.value = p.cloudTurb;
         cm.uCloudTerrain.value = p.cloudTerrain;
@@ -597,6 +714,7 @@ export class PlanetGlobe {
         uTerminator: { value: 0.08 },
         uNoiseSeed: { value: new Vector3(...p.noiseSeed) },
         uCloudCover: { value: p.cloudCover },
+        uCloudCheap: { value: 0 },
         uCloudFlow: { value: p.cloudFlow },
         uCloudTurb: { value: p.cloudTurb },
         uCloudTerrain: { value: p.cloudTerrain },
@@ -681,21 +799,32 @@ export class PlanetGlobe {
     const ids = nodes.map(nodeId).sort().join('|');
     if (ids === this.activeIds || !this.surfaceMat) return;
     this.activeIds = ids;
-    // Clear current leaf meshes (geometry is cached, not disposed).
-    for (let i = this.surfaceGroup.children.length - 1; i >= 0; i--) {
-      this.surfaceGroup.remove(this.surfaceGroup.children[i]);
-    }
+    this.lodRebuildCount++;
+
+    // Build / reuse per-leaf geos, then MERGE into one BufferGeometry → one draw
+    // call (was ~N Mesh children = ~N draws; lab baseline hit ~1300).
+    const geos: BufferGeometry[] = [];
     for (const n of nodes) {
-      let geo = this.nodeGeoCache.get(nodeId(n));
-      if (!geo) { geo = buildNodeGeometry(n, this.radius, NODE_RES); this.nodeGeoCache.set(nodeId(n), geo); }
-      const leaf = new Mesh(geo, this.surfaceMat);
-      // The leaf's undisplaced bounding sphere doesn't include the vertex-shader
-      // displacement; at true scale + deep transforms that mis-cull can drop
-      // whole patches ("missing faces"). The globe as a whole is culled by its
-      // LOD stage, so per-leaf frustum culling only costs correctness here.
-      leaf.frustumCulled = false;
-      this.surfaceGroup.add(leaf);
+      const id = nodeId(n);
+      let geo = this.nodeGeoCache.get(id);
+      if (!geo) {
+        geo = buildNodeGeometry(n, this.radius, NODE_RES);
+        this.nodeGeoCache.set(id, geo);
+      }
+      geos.push(geo);
     }
+    const merged = mergeLeafGeometries(geos);
+    this.mergedGeo?.dispose();
+    this.mergedGeo = merged;
+
+    if (!this.surfaceMesh) {
+      this.surfaceMesh = new Mesh(merged, this.surfaceMat);
+      this.surfaceMesh.frustumCulled = false;
+      this.surfaceGroup.add(this.surfaceMesh);
+    } else {
+      this.surfaceMesh.geometry = merged;
+    }
+
     // Evict cold cached leaves beyond the cap (never the active set).
     if (this.nodeGeoCache.size > MAX_LEAF_CACHE) {
       const active = new Set(nodes.map(nodeId));
@@ -706,9 +835,46 @@ export class PlanetGlobe {
     }
   }
 
+  /**
+   * Select leaves for the camera, under a hard MAX_LEAVES budget. If the natural
+   * screen-error set is too large, coarsen `detail` until it fits — prefer fewer
+   * deeper leaves over blowing the draw/fragment budget.
+   */
+  private selectBudgeted(camLocal: Vec3): QuadNode[] {
+    const base = {
+      camLocal, radius: this.radius, detail: DETAIL, maxLevel: MAX_LEVEL,
+      cullHorizon: true as const,
+      maxElevation: this.params.displacement * 0.5 + 0.01,
+    };
+    let nodes = selectSphere(base);
+    if (nodes.length <= MAX_LEAVES) return nodes;
+    let lo = DETAIL;
+    let hi = DETAIL * 12;
+    for (let i = 0; i < 10; i++) {
+      const mid = (lo + hi) * 0.5;
+      nodes = selectSphere({ ...base, detail: mid });
+      if (nodes.length > MAX_LEAVES) lo = mid;
+      else hi = mid;
+    }
+    return selectSphere({ ...base, detail: hi });
+  }
+
   /** Pause/resume the automatic daily spin (the lab lets you stop and hand-turn
    *  the subject). */
   setSpinPaused(p: boolean): void { this.spinPaused = p; }
+
+  /** Lab toggle — hides cloud shell / shadows without editing cloudCover. */
+  setCloudsVisible(on: boolean): void {
+    this.cloudsVisible = on;
+    const cover = on ? this.params.cloudCover : 0;
+    if (this.surfaceMat) this.surfaceMat.uniforms.uCloudCover.value = cover;
+    if (this.cloudMesh) {
+      (this.cloudMesh.material as ShaderMaterial).uniforms.uCloudCover.value = cover;
+      // Visibility is also gated by LOD stage in update(); stash intent here.
+      if (this.cloudMesh.visible || !on) this.cloudMesh.visible = on && this.surfaceGroup.visible;
+    }
+  }
+  get areCloudsVisible(): boolean { return this.cloudsVisible; }
   get isSpinPaused(): boolean { return this.spinPaused; }
 
   /** Hand-rotate the subject: yaw turns it about its own axis (longitude), pitch
@@ -737,31 +903,41 @@ export class PlanetGlobe {
     this.surfaceGroup.visible = near;
     if (this.giantMesh) this.giantMesh.visible = near;
     if (this.atmosMesh) this.atmosMesh.visible = near;
-    if (this.cloudMesh) this.cloudMesh.visible = near;
+    if (this.cloudMesh) this.cloudMesh.visible = near && this.cloudsVisible;
     if (this.ringMesh) this.ringMesh.visible = near;
     this.impostorMesh.visible = !near;
 
     if (near) {
-      // NOTE: auto-bake-on-approach is deliberately NOT wired here yet. bakeAsync()
-      // exists and works, but firing it automatically regressed two things:
-      //   1. it overrides the lab's saved per-type `baked` preference, and
-      //   2. refreshParams() does not invalidate the atlas, so once baked, terrain
-      //      param edits silently stop affecting the surface ("my settings are gone").
-      // Wire it back only with: lab opt-out, bake invalidation on param/seed change,
-      // and a single shared bake queue so N globes can't spawn N workers at once.
-      // Refresh quadtree from the camera's position in surface-local space.
+      // Near-zone height cache: one worker at a time (bake-queue), lab opts out via
+      // setBakeAuto(false). refreshParams invalidates the atlas when terrain params change.
+      if (this.bakeAuto && !this.useBake && !this.bakePending && !this.bakeFailed) {
+        this.bakeAsync(CACHE_BAKE);
+      }
+      // Quadtree selection must use surface-local camera (leaves are spin-attached),
+      // but the REBUILD GATE is spin-aware: daily rotation alone must not thrash the
+      // merged mesh every hysteresis tick (lab hitch ~2 rebuilds/s). Approach/orbit
+      // still updates promptly via tilt-local camera motion.
       if (this.surfaceMat) {
+        this.root.updateMatrixWorld(true);
+        this.tiltGroup.worldToLocal(_camTilt.copy(ctx.camera.position));
         this.surfaceGroup.worldToLocal(_camLocal.copy(ctx.camera.position));
-        const sel = selectSphere({
-          camLocal: [_camLocal.x, _camLocal.y, _camLocal.z] as Vec3,
-          radius: this.radius, detail: DETAIL, maxLevel: MAX_LEVEL,
-          // Skip leaves hidden behind the planet body. Slop = tallest terrain
-          // (displacement raises the surface by up to displacement/2) + a small
-          // margin for the approximate node angular radius, so limb peaks survive.
-          cullHorizon: true,
-          maxElevation: this.params.displacement * 0.5 + 0.01,
-        });
-        this.rebuildQuadtree(sel);
+        const cam: Vec3 = [_camLocal.x, _camLocal.y, _camLocal.z];
+        const tilt: Vec3 = [_camTilt.x, _camTilt.y, _camTilt.z];
+        const spinYaw = this.spinGroup.rotation.y;
+        const camMoved = !this.lodCamTilt || Math.hypot(
+          tilt[0] - this.lodCamTilt[0], tilt[1] - this.lodCamTilt[1], tilt[2] - this.lodCamTilt[2],
+        ) > this.radius * LOD_HYSTERESIS;
+        let spinDelta = Math.abs(spinYaw - this.lodSpinYaw) % (Math.PI * 2);
+        if (spinDelta > Math.PI) spinDelta = Math.PI * 2 - spinDelta;
+        const spunEnough = spinDelta > LOD_SPIN_ANGLE;
+        const now = performance.now();
+        const cooled = now - this.lodRebuildAt >= LOD_MIN_REBUILD_MS;
+        if ((!this.activeIds || ((camMoved || spunEnough) && cooled))) {
+          this.lodCamTilt = tilt;
+          this.lodSpinYaw = spinYaw;
+          this.lodRebuildAt = now;
+          this.rebuildQuadtree(this.selectBudgeted(cam));
+        }
         setSun(this.surfaceMat, sunDir);
       }
       if (this.giantMesh) { const m = this.giantMesh.material as ShaderMaterial; setSun(m, sunDir); m.uniforms.uTime.value = (m.uniforms.uTime.value + ctx.dt) % 1000; }
@@ -809,11 +985,16 @@ export class PlanetGlobe {
   dispose(): void {
     this.root.removeFromParent();
     // Drop any in-flight bake — its result is meaningless once the globe is gone.
+    cancelBake(this.bakeJobId);
+    if (this.bakePending) bakeFinished(this.bakeJobId);
     this.bakeWorker?.terminate();
     this.bakeWorker = null;
     this.bakePending = false;
     for (const g of this.nodeGeoCache.values()) g.dispose();
     this.nodeGeoCache.clear();
+    this.mergedGeo?.dispose();
+    this.mergedGeo = null;
+    this.surfaceMesh = null;
     this.atlasTex?.dispose();
     this.surfaceMat?.dispose();
     this.giantMesh?.geometry.dispose();
@@ -836,6 +1017,68 @@ export class PlanetGlobe {
 const _tmpSun = new Vector3();
 function setSun(m: ShaderMaterial, dir: Vector3): void {
   (m.uniforms.uSunDir.value as Vector3).copy(dir);
+}
+
+/**
+ * Concatenate leaf BufferGeometries into one draw. Leaves share attribute layout
+ * (position/normal/faceUV/aFace/aFaceU/aFaceV); indices are remapped. The source
+ * geos stay in the node cache — the merged copy owns its own buffers.
+ */
+export function mergeLeafGeometries(geos: BufferGeometry[]): BufferGeometry {
+  if (geos.length === 0) return new BufferGeometry();
+  if (geos.length === 1) return geos[0].clone();
+
+  let vCount = 0;
+  let iCount = 0;
+  for (const g of geos) {
+    vCount += g.getAttribute('position').count;
+    iCount += g.index ? g.index.count : g.getAttribute('position').count;
+  }
+  const positions = new Float32Array(vCount * 3);
+  const normals = new Float32Array(vCount * 3);
+  const faceUV = new Float32Array(vCount * 2);
+  const aFace = new Float32Array(vCount);
+  const aFaceU = new Float32Array(vCount * 3);
+  const aFaceV = new Float32Array(vCount * 3);
+  const indices = new Uint32Array(iCount);
+
+  let vo = 0, v2 = 0, v1 = 0, io = 0, vBase = 0;
+  for (const g of geos) {
+    const p = g.getAttribute('position').array as Float32Array;
+    const n = g.getAttribute('normal').array as Float32Array;
+    const uv = g.getAttribute('faceUV').array as Float32Array;
+    const f = g.getAttribute('aFace').array as Float32Array;
+    const fu = g.getAttribute('aFaceU').array as Float32Array;
+    const fv = g.getAttribute('aFaceV').array as Float32Array;
+    const vc = g.getAttribute('position').count;
+    positions.set(p, vo);
+    normals.set(n, vo);
+    faceUV.set(uv, v2);
+    aFace.set(f, v1);
+    aFaceU.set(fu, vo);
+    aFaceV.set(fv, vo);
+    const idx = g.index;
+    if (idx) {
+      const arr = idx.array;
+      for (let i = 0; i < arr.length; i++) indices[io++] = (arr[i] as number) + vBase;
+    } else {
+      for (let i = 0; i < vc; i++) indices[io++] = vBase + i;
+    }
+    vo += vc * 3;
+    v2 += vc * 2;
+    v1 += vc;
+    vBase += vc;
+  }
+
+  const out = new BufferGeometry();
+  out.setAttribute('position', new BufferAttribute(positions, 3));
+  out.setAttribute('normal', new BufferAttribute(normals, 3));
+  out.setAttribute('faceUV', new BufferAttribute(faceUV, 2));
+  out.setAttribute('aFace', new BufferAttribute(aFace, 1));
+  out.setAttribute('aFaceU', new BufferAttribute(aFaceU, 3));
+  out.setAttribute('aFaceV', new BufferAttribute(aFaceV, 3));
+  out.setIndex(new BufferAttribute(indices, 1));
+  return out;
 }
 
 /** Build one quadtree leaf's grid geometry (smooth cube-sphere patch; the

@@ -29,6 +29,8 @@ From `docs/chunked-lod-60fps-plan.md` (Track 0). Device label required on every 
 
 Optional: `&warmup=90&samples=120`. Results: `window.__perfCapture` + console JSON. Harness: `src/render/perf-capture.ts`.
 
+Automated Continuum stills/motion/perf (Playwright → `refs/continuum/` + toolkit): `npm run accept:continuum -- --base http://127.0.0.1:5174` — see [`docs/render-acceptance-harness.md`](docs/render-acceptance-harness.md#automated-capture-preferred).
+
 Pass mode: `?perfcapture=passes` for per-EffectComposer-pass attribution.
 
 ### Continuum approach budget gate (Task 8)

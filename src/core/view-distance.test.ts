@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { physicalDistancePc, getCamDist } from './state';
+import {
+  physicalDistancePc, physicalAuFromZoom, zoomForPhysicalAu, getCamDist, PERF_BASELINE_AU,
+} from './state';
 import { AU_PER_PC, WU_PER_PC, SYSTEM_TIER_SCALE } from './metrics';
 
 // Scale unification: the physical view distance is ONE continuous, monotonic
@@ -59,5 +61,21 @@ describe('physicalDistancePc — continuous unified view distance', () => {
 
   it('SYSTEM_TIER_SCALE is the true/legacy ratio', () => {
     expect(SYSTEM_TIER_SCALE).toBeCloseTo(0.004848 / 10, 6);
+  });
+});
+
+describe('zoomForPhysicalAu — HUD-replicable baseline pose', () => {
+  it('round-trips AU → zoom → AU within 0.1%', () => {
+    for (const au of [0.1, 0.425, PERF_BASELINE_AU, 1.0, 5.0, 50]) {
+      const z = zoomForPhysicalAu(au);
+      expect(physicalAuFromZoom(z)).toBeCloseTo(au, 3);
+    }
+  });
+
+  it('locks the 0.8 AU lab baseline near z≈0.1205 (orbit tier)', () => {
+    const z = zoomForPhysicalAu(PERF_BASELINE_AU);
+    expect(z).toBeGreaterThan(0.11);
+    expect(z).toBeLessThan(0.13);
+    expect(physicalAuFromZoom(z)).toBeCloseTo(0.8, 3);
   });
 });

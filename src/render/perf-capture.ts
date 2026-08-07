@@ -9,19 +9,18 @@
 // TWO MUTUALLY-EXCLUSIVE MODES (TIME_ELAPSED allows only ONE active query at a time — never nest, and
 // never run a whole-composite bracket AND a per-pass breakdown together):
 //
-//   ?perfcapture            → CAPTURE mode. Reuse the ?demo=approach worst-case pose (one true-scale
-//                             ocean world at low orbit), freeze it, fix the viewport+DPR, and time the
+//   ?perfcapture            → CAPTURE mode. Freeze a locked HUD baseline pose (default
+//                             &au=0.8 — Sean's planet/star lab replicate distance), and time the
 //                             WHOLE post-chain render (postCtx.render) across three phases on the SAME
 //                             pose: WORST (live per-fragment terrain FBM, uUseBake=0) vs BAKED
 //                             (globe.setBaked(true), terrain-fill removed) vs NO-PLANET (root hidden).
 //                             Attribution is by DIFFERENCE — absolute ms includes the always-on chain.
+//                             Needs a CaptureGlobe (from ?demo=approach OR ?lab=planet).
 //   ?perfcapture=passes     → PASSES mode. Wrap every enabled EffectComposer pass in its own flat,
 //                             sequential TIME_ELAPSED region and report a live per-pass ms breakdown.
 //
-// Requires ?demo=approach for CAPTURE mode (worst-case terrestrial pose). Mutually exclusive with
-// stats-gl (?stats / DEV) — both claim the single timer-query slot; main.ts gates them apart.
-//
-// URL params (CAPTURE): &w=1280 &h=720 &dpr=2 &warmup=90 &samples=120
+// URL params (CAPTURE): &au=0.8 &w=1280 &h=720 &dpr=2 &warmup=90 &samples=120
+//   au = HUD physical AU to lock (matches the view-distance readout). Default PERF_BASELINE_AU.
 //   w/h = backing-store size in CSS px, dpr = devicePixelRatio to force (retina worst case = 2 →
 //   ~4× fragments; the fill claim may only reproduce at deployment DPR, so it is RECORDED, not hidden).
 // ═══════════════════════════════════════════════════════════════════
@@ -29,6 +28,7 @@
 import type { WebGLRenderer, Object3D } from 'three';
 import type { PostProcessingContext } from './post-processing';
 import type { Pass } from 'three/examples/jsm/postprocessing/Pass.js';
+import { PERF_BASELINE_AU } from '../core/state';
 
 // ── EXT_disjoint_timer_query_webgl2 (not in lib.dom) ──
 interface DisjointTimerQueryExt {
@@ -48,20 +48,28 @@ export interface CaptureGlobe {
 export interface PerfCaptureDeps {
   renderer: WebGLRenderer;
   postCtx: PostProcessingContext;
-  /** approach.root — hidden for the NO-PLANET phase (capture mode only; may be null). */
+  /** Planet root — hidden for the NO-PLANET phase (capture mode only; may be null). */
   planetRoot: Object3D | null;
-  /** approach.globe — baked/live toggle + stabilisation (capture mode only; may be null). */
+  /** Planet globe — baked/live toggle + stabilisation (capture mode only; may be null). */
   globe: CaptureGlobe | null;
   /** Freeze the fixed-step sim so the tracked body can't drift between phases (Game.setTimeSpeed(0)). */
   freezeSim: () => void;
+  /**
+   * Snap the camera to the HUD baseline AU (zoomForPhysicalAu). Called when an AU
+   * baseline is active (lab/star default 0.8; skipped for ?demo=approach unless &au= is set,
+   * so true-scale low-orbit stays the approach worst-case pose).
+   */
+  setBaselineAu: ((au: number) => void) | null;
   /** Re-assert viewport-derived state that postCtx.resize() doesn't cover (e.g. orbit-line resolution). */
   onViewport?: (w: number, h: number) => void;
 }
 
-type CaptureMode = 'capture' | 'passes';
+type CaptureMode = 'capture' | 'passes' | 'composite';
 
 interface Config {
   mode: CaptureMode;
+  /** null = leave the scene's existing zoom (e.g. ?demo=approach low-orbit). */
+  au: number | null;
   w: number;
   h: number;
   dpr: number;
@@ -72,13 +80,22 @@ interface Config {
 function parseConfig(search: string): Config {
   const p = new URLSearchParams(search);
   const raw = (p.get('perfcapture') ?? '').toLowerCase();
-  const mode: CaptureMode = raw === 'passes' ? 'passes' : 'capture';
+  // bare ?perfcapture → capture; =passes → per-pass; =composite → any-scene floor (star/galaxy)
+  const mode: CaptureMode =
+    raw === 'passes' ? 'passes'
+      : raw === 'composite' ? 'composite'
+        : 'capture';
   const num = (key: string, def: number): number => {
     const v = Number(p.get(key));
     return Number.isFinite(v) && v > 0 ? v : def;
   };
+  // &au= always wins. Otherwise default 0.8 AU unless ?demo=approach (keeps true-scale low-orbit).
+  let au: number | null = PERF_BASELINE_AU;
+  if (p.has('au')) au = num('au', PERF_BASELINE_AU);
+  else if (p.get('demo') === 'approach') au = null;
   return {
     mode,
+    au,
     w: num('w', 1280),
     h: num('h', 720),
     dpr: num('dpr', Math.min(window.devicePixelRatio || 1, 2)),
@@ -206,10 +223,21 @@ export function installPerfCapture(deps: PerfCaptureDeps): void {
   };
   applyViewport();
 
+  // Lock the HUD-replicable pose when an AU baseline is active (lab/star default 0.8).
+  if (cfg.au != null && deps.setBaselineAu) deps.setBaselineAu(cfg.au);
+  deps.freezeSim();
+  console.info(
+    `[perfcapture] mode=${cfg.mode}` +
+    `${cfg.au != null ? `, baseline ${cfg.au} AU (HUD)` : ', pose=scene default (approach low-orbit)'}` +
+    `, ${cfg.w}×${cfg.h} dpr=${cfg.dpr}`,
+  );
+
   const pollDisjoint = (): boolean => (ext ? (gl.getParameter(ext.GPU_DISJOINT_EXT) as boolean) : false);
 
   if (cfg.mode === 'passes') {
     installPassesMode(deps, gl, ext, method, cfg, applyViewport, pollDisjoint);
+  } else if (cfg.mode === 'composite') {
+    installCompositeMode(deps, gl, ext, method, cfg, applyViewport, pollDisjoint);
   } else {
     installCaptureMode(deps, gl, ext, method, cfg, applyViewport, pollDisjoint);
   }
@@ -236,7 +264,10 @@ function installCaptureMode(
   const composer = postCtx.composer;
 
   if (!globe) {
-    console.warn('[perfcapture] CAPTURE mode needs ?demo=approach (no globe found). Add ?demo=approach&perfcapture.');
+    console.warn(
+      '[perfcapture] CAPTURE mode needs a planet globe (?lab=planet or ?demo=approach). ' +
+      'For star/galaxy use ?perfcapture=composite&au=0.8.',
+    );
     return;
   }
 
@@ -252,10 +283,9 @@ function installCaptureMode(
     noplanet: { ms: [], calls: 0, tris: 0 },
   };
 
-  // Stabilise the pose once: freeze storms at full strength, stop spin, pause the sim.
+  // Stabilise the pose once: freeze storms at full strength, stop spin (sim already frozen).
   globe.stormsMature();
   globe.setSpinPaused(true);
-  deps.freezeSim();
 
   let phaseIdx = 0;
   let frameInPhase = 0;
@@ -383,16 +413,21 @@ function installCaptureMode(
     const result = {
       mode: 'capture',
       method,
+      baselineAu: cfg.au,
       viewport: { w: cfg.w, h: cfg.h, dpr: cfg.dpr, backingStore: `${renderer.domElement.width}×${renderer.domElement.height}` },
       warmup: cfg.warmup,
       requestedSamples: cfg.samples,
       rows,
       attribution,
-      note: 'Absolute ms includes the always-on post chain + log-depth buffer. Attribute the fill claim by DIFFERENCE, never absolutes. Numbers are driver-quantised trend indicators.',
+      note: 'Absolute ms includes the always-on post chain + log-depth buffer. Attribute the fill claim by DIFFERENCE, never absolutes. Numbers are driver-quantised trend indicators. baselineAu matches the HUD AU readout (null = approach low-orbit pose).',
     };
 
     /* eslint-disable no-console */
-    console.log(`%c[perfcapture] CAPTURE complete — ${method} @ ${cfg.w}×${cfg.h} DPR ${cfg.dpr}`, 'font-weight:600');
+    console.log(
+      `%c[perfcapture] CAPTURE complete — ${method}` +
+      `${cfg.au != null ? ` @ ${cfg.au} AU` : ' @ approach low-orbit'} · ${cfg.w}×${cfg.h} DPR ${cfg.dpr}`,
+      'font-weight:600',
+    );
     console.table(rows);
     console.log('[perfcapture] attribution (ms, by difference):');
     console.table([attribution]);
@@ -400,9 +435,148 @@ function installCaptureMode(
     /* eslint-enable no-console */
 
     (globalThis as Record<string, unknown>).__perfCapture = result;
-    renderPanel(result);
+    renderPanel({
+      mode: 'capture',
+      method,
+      viewport: result.viewport,
+      rows,
+      attribution: { ...attribution, ...(cfg.au != null ? { baselineAu: cfg.au } : {}) },
+    });
 
     // Teardown: restore the composer + renderer state so gameplay is untouched.
+    composer.render = orig;
+    region.dispose();
+    renderer.info.autoReset = prevAutoReset;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// COMPOSITE MODE — single-phase whole-frame timing for any scene (star / galaxy).
+// No globe required. Locks &au= baseline, samples the full post chain, reports
+// median/p95 + draw calls. Use when CAPTURE's WORST/BAKED/NO-PLANET split does
+// not apply.
+// ═══════════════════════════════════════════════════════════════════
+interface CompositeMeta { sampling: boolean; calls: number; tris: number; }
+
+function installCompositeMode(
+  deps: PerfCaptureDeps,
+  gl: WebGL2RenderingContext,
+  ext: DisjointTimerQueryExt | null,
+  method: string,
+  cfg: Config,
+  applyViewport: () => void,
+  pollDisjoint: () => boolean,
+): void {
+  const { renderer, postCtx } = deps;
+  const composer = postCtx.composer;
+  const prevAutoReset = renderer.info.autoReset;
+  renderer.info.autoReset = false;
+
+  const region = new GpuRegion<CompositeMeta>(gl, ext ? ext.TIME_ELAPSED_EXT : 0, 'composite', 10);
+  const ms: number[] = [];
+  let lastCalls = 0;
+  let lastTris = 0;
+  let frame = 0;
+  let draining = 0;
+  let done = false;
+  const cpuTimer = { t0: 0 };
+
+  const orig = composer.render.bind(composer);
+  composer.render = function patched(deltaTime?: number): void {
+    if (done) { orig(deltaTime); return; }
+
+    const disjoint = pollDisjoint();
+    region.poll(disjoint);
+    for (const r of region.results.splice(0)) {
+      if (!r.meta.sampling) continue;
+      ms.push(r.ms);
+      lastCalls = r.meta.calls;
+      lastTris = r.meta.tris;
+    }
+
+    applyViewport();
+    renderer.info.autoReset = false;
+    renderer.info.reset();
+
+    const sampling = frame >= cfg.warmup;
+    const issuedAll = frame >= cfg.warmup + cfg.samples;
+    const meta: CompositeMeta = { sampling, calls: 0, tris: 0 };
+    let timed = false;
+    if (!issuedAll && ext) timed = region.begin(meta);
+    if (!ext && !issuedAll) cpuTimer.t0 = performance.now();
+
+    orig(deltaTime);
+
+    meta.calls = renderer.info.render.calls;
+    meta.tris = renderer.info.render.triangles;
+    if (timed) region.end();
+    if (!ext && !issuedAll) {
+      gl.finish();
+      if (sampling) {
+        ms.push(performance.now() - cpuTimer.t0);
+        lastCalls = meta.calls;
+        lastTris = meta.tris;
+      }
+    }
+
+    frame++;
+    if (issuedAll) {
+      draining++;
+      if (ms.length >= cfg.samples || draining > 8 || !ext) finish();
+    }
+  } as typeof composer.render;
+
+  function finish(): void {
+    done = true;
+    region.poll(pollDisjoint());
+    for (const r of region.results.splice(0)) {
+      if (!r.meta.sampling) continue;
+      ms.push(r.ms);
+      lastCalls = r.meta.calls;
+      lastTris = r.meta.tris;
+    }
+    const result = {
+      mode: 'composite',
+      method,
+      baselineAu: cfg.au,
+      viewport: { w: cfg.w, h: cfg.h, dpr: cfg.dpr, backingStore: `${renderer.domElement.width}×${renderer.domElement.height}` },
+      warmup: cfg.warmup,
+      requestedSamples: cfg.samples,
+      gpuMedianMs: round(median(ms)),
+      gpuP95Ms: round(percentile(ms, 0.95)),
+      frames: ms.length,
+      drawCalls: lastCalls,
+      triangles: lastTris,
+      fpsEquivalent: round(1000 / Math.max(1e-6, median(ms))),
+      note: 'Whole-frame composite at the HUD baseline AU. Includes post chain. Compare against 16.67 ms (60 fps).',
+    };
+    /* eslint-disable no-console */
+    console.log(
+      `%c[perfcapture] COMPOSITE complete — ${method}` +
+      `${cfg.au != null ? ` @ ${cfg.au} AU` : ''} · ${cfg.w}×${cfg.h} DPR ${cfg.dpr}`,
+      'font-weight:600',
+    );
+    console.table([result]);
+    console.log('[perfcapture] JSON:\n' + JSON.stringify(result, null, 2));
+    /* eslint-enable no-console */
+    (globalThis as Record<string, unknown>).__perfCapture = result;
+    renderPanel({
+      mode: 'composite',
+      method,
+      viewport: result.viewport,
+      rows: [{
+        phase: 'composite',
+        gpuMedianMs: result.gpuMedianMs,
+        gpuP95Ms: result.gpuP95Ms,
+        frames: result.frames,
+        drawCalls: result.drawCalls,
+        triangles: result.triangles,
+      }],
+      attribution: {
+        ...(cfg.au != null ? { baselineAu: cfg.au } : {}),
+        fpsEquivalent: result.fpsEquivalent,
+      },
+    });
     composer.render = orig;
     region.dispose();
     renderer.info.autoReset = prevAutoReset;
@@ -500,24 +674,33 @@ function basePanel(id: string): HTMLElement {
 }
 
 function renderPanel(result: {
+  mode?: string;
   method: string;
   viewport: { w: number; h: number; dpr: number };
-  rows: { phase: string; gpuMedianMs: number; gpuP95Ms: number; drawCalls: number; triangles: number }[];
-  attribution: { liveTerrainFillMs: number; cloudsAtmosNightIceMs: number; backgroundAndPostFloorMs: number };
+  rows: { phase: string; gpuMedianMs: number; gpuP95Ms: number; frames?: number; drawCalls: number; triangles: number }[];
+  attribution: Record<string, number>;
 }): void {
   const p = basePanel('perfcapture-panel');
   const head = `<div style="font-weight:600;letter-spacing:0.08em;margin-bottom:6px;color:#eaf0f7">PERFCAPTURE · ${result.method}</div>` +
-    `<div style="opacity:0.7;margin-bottom:8px">${result.viewport.w}×${result.viewport.h} · DPR ${result.viewport.dpr}</div>`;
+    `<div style="opacity:0.7;margin-bottom:8px">${result.viewport.w}×${result.viewport.h} · DPR ${result.viewport.dpr}` +
+    `${result.attribution.baselineAu != null ? ` · ${result.attribution.baselineAu} AU` : ''}</div>`;
   const rows = result.rows.map((r) =>
     `<tr><td>${r.phase}</td><td align="right">${r.gpuMedianMs}</td><td align="right">${r.gpuP95Ms}</td><td align="right">${r.drawCalls}</td></tr>`).join('');
   const table = `<table style="width:100%;border-collapse:collapse">` +
     `<tr style="opacity:0.7"><th align="left">phase</th><th align="right">med ms</th><th align="right">p95</th><th align="right">calls</th></tr>${rows}</table>`;
   const a = result.attribution;
-  const attr = `<div style="margin-top:8px;border-top:1px solid #2a3340;padding-top:6px;line-height:1.7">` +
-    `<div>live terrain fill: <b style="color:#ff9a9a">${a.liveTerrainFillMs} ms</b></div>` +
-    `<div>clouds/atmos/night/ice: <b>${a.cloudsAtmosNightIceMs} ms</b></div>` +
-    `<div>bg + post floor: <b>${a.backgroundAndPostFloorMs} ms</b></div>` +
-    `<div style="margin-top:5px;opacity:0.65;font-size:10px">by difference — see console for JSON</div></div>`;
+  let attr = '';
+  if (a.liveTerrainFillMs != null) {
+    attr = `<div style="margin-top:8px;border-top:1px solid #2a3340;padding-top:6px;line-height:1.7">` +
+      `<div>live terrain fill: <b style="color:#ff9a9a">${a.liveTerrainFillMs} ms</b></div>` +
+      `<div>clouds/atmos/night/ice: <b>${a.cloudsAtmosNightIceMs} ms</b></div>` +
+      `<div>bg + post floor: <b>${a.backgroundAndPostFloorMs} ms</b></div>` +
+      `<div style="margin-top:5px;opacity:0.65;font-size:10px">by difference — see console for JSON</div></div>`;
+  } else if (a.fpsEquivalent != null) {
+    attr = `<div style="margin-top:8px;border-top:1px solid #2a3340;padding-top:6px;line-height:1.7">` +
+      `<div>≈ <b style="color:${a.fpsEquivalent >= 60 ? '#9dffb0' : '#ff9a9a'}">${a.fpsEquivalent} fps</b> (60 fps = 16.67 ms)</div>` +
+      `<div style="margin-top:5px;opacity:0.65;font-size:10px">composite @ HUD baseline — see console for JSON</div></div>`;
+  }
   p.innerHTML = head + table + attr;
 }
 
