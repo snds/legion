@@ -443,6 +443,15 @@ export const continuumCloudShellFrag = /* glsl */ `
     vec3 nightCol = vec3(0.05, 0.07, 0.12);
     vec3 col = mix(nightCol, dayCol, clamp(litAmt, 0.0, 1.2));
     col += dayCol * twilight * 0.10;
+    // F5 — cheap self-shadow / thickness cue (day-gated, no raymarch): approximate
+    // optical path length through the deck as 1/ndl (Beer-Lambert-style), so a
+    // thick, dense core reads self-shadowed as the sun raked low toward the
+    // anti-sun flank instead of flat-lit cardboard. Purely arithmetic on values
+    // already computed above (dens, ndl, day) — no extra noise samples. Gated by
+    // day so night clouds (day == 0) are untouched and stay silhouette-thin.
+    float pathLen = 1.0 / max(ndl, 0.18);
+    float thickness = clamp(dens * pathLen * 0.55, 0.0, 1.0);
+    col *= 1.0 - 0.4 * thickness * day;
     // Lightning: storm eyewalls only. Never seed the strobe with dens —
     // density drifts every frame from uTime fbm, so dens-hash flashes every
     // cloud core (P-LOOK flash across the deck; orbit-0.8au / look-orient).

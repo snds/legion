@@ -136,4 +136,30 @@ describe('continuum C1/C2/C5 shader contract', () => {
     expect(PRESETS.ocean.cloudCover).toBeCloseTo(0.22, 5);
     expect(PRESETS.ocean.cloudShadow).toBeCloseTo(0.75, 5);
   });
+
+  it('F5: cloud shell applies a day-gated thickness/self-shadow cue (cheap, no raymarch)', () => {
+    expect(continuumCloudShellFrag).toContain('float pathLen = 1.0 / max(ndl, 0.18);');
+    expect(continuumCloudShellFrag).toContain(
+      'float thickness = clamp(dens * pathLen * 0.55, 0.0, 1.0);',
+    );
+    expect(continuumCloudShellFrag).toContain('col *= 1.0 - 0.4 * thickness * day;');
+  });
+
+  it('F5: thickness cue is multiplied by `day` so night clouds stay silhouette-thin', () => {
+    // Regression guard: the darkening term must carry the day factor itself
+    // (not just rely on col already being dark at night) so it never perturbs
+    // the night silhouette-thin alpha/color path independently.
+    const cueLine = 'col *= 1.0 - 0.4 * thickness * day;';
+    expect(continuumCloudShellFrag).toContain(cueLine);
+    const idx = continuumCloudShellFrag.indexOf(cueLine);
+    expect(idx).toBeGreaterThan(continuumCloudShellFrag.indexOf('float day = smoothstep'));
+  });
+
+  it('F5: thickness cue does not disturb F1 shear bound or storm lightning gating', () => {
+    expect(continuumCloudShellFrag).toContain(
+      'float adv = uTime * 0.02 * flow + zonal * 0.35 * flow * sin(uTime * 0.0044);',
+    );
+    expect(continuumCloudShellFrag).toContain('stormW');
+    expect(continuumCloudShellFrag).not.toContain('uTime * 17.3 + dens');
+  });
 });
