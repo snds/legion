@@ -21,7 +21,9 @@ import {
 import type { GenPlanet, PlanetVisualType } from '../../data/system-gen';
 import { PlanetGlobe, type UpdateCtx } from './globe';
 import { ContinuumGlobe, type LabEngine } from './continuum';
+import { attachContinuumAcceptApi } from './continuum/accept-api';
 import { visualRadius } from './index';
+import type { PerspectiveCamera } from 'three';
 import { PRESETS, PLANET_TYPES, type Preset } from './presets';
 import { MACRO, type MacroParams } from './plates';
 import { DEFAULT_BAKE, type BakeParams } from './bake';
@@ -33,7 +35,11 @@ import {
 import { mountControlPanel, type ControlPanelHandle, type LabCtrl, type LabSection } from '../../ui/control-panel';
 import { PERF_BASELINE_AU, zoomForPhysicalAu, physicalAuFromZoom, Game } from '../../core/state';
 
-const FIXED_SUN_DIR = new Vector3(0.6, 0.35, 0.72).normalize(); // even, flattering light
+// Default lab sun direction (even, flattering light). Mutable so the Continuum
+// accept harness can pose day/night/terminator via a real world-space sun
+// direction (see accept-api.ts `poseSun` — planet yaw cannot change which
+// hemisphere faces the fixed lab camera, so posing must move the sun instead).
+const sunDir = new Vector3(0.6, 0.35, 0.72).normalize();
 /** Visible lab sun distance in local units (≈ a few planet radii past the subject). */
 const LAB_SUN_SEPARATION = 4.2;
 
@@ -628,6 +634,24 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
 
   const _root = new Vector3();
   const _sun = new Vector3();
+  let acceptCam: PerspectiveCamera | null = null;
+  if (engine === 'continuum') {
+    attachContinuumAcceptApi({
+      getGlobe: () => {
+        const g = globes.get(selected);
+        return g instanceof ContinuumGlobe ? g : null;
+      },
+      getCamera: () => acceptCam,
+      getSunDir: () => sunDir,
+      setSunDir: (x, y, z) => {
+        sunDir.set(x, y, z);
+        if (sunDir.lengthSq() < 1e-12) sunDir.set(0.6, 0.35, 0.72).normalize();
+        else sunDir.normalize();
+      },
+      setAutoRotate,
+      setCloudsVisible,
+    });
+  }
   const handle: PlanetLabHandle = {
     panel,
     // Open at the official close-zoom perf / tuning distance (HUD ≈ 0.8 AU).
@@ -635,10 +659,11 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
     get engine() { return engine; },
     selectedGlobe: () => globes.get(selected) ?? null,
     update(ctx) {
-      // Key light + visible sun along FIXED_SUN_DIR (continuum atmos uses this).
+      acceptCam = ctx.camera as PerspectiveCamera;
+      // Key light + visible sun along sunDir (continuum atmos uses this).
       _root.copy(ctx.rootWorld);
       const sunDist = LAB_VIEW_R * LAB_SUN_SEPARATION;
-      _sun.copy(FIXED_SUN_DIR).multiplyScalar(sunDist).add(_root);
+      _sun.copy(sunDir).multiplyScalar(sunDist).add(_root);
       labSun.position.copy(_sun);
       labSun.scale.setScalar(1);
       const full: UpdateCtx = { camera: ctx.camera, sunWorldPos: _sun, dt: ctx.dt, fovYRad: ctx.fovYRad, viewportH: ctx.viewportH };
