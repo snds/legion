@@ -15,3 +15,7 @@ scripts/.cache/
 
 # dev-only optical-comparison reference overlay (NASA/JPL R.Hurt render)
 public/reference/
+
+# Local accept-harness captures (PNG dumps, not source)
+/refs/
+.tmp-*/

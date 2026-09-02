@@ -8,11 +8,14 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "accept:continuum": "node scripts/continuum-accept.mjs",
-    "accept:continuum:stills": "node scripts/continuum-accept.mjs --only stills",
-    "accept:continuum:perf": "node scripts/continuum-accept.mjs --only perf",
-    "accept:continuum:motion": "node scripts/continuum-accept.mjs --only motion",
-    "accept:continuum:qa": "node scripts/continuum-accept.mjs --only stills,perf,motion"
+    "accept:legion": "PLAYWRIGHT_BROWSERS_PATH=0 node scripts/legion-accept.mjs",
+    "accept:continuum": "PLAYWRIGHT_BROWSERS_PATH=0 node scripts/continuum-accept.mjs",
+    "accept:continuum:stills": "PLAYWRIGHT_BROWSERS_PATH=0 node scripts/continuum-accept.mjs --only stills",
+    "accept:continuum:perf": "PLAYWRIGHT_BROWSERS_PATH=0 node scripts/continuum-accept.mjs --only perf",
+    "accept:continuum:motion": "PLAYWRIGHT_BROWSERS_PATH=0 node scripts/continuum-accept.mjs --only motion",
+    "accept:continuum:qa": "PLAYWRIGHT_BROWSERS_PATH=0 node scripts/continuum-accept.mjs --only stills,perf,motion",
+    "accept:demos": "PLAYWRIGHT_BROWSERS_PATH=0 node scripts/legion-accept.mjs --demo star,blackhole,nebula,galaxy --only stills --skip-qa",
+    "accept:archetypes": "PLAYWRIGHT_BROWSERS_PATH=0 node scripts/continuum-accept.mjs --type all --only stills --skip-qa"
   },
   "dependencies": {
     "bitecs": "^0.3.40",

@@ -73,18 +73,24 @@ scores from locator captures.
 With the Vite lab running (`npm run dev -- --host 127.0.0.1 --port 5174`):
 
 ```bash
-# once: npm i && npx playwright install chrome
+# once: npm i && npx playwright install chromium   # or: npx playwright install chrome
 npm run accept:continuum -- --base http://127.0.0.1:5174
-# subsets:
-npm run accept:continuum:stills -- --base http://127.0.0.1:5174
-npm run accept:continuum:perf -- --base http://127.0.0.1:5174
-npm run accept:continuum:motion -- --base http://127.0.0.1:5174 --skip-qa
+# subsets / archetypes:
+npm run accept:continuum:stills -- --base http://127.0.0.1:5174 --type rocky
+npm run accept:archetypes -- --base http://127.0.0.1:5174          # all six types, stills
+npm run accept:demos -- --base http://127.0.0.1:5174               # star/blackhole/nebula/galaxy demos
+# full unified entry:
+npm run accept:legion -- --lab planet --engine continuum --type ocean,rocky --only stills
+npm run accept:legion -- --demo star,blackhole --only stills --skip-qa
 ```
 
-This launches **system Chrome** via Playwright (not the IDE browser), drives
-`window.__continuumAccept`, writes `refs/continuum/{stills,motion,perf}/`, then runs
-`render-qa-toolkit` unless `--skip-qa`. Pose sun facing (day/night/terminator) is
-auto-searched; coast uses a fixed yaw offset (human scorecard still required vs `se-planet`).
+Unified harness: `scripts/legion-accept.mjs` (Continuum shortcut: `scripts/continuum-accept.mjs`).
+Launches **system Chrome** via Playwright when available, else Playwright Chromium. Planet Continuum
+drives `window.__continuumAccept` (`setArchetype`, `poseSun`, `setLabPropsVisible` hides lab-sun).
+Writes `refs/continuum/stills/` (and motion/perf) plus `refs/demos/<id>/stills/` for review demos.
+Star / blackhole / nebula **labs** are still `available: false` in `src/ui/labs.ts`. Until they
+ship, `--lab star|blackhole|nebula` (or `--demo …`) captures the matching review demos into
+`refs/demos/<id>/stills/`. Human scorecard vs northstars still required for sign-off.
 Optional SE plates: drop under `refs/northstars/se-planet/` for a later `reference_match` pass.
 
 ### Author capture commands (manual fallback)

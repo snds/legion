@@ -110,8 +110,8 @@ export class ContinuumGlobe {
       );
       this.spinGroup.add(this.surfaceVoxels.group);
       this.atmosMat = this.buildAtmosMat();
-      // detail 6 — softer limb silhouette (was visibly faceted at 5).
-      this.atmosMesh = new Mesh(new IcosahedronGeometry(radius * 1.028, 6), this.atmosMat);
+      // detail 7 — dusty rocky limb was still reading as a faceted band at 6.
+      this.atmosMesh = new Mesh(new IcosahedronGeometry(radius * 1.028, 7), this.atmosMat);
       this.atmosMesh.name = 'continuum-atmos';
       this.root.add(this.atmosMesh);
     }

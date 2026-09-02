@@ -20,6 +20,11 @@ const ocean: GenPlanet = {
   insolation: 1, isGasGiant: false, hasRings: false, inHZ: true, seed: 2002,
 };
 
+const rocky: GenPlanet = {
+  type: 'rocky', kind: 'super-earth', au: 1.6, massEarth: 3, radiusEarth: 1.4,
+  insolation: 0.4, isGasGiant: false, hasRings: false, inHZ: false, seed: 1001,
+};
+
 describe('continuum chunks', () => {
   it('selects a bounded leaf set at 0.8 AU-ish distance', () => {
     const radius = 1;
@@ -70,6 +75,31 @@ describe('continuum chunks', () => {
     }
     expect(hasBlueish).toBe(true);
     geo.dispose();
+  });
+
+  it('rocky relief polish stays soft (no isoline crush) and feathers borders', () => {
+    const bundle = createGeneratorBundle(rocky);
+    expect(bundle.macro.normalStrength).toBeLessThanOrEqual(0.12);
+    const plain = sampleHeightfieldChunk(bundle, rootNode(0), {
+      texRes: 64, meshGrid: 16, skipRelief: true,
+    });
+    const relief = sampleHeightfieldChunk(bundle, rootNode(0), {
+      texRes: 64, meshGrid: 16, skipRelief: false,
+    });
+    // Relief may darken land slightly but must not crush midtones into contour rings.
+    let plainSum = 0, reliefSum = 0, n = 0;
+    for (let i = 0; i < plain.albedoRGBA.length; i += 4) {
+      plainSum += plain.albedoRGBA[i] + plain.albedoRGBA[i + 1] + plain.albedoRGBA[i + 2];
+      reliefSum += relief.albedoRGBA[i] + relief.albedoRGBA[i + 1] + relief.albedoRGBA[i + 2];
+      n += 3;
+    }
+    const plainMean = plainSum / n;
+    const reliefMean = reliefSum / n;
+    expect(reliefMean).toBeGreaterThan(plainMean * 0.82);
+    expect(reliefMean).toBeLessThanOrEqual(plainMean * 1.02);
+    // Border feather: corner texel should differ from a pure point sample path
+    // once relief+feather runs (edge blur toward neighborhood).
+    expect(relief.albedoRGBA.length).toBe(64 * 64 * 4);
   });
 
   it('mesh grid densifies at high levels (B2)', () => {

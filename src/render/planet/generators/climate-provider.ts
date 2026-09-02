@@ -128,7 +128,20 @@ export function createClimateProvider(paramsRef: { current: PlanetRenderParams }
           color = mixRgb(color, seaIce, clamp01(cap * 0.95 + snow * 0.35));
         }
       } else {
-        color = sampleRamp(p, hh);
+        // Land-dominant: paint albedo mostly from macro elev (climateElev). Full
+        // ridged/crater terrainHeight stamped altitude isolines into Continuum
+        // rocky/desert orbit albedo; mesh still carries the detailed height.
+        let hhRamp = hh;
+        if (p.seaLevel < 0.05) {
+          hhRamp = clamp01(elevHh * 0.82 + hh * 0.18);
+          const warp = fbm3(
+            dir[0] * 6.3 + seed[0] * 0.21,
+            dir[1] * 6.3 + seed[1] * 0.21,
+            dir[2] * 6.3 + seed[2] * 0.21,
+          );
+          hhRamp = clamp01(hhRamp + (warp - 0.5) * 0.035);
+        }
+        color = sampleRamp(p, hhRamp);
         // Legacy parity (shaders.ts): treeline is a TEMPERATURE gate, not elev cutoff.
         // moistRaw > 1 (lab Base humidity) deepens canopy without needing elev=0.
         const moistForBiome = clamp01(moistRaw);

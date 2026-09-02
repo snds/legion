@@ -38,7 +38,9 @@ describe('continuum C1/C2/C5 shader contract', () => {
 
   it('blends ocean normals toward radial (anti-facet specular)', () => {
     expect(continuumSurfaceFrag).toContain('vNrad');
-    expect(continuumSurfaceFrag).toContain('mix(Nmesh, Nrad, seaW)');
+    // Land also softens toward radial at mid/orbit (rocky has no seaW path).
+    expect(continuumSurfaceFrag).toContain('float landSoft = (1.0 - seaW)');
+    expect(continuumSurfaceFrag).toContain('mix(Nmesh, Nrad, max(seaW, landSoft))');
   });
 
   it('night side gets atmospheric scatter fill', () => {
@@ -103,9 +105,19 @@ describe('continuum C1/C2/C5 shader contract', () => {
     // Away from the terminator (sunHorizon ~ 0), col must resolve to the
     // rayleigh mix — never fully to the warm `mie` constant — so the general
     // day-side graze reads as thin cyan/blue instead of hard white/cream.
-    expect(continuumAtmosFrag).toContain('vec3 rayleigh = mix(uColor, vec3(0.35, 0.55, 0.95), 0.35);');
+    // Blue bias is gated by atmos tint so warm dusty rocky keeps an ochre graze.
+    expect(continuumAtmosFrag).toContain('float blueBias = smoothstep(0.0, 0.25, uColor.b - uColor.r);');
+    expect(continuumAtmosFrag).toContain('vec3 rayleigh = mix(uColor, vec3(0.35, 0.55, 0.95), 0.35 * blueBias);');
     expect(continuumAtmosFrag).toContain('vec3 mie = vec3(1.0, 0.72, 0.42);');
     expect(continuumAtmosFrag).toContain('vec3 col = mix(rayleigh, mie, clamp(sunHorizon * 1.4, 0.0, 0.85));');
+  });
+
+  it('rocky lab-ideal enables thin dusty atmos (not vacuum)', () => {
+    const rocky = labIdeal.presets.rocky;
+    expect(rocky.hasAtmosphere).toBe(true);
+    expect(rocky.atmosphereDensity).toBeGreaterThan(0.2);
+    expect(rocky.atmosphereDensity).toBeLessThan(0.6);
+    expect(rocky.cloudCover).toBeLessThanOrEqual(0.12);
   });
 
   it('F2: night-side rim keeps a non-zero alpha floor (readable, not chalk/blank)', () => {

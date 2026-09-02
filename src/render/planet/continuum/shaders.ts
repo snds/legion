@@ -159,8 +159,17 @@ export const continuumSurfaceFrag = /* glsl */ `
       seaW = smoothstep(0.5 - seaFw, 0.5 + seaFw, sea);
     }
 
-    // Blend toward radial on water so sun glint is a smooth limb arc.
-    vec3 N = normalize(mix(Nmesh, Nrad, seaW));
+    float viewDist = length(cameraPosition - vWorldPos);
+    float Rgate = max(uPlanetRadius, 1e-3);
+    // Orbit mottling fix: high-freq fbm on albedo looked like salt-and-pepper on
+    // continents even when the bake was fine. Only apply micro/meso near-camera.
+    float detailAmt = 1.0 - smoothstep(Rgate * 0.22, Rgate * 1.05, viewDist);
+    detailAmt *= detailAmt;
+    // Land at mid/orbit: blend toward radial so chunk-grid facets do not stripe
+    // the terminator (rocky has no seaW radial path). Near-camera keeps mesh N
+    // for F8 displacement read.
+    float landSoft = (1.0 - seaW) * smoothstep(Rgate * 0.28, Rgate * 0.95, viewDist) * 0.78;
+    vec3 N = normalize(mix(Nmesh, Nrad, max(seaW, landSoft)));
     float ndl = max(dot(N, L), 0.0);
     // C1 — sun-dominant wrap. Soft terminator; night gets atmos fill below (not chalk).
     float wrap = ndl * 0.94 + 0.028;
@@ -170,12 +179,6 @@ export const continuumSurfaceFrag = /* glsl */ `
     float micro = fbm(vObj * 64.0);
     float meso = fbm(vObj * 18.0 + 3.1);
     float snowish = smoothstep(0.72, 0.90, max(albedo.r, max(albedo.g, albedo.b)));
-    // Orbit mottling fix: high-freq fbm on albedo looked like salt-and-pepper on
-    // continents even when the bake was fine. Only apply micro/meso near-camera.
-    float viewDist = length(cameraPosition - vWorldPos);
-    float Rgate = max(uPlanetRadius, 1e-3);
-    float detailAmt = 1.0 - smoothstep(Rgate * 0.22, Rgate * 1.05, viewDist);
-    detailAmt *= detailAmt;
     if (seaW > 0.5) {
       float oceanVar = mix(1.0, mix(0.97 + 0.03 * meso, 1.0, snowish), detailAmt);
       albedo *= oceanVar;
@@ -342,7 +345,10 @@ export const continuumAtmosFrag = /* glsl */ `
     float sunViewAlign = abs(dot(L, normalize(uViewAxis)));
     float lateral = 1.0 - smoothstep(0.55, 0.92, sunViewAlign);
     float sunHorizon = terminator * soft * lateral;
-    vec3 rayleigh = mix(uColor, vec3(0.35, 0.55, 0.95), 0.35);
+    // Blue Rayleigh bias only when atmos tint is already cool (ocean). Warm
+    // dusty rocky (ochre uColor) keeps its dust graze instead of going violet.
+    float blueBias = smoothstep(0.0, 0.25, uColor.b - uColor.r);
+    vec3 rayleigh = mix(uColor, vec3(0.35, 0.55, 0.95), 0.35 * blueBias);
     vec3 mie = vec3(1.0, 0.72, 0.42);
     vec3 col = mix(rayleigh, mie, clamp(sunHorizon * 1.4, 0.0, 0.85));
     col *= 0.55 + 0.55 * sunFacing;

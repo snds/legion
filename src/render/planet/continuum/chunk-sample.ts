@@ -8,7 +8,9 @@ import {
 
 /**
  * Orbit-readable relief from the height bake (A4).
- * Kept soft — aggressive curvature made continent interiors look mottled.
+ * Soft-capped: rocky/desert land (seaLevel≈0) used to paint isoline / contour
+ * rings once polish enabled relief — high MACRO.normalStrength × laplacian on
+ * ridged heightfields. Cap strength and keep shade deltas small.
  */
 function applyMacroReliefShading(
   albedoRGBA: Uint8Array,
@@ -16,7 +18,9 @@ function applyMacroReliefShading(
   texRes: number,
   normalStrength: number,
 ): void {
-  const ns = Math.max(0.06, normalStrength) * 0.55;
+  // Hard ceiling — desert/lava guideposts sit at 0.24–0.26; full strength reads
+  // as topographic contour lines on Continuum chunk albedo.
+  const ns = Math.min(0.10, Math.max(0.03, normalStrength)) * 0.34;
   const tmp = new Uint8Array(albedoRGBA.length);
   tmp.set(albedoRGBA);
   for (let iy = 0; iy < texRes; iy++) {
@@ -27,14 +31,15 @@ function applyMacroReliefShading(
       const y0 = Math.max(0, iy - 1), y1 = Math.min(texRes - 1, iy + 1);
       const hx = texH[iy * texRes + x1] - texH[iy * texRes + x0];
       const hy = texH[y1 * texRes + ix] - texH[y0 * texRes + ix];
+      // UV-normalized slope (resolution-stable across polish climb).
       const slope = Math.hypot(hx, hy) * texRes * 0.5;
-      let shade = 1 - Math.min(0.28, slope * ns * 1.6);
+      let shade = 1 - Math.min(0.12, slope * ns * 1.15);
       const lap = texH[iy * texRes + x0] + texH[iy * texRes + x1]
         + texH[y0 * texRes + ix] + texH[y1 * texRes + ix] - 4 * texH[i];
       // Land only — sea relief painted trenches into the albedo (orbit mush).
       if (!sea) {
-        if (lap > 0.006) shade *= 1 - Math.min(0.14, lap * 4);
-        else if (lap < -0.006) shade *= 1 + Math.min(0.08, -lap * 3);
+        if (lap > 0.012) shade *= 1 - Math.min(0.06, lap * 1.6);
+        else if (lap < -0.012) shade *= 1 + Math.min(0.04, -lap * 1.2);
       } else {
         // Flat open-ocean shading: keep coasts readable, hide bathymetry.
         shade = 1;
@@ -44,6 +49,40 @@ function applyMacroReliefShading(
       albedoRGBA[o + 1] = Math.min(255, Math.max(0, Math.round(tmp[o + 1] * shade)));
       albedoRGBA[o + 2] = Math.min(255, Math.max(0, Math.round(tmp[o + 2] * shade)));
       albedoRGBA[o + 3] = tmp[o + 3];
+    }
+  }
+}
+
+/**
+ * Soften outer albedo texels so ClampToEdge + mixed-LOD neighbors do not read
+ * as hard rectangular tile frames (rocky/desert full-land Continuum leaves).
+ */
+function featherChunkBorder(albedoRGBA: Uint8Array, texRes: number): void {
+  if (texRes < 8) return;
+  const B = Math.max(3, Math.round(texRes / 18));
+  const src = new Uint8Array(albedoRGBA);
+  for (let iy = 0; iy < texRes; iy++) {
+    for (let ix = 0; ix < texRes; ix++) {
+      const dEdge = Math.min(ix, iy, texRes - 1 - ix, texRes - 1 - iy);
+      if (dEdge >= B) continue;
+      const t = dEdge / B;
+      const inland = t * t * (3 - 2 * t); // 0 at edge → 1 inland
+      let r = 0, g = 0, b = 0, a = 0, n = 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const x = Math.min(texRes - 1, Math.max(0, ix + dx));
+          const y = Math.min(texRes - 1, Math.max(0, iy + dy));
+          const o = (y * texRes + x) * 4;
+          r += src[o]; g += src[o + 1]; b += src[o + 2]; a += src[o + 3];
+          n++;
+        }
+      }
+      const o = (iy * texRes + ix) * 4;
+      const edge = 1 - inland;
+      albedoRGBA[o] = Math.round(src[o] * inland + (r / n) * edge);
+      albedoRGBA[o + 1] = Math.round(src[o + 1] * inland + (g / n) * edge);
+      albedoRGBA[o + 2] = Math.round(src[o + 2] * inland + (b / n) * edge);
+      albedoRGBA[o + 3] = Math.round(src[o + 3] * inland + (a / n) * edge);
     }
   }
 }
@@ -83,10 +122,11 @@ function refineCoastSupersample(
       if (!border) continue;
       let r = 0, g = 0, b = 0, a = 0, h = 0;
       const offs = [-0.25, 0.25];
+      const denom = Math.max(1, texRes - 1);
       for (const dy of offs) {
         for (const dx of offs) {
-          const u = node.u0 + node.size * ((ix + 0.5 + dx) / texRes);
-          const v = node.v0 + node.size * ((iy + 0.5 + dy) / texRes);
+          const u = node.u0 + node.size * ((ix + dx) / denom);
+          const v = node.v0 + node.size * ((iy + dy) / denom);
           const s = sampleDir(bundle, face, node, u, v, key);
           r += s.color[0]; g += s.color[1]; b += s.color[2];
           a += s.sea ? 1 : 0;
@@ -120,11 +160,15 @@ export function sampleHeightfieldChunk(
 
   const albedoRGBA = new Uint8Array(texRes * texRes * 4);
   const texH = new Float32Array(texRes * texRes);
+  // Corner-shared UVs (ix/(N-1)): adjacent leaves sample the exact shared edge so
+  // ClampToEdge + LinearFilter do not leave a half-texel gap (hard tile frames).
+  // Must stay aligned with mesh bilinear indexing in the height→vert path below.
+  const uvAt = (i: number): number => (texRes <= 1 ? 0.5 : i / (texRes - 1));
   let ti = 0;
   for (let iy = 0; iy < texRes; iy++) {
     for (let ix = 0; ix < texRes; ix++) {
-      const u = node.u0 + node.size * ((ix + 0.5) / texRes);
-      const v = node.v0 + node.size * ((iy + 0.5) / texRes);
+      const u = node.u0 + node.size * uvAt(ix);
+      const v = node.v0 + node.size * uvAt(iy);
       const s = sampleDir(bundle, face, node, u, v, key);
       texH[ti] = s.height;
       const o = ti * 4;
@@ -157,6 +201,12 @@ export function sampleHeightfieldChunk(
         }
       }
     }
+  }
+
+  // Feather on polish / mid-res+ only — stream 16² cover stays cheap (F6).
+  // Ocean coasts already AA via sea-alpha; land needs this against LOD frames.
+  if (!opts?.skipRelief || texRes >= 48) {
+    featherChunkBorder(albedoRGBA, texRes);
   }
 
   const dim = meshGrid + 1;

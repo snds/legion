@@ -7,8 +7,8 @@
 // derivePlanetParams reads PRESETS on every build, editing a preset and
 // rebuilding that archetype's globe shows exactly what every generated body of
 // that type will inherit — the "guidepost" workflow. lab-ideal.json is the
-// committed guidepost; Save writes localStorage only (this origin);
-// Copy JSON is the clipboard / file-sync path into presets.ts + plates.ts.
+// committed guidepost; Save writes localStorage only (this origin), keyed per
+// archetype (presets + macro + World dials + seed); Copy JSON exports the set.
 //
 // The lab owns its globes + panel; main.ts mounts it behind ?lab=planet, frames
 // the row, and pumps update() each frame.
@@ -32,6 +32,9 @@ import {
   OCEAN_VARIANTS, variantById, DEFAULT_SYSTEMIC,
   masterValues, applyOffsets, type SystemicState,
 } from './variants';
+import {
+  LAB_STORE_V3, LAB_STORE_V4, applySystemicByType, freshSystemicByType,
+} from './lab-store';
 import { mountControlPanel, type ControlPanelHandle, type LabCtrl, type LabSection } from '../../ui/control-panel';
 import { PERF_BASELINE_AU, zoomForPhysicalAu, physicalAuFromZoom, Game } from '../../core/state';
 
@@ -81,7 +84,11 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
   const engParam = new URLSearchParams(location.search).get('engine');
   let engine: LabEngine = engParam === 'continuum' ? 'continuum' : 'legacy';
 
-  let selected: PlanetVisualType = 'ocean';
+  const typeParam = new URLSearchParams(location.search).get('type');
+  let selected: PlanetVisualType =
+    typeParam && (PLANET_TYPES as readonly string[]).includes(typeParam)
+      ? (typeParam as PlanetVisualType)
+      : 'ocean';
   // View: auto-spin on by default; arrow keys hand-turn the subject either way.
   let autoRotate = true;
   let cloudsVisible = true;
@@ -114,7 +121,10 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
   };
   window.addEventListener('keydown', onKey);
   let variant = 'terran'; // habitable-world climate state (ocean archetype)
-  const systemic: SystemicState = { ...DEFAULT_SYSTEMIC };
+  // World dials are PER archetype (shared systemic used to stomp desert with
+  // rocky Warmth on switch, and Save could not restore dials per type).
+  const systemicByType = freshSystemicByType();
+  const S = (): SystemicState => systemicByType[selected];
   // Offset model (see variants.ts): these hold what the dials LAST computed for
   // every owned parameter. A hand edit shows up as (live - baseline), and that
   // delta is re-applied on top of the next baseline — so moving a master never
@@ -123,10 +133,9 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
   let baseP: Record<string, number> = {};
   let baseM: Record<string, number> = {};
   const seedBaseline = (): void => {
-    const v = masterValues(systemic);
+    const v = masterValues(S());
     baseP = v.preset; baseM = v.macro;
   };
-  seedBaseline();
 
   // Bake (Phase 3): per-type on/off + shared erosion params. Baking is heavy, so
   // it runs only on toggle-on and the Rebuild action — never on a slider tick.
@@ -151,6 +160,11 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
   labSun.userData.type = 'lab-sun';
   labSun.renderOrder = 0;
   parent.add(labSun);
+  // Accept harness: hide the visible key-light mesh so day pose (sun along
+  // view) does not paint a concentric disc through airless bodies.
+  if (new URLSearchParams(location.search).has('accept')) {
+    labSun.visible = false;
+  }
   const labSunGlow = new Mesh(
     new SphereGeometry(LAB_VIEW_R * 0.22, 20, 14),
     new MeshBasicMaterial({
@@ -196,7 +210,9 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
   // 1) lab-ideal.json — committed guidepost (survives ports / browsers / HMR).
   // 2) localStorage interim — this origin only (Chrome ≠ Cursor IDE browser,
   //    :5173 ≠ :5174). Save writes here only; Copy JSON is the export path.
-  const LAB_STORE = 'legion.planetLab.interim.v3';
+  // v4: per-archetype World dials + seeds (v3 blobs still load for presets/macro).
+  const LAB_STORE = LAB_STORE_V4;
+  const LAB_STORE_LEGACY = LAB_STORE_V3;
   type LabUiSnap = {
     cloudsVisible?: boolean;
     autoRotate?: boolean;
@@ -208,6 +224,11 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
     bake: BakeParams;
     baked?: Record<PlanetVisualType, boolean>;
     ui?: LabUiSnap;
+    /** World-dial state per archetype (independent Save/Revert). */
+    systemicByType?: Record<PlanetVisualType, SystemicState>;
+    seeds?: Record<PlanetVisualType, number>;
+    variant?: string;
+    selected?: PlanetVisualType;
   };
   const snapshotLab = (): LabSnap => JSON.parse(JSON.stringify({
     presets: PRESETS,
@@ -215,26 +236,59 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
     bake: bakeParams,
     baked,
     ui: { cloudsVisible, autoRotate, showChunks },
+    systemicByType,
+    seeds,
+    variant,
+    selected,
   })) as LabSnap;
   const applyLab = (s: Partial<LabSnap>): void => {
     if (s.presets) for (const t of Object.keys(s.presets) as PlanetVisualType[]) if (PRESETS[t]) Object.assign(PRESETS[t], s.presets[t]);
     if (s.macro) for (const t of Object.keys(s.macro) as PlanetVisualType[]) if (MACRO[t]) Object.assign(MACRO[t], s.macro[t]);
     if (s.bake) Object.assign(bakeParams, s.bake);
     if (s.baked) Object.assign(baked, s.baked);
+    applySystemicByType(systemicByType, s.systemicByType);
+    if (s.seeds) {
+      for (const t of PLANET_TYPES) {
+        if (typeof s.seeds[t] === 'number') seeds[t] = s.seeds[t];
+      }
+    }
+    if (typeof s.variant === 'string') variant = s.variant;
     if (s.ui) {
       if (typeof s.ui.cloudsVisible === 'boolean') cloudsVisible = s.ui.cloudsVisible;
       if (typeof s.ui.autoRotate === 'boolean') autoRotate = s.ui.autoRotate;
       if (typeof s.ui.showChunks === 'boolean') showChunks = s.ui.showChunks;
     }
   };
+  const persistInterim = (): string | null => {
+    try {
+      localStorage.setItem(LAB_STORE, JSON.stringify(snapshotLab()));
+      try { localStorage.removeItem(LAB_STORE_LEGACY); } catch { /* ignore */ }
+      return null;
+    } catch {
+      return 'Save failed (storage)';
+    }
+  };
   applyLab(labIdeal as unknown as Partial<LabSnap>); // committed ideal first
   const CANONICAL = snapshotLab(); // Revert target = ideal, not pre-ideal code drift
+  /** Restore one archetype to the committed ideal without wiping others' interim. */
+  const revertArchetype = (type: PlanetVisualType): void => {
+    Object.assign(PRESETS[type], JSON.parse(JSON.stringify(CANONICAL.presets[type])));
+    Object.assign(MACRO[type], JSON.parse(JSON.stringify(CANONICAL.macro[type])));
+    Object.assign(systemicByType[type], {
+      ...(CANONICAL.systemicByType?.[type] ?? DEFAULT_SYSTEMIC),
+    });
+    if (CANONICAL.seeds && typeof CANONICAL.seeds[type] === 'number') {
+      seeds[type] = CANONICAL.seeds[type];
+    }
+    if (type === 'ocean' && typeof CANONICAL.variant === 'string') variant = CANONICAL.variant;
+  };
   try {
-    const raw = localStorage.getItem(LAB_STORE);
+    const raw = localStorage.getItem(LAB_STORE) ?? localStorage.getItem(LAB_STORE_LEGACY);
     if (raw) applyLab(JSON.parse(raw) as Partial<LabSnap>);
   } catch { /* ignore */ }
   // Auto-bake stays off at every load (ideal / interim may still carry true).
   for (const t of Object.keys(baked) as PlanetVisualType[]) baked[t] = false;
+  seedBaseline(); // after ideal + interim so World-dial offsets match live presets
 
   mountSelected(); // build the initial selected archetype (after saved tuning applied)
   const applyBake = (): void => {
@@ -425,11 +479,11 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
     const M2 = (): Record<string, number> => M() as unknown as Record<string, number>;
     const world = (label: string, key: keyof SystemicState, help: string): LabCtrl => ({
       label, min: 0, max: 1, step: 0.01, rebake: needsRebake(), help,
-      get: () => systemic[key],
+      get: () => S()[key],
       set: (v) => {
-        systemic[key] = v;
+        S()[key] = v;
         // Offset model: re-apply every owned param as newBaseline + hand-delta.
-        const next = masterValues(systemic);
+        const next = masterValues(S());
         applyOffsets(P2(), next.preset, baseP);
         applyOffsets(M2(), next.macro, baseM);
         baseP = next.preset; baseM = next.macro;
@@ -603,23 +657,35 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
         globes.get(selected)?.reseed(seeds[selected]);
         applyBake();
       } },
-      // Save → localStorage only (this origin). Copy JSON exports the full snap.
-      // Revert → clear interim and restore lab-ideal.json.
+      // Save → full interim blob (every archetype independent inside it).
+      // Revert → current archetype only to lab-ideal; Revert all clears interim.
       { label: 'Save', onClick: () => {
-        const snap = snapshotLab();
-        try { localStorage.setItem(LAB_STORE, JSON.stringify(snap)); }
-        catch { return 'Save failed (storage)'; }
-        return 'Saved ✓';
+        const err = persistInterim();
+        if (err) return err;
+        return `Saved ${selected} ✓`;
       } },
       { label: 'Revert', onClick: () => {
-        try { localStorage.removeItem(LAB_STORE); } catch { /* ignore */ }
+        revertArchetype(selected);
+        const err = persistInterim();
+        if (err) return err;
+        seedBaseline();
+        mountSelected();
+        handle.panel.refresh();
+        return `Reverted ${selected}`;
+      } },
+      { label: 'Revert all', minor: true, onClick: () => {
+        try {
+          localStorage.removeItem(LAB_STORE);
+          localStorage.removeItem(LAB_STORE_LEGACY);
+        } catch { /* ignore */ }
         applyLab(CANONICAL);
         setCloudsVisible(cloudsVisible);
         setAutoRotate(autoRotate);
         setShowChunks(showChunks);
+        seedBaseline();
         mountSelected();
-        handle.panel.sync();
-        return 'Ideal restored';
+        handle.panel.refresh();
+        return 'Ideal restored (all)';
       } },
       { label: 'Copy JSON (full set → presets.ts + plates.ts + bake.ts)', minor: true, onClick: () => {
         const json = JSON.stringify(snapshotLab(), null, 2);
@@ -650,6 +716,22 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
       },
       setAutoRotate,
       setCloudsVisible,
+      getArchetype: () => selected,
+      setArchetype: (type: string) => {
+        if (!(PLANET_TYPES as readonly string[]).includes(type)) return;
+        if (selected === type) return;
+        selected = type as PlanetVisualType;
+        bakePreview = false;
+        seedBaseline();
+        mountSelected();
+        panel.refresh();
+        const url = new URL(location.href);
+        url.searchParams.set('type', selected);
+        history.replaceState(null, '', url.toString());
+      },
+      setLabPropsVisible: (on: boolean) => {
+        labSun.visible = on;
+      },
     });
   }
   const handle: PlanetLabHandle = {

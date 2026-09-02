@@ -147,18 +147,22 @@ export type { Preset };
 // that type. snapshotPresets() serialises the current set for Copy-JSON / Save.
 export const PRESETS: Record<PlanetVisualType, Preset> = {
   rocky: {
+    // Continuum rocky QA (2026-08-07): thin dusty atmos + warmer ochre ramp.
+    // Lab guidepost: lab-ideal.json rocky (applied in planet-lab). Keep PRESETS
+    // aligned so generated rocky bodies match the lab identity.
     ramp: [
-      { at: 0.0, color: [0.20, 0.17, 0.14] },
-      { at: 0.5, color: [0.38, 0.31, 0.24] },
-      { at: 0.8, color: [0.30, 0.26, 0.22] },
-      { at: 1.0, color: [0.55, 0.52, 0.50] },
+      { at: 0.0, color: [0.22, 0.14, 0.10] },
+      { at: 0.45, color: [0.42, 0.28, 0.18] },
+      { at: 0.75, color: [0.36, 0.27, 0.20] },
+      { at: 1.0, color: [0.58, 0.50, 0.44] },
     ],
     seaLevel: 0, oceanShallow: G0, oceanDeep: G0,
-    displacement: 0.045, ridged: 0.6, warp: 0.4, latitudeIce: 0.15, moisture: 0.2, aridBelts: 0.7, rainShadow: 0.5, orographic: 0.5, lapseRate: 0.5, treeline: 0.10, windBearing: 0.2, continental: 0.6, altitudeDry: 0.6, patchiness: 0.35, lushDepth: 0.5, snowfall: 0.75,
+    // Slightly softer ridged/displacement — orbit silhouette + albedo isolines.
+    displacement: 0.034, ridged: 0.48, warp: 0.4, latitudeIce: 0.12, moisture: 0.2, aridBelts: 0.7, rainShadow: 0.5, orographic: 0.5, lapseRate: 0.5, treeline: 0.10, windBearing: 0.2, continental: 0.6, altitudeDry: 0.6, patchiness: 0.35, lushDepth: 0.5, snowfall: 0.75,
     roughness: 0.9,
     bandColorA: G0, bandColorB: G0, bandCount: 0, bandTurbulence: 0, stormChance: 0,
-    hasAtmosphere: false, atmosphere: [0.5, 0.4, 0.35], atmosphereDensity: 0.25, nightLights: 0,
-    cloudCover: 0.15, cloudShadow: 0.5, cloudFlow: 0.4, cloudTurb: 0.3, cyclones: 0.1, cloudTerrain: 0.5, cloudDetail: 1.6, cloudSpeed: 0.12, cycloneSize: 0.11, cloudWisp: 0.55, cloudRegion: 0.75, lightning: 0.8,
+    hasAtmosphere: true, atmosphere: [0.55, 0.42, 0.32], atmosphereDensity: 0.38, nightLights: 0,
+    cloudCover: 0.08, cloudShadow: 0.55, cloudFlow: 0.4, cloudTurb: 0.3, cyclones: 0.1, cloudTerrain: 0.5, cloudDetail: 1.6, cloudSpeed: 0.12, cycloneSize: 0.11, cloudWisp: 0.55, cloudRegion: 0.75, lightning: 0.8,
     emissive: G0, emissiveStrength: 0,
   },
   ocean: {

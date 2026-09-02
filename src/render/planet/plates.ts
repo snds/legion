@@ -56,7 +56,8 @@ export interface MacroParams {
  *  land with a few continents; desert/rocky are land-dominant; lava is broken up
  *  into many plates (vigorous tectonics). Giants never call terrainHeight. */
 export const MACRO: Record<PlanetVisualType, MacroParams> = {
-  rocky:  { plateCount: 22, continents: 5, landCoverage: 0.82, sizeVariety: 0.4, uplift: 0.30, rangeWidth: 0.05, detailScale: 3.0, normalStrength: 0.22, coastAmp: 0.35, coastFreq: 2.2, rangeVar: 0.6, craters: 0.5, craterFreq: 8, craterDepth: 0.09 , canyons: 0.3, canyonFreq: 2.6, canyonDepth: 0.10 },
+  // normalStrength capped for Continuum land relief bake (isoline rings at 0.22).
+  rocky:  { plateCount: 22, continents: 5, landCoverage: 0.82, sizeVariety: 0.4, uplift: 0.30, rangeWidth: 0.05, detailScale: 3.0, normalStrength: 0.10, coastAmp: 0.35, coastFreq: 2.2, rangeVar: 0.6, craters: 0.5, craterFreq: 8, craterDepth: 0.09 , canyons: 0.3, canyonFreq: 2.6, canyonDepth: 0.10 },
   // Ocean guidepost (lab-ideal.json): lower relief normals + softer cratering.
   ocean:  { plateCount: 26, continents: 4, landCoverage: 0.30, sizeVariety: 0.35, uplift: 0.26, rangeWidth: 0.055, detailScale: 2.7, normalStrength: 0.03, coastAmp: 0.40, coastFreq: 2.4, rangeVar: 0.55, craters: 0.04, craterFreq: 4.5, craterDepth: 0.05 , canyons: 0.15, canyonFreq: 2.6, canyonDepth: 0.08 },
   desert: { plateCount: 18, continents: 3, landCoverage: 0.92, sizeVariety: 0.5, uplift: 0.32, rangeWidth: 0.05, detailScale: 3.2, normalStrength: 0.24, coastAmp: 0.30, coastFreq: 2.0, rangeVar: 0.65, craters: 0.55, craterFreq: 7, craterDepth: 0.08 , canyons: 0.45, canyonFreq: 2.4, canyonDepth: 0.12 },

@@ -24,6 +24,11 @@ export interface ContinuumAcceptApi {
   setAu(au: number): void;
   setSpin(on: boolean): void;
   setClouds(on: boolean): void;
+  /** Switch planet lab archetype (rebuilds Continuum globe). Lab-only. */
+  setArchetype(type: string): void;
+  archetype(): string;
+  /** Hide/show lab props (visible lab-sun, etc.) for clean captures. */
+  setLabPropsVisible(on: boolean): void;
   nudgeYaw(radians: number): void;
   /** Sun·camFromPlanet in [-1,1]. Day≈+1, night≈−1, terminator≈0. */
   sunFacing(): number;
@@ -50,6 +55,9 @@ export interface ContinuumAcceptDeps {
   setSunDir: (x: number, y: number, z: number) => void;
   setAutoRotate: (on: boolean) => void;
   setCloudsVisible: (on: boolean) => void;
+  setArchetype?: (type: string) => void;
+  getArchetype?: () => string;
+  setLabPropsVisible?: (on: boolean) => void;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -129,6 +137,18 @@ export function attachContinuumAcceptApi(deps: ContinuumAcceptDeps): ContinuumAc
     setClouds(on: boolean): void {
       deps.setCloudsVisible(on);
       deps.getGlobe()?.setCloudsVisible(on);
+    },
+
+    setArchetype(type: string): void {
+      deps.setArchetype?.(type);
+    },
+
+    archetype(): string {
+      return deps.getArchetype?.() ?? 'ocean';
+    },
+
+    setLabPropsVisible(on: boolean): void {
+      deps.setLabPropsVisible?.(on);
     },
 
     nudgeYaw(radians: number): void {
