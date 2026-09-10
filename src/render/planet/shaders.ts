@@ -477,9 +477,19 @@ void main(){
   float day = smoothstep(-uTerminator, uTerminator, ndl);
 
   float lat = vDir.y; // -1..1
-  // Turbulent latitude warp so bands aren't ruler-straight.
+  // Turbulent latitude warp so bands aren't ruler-straight. P2-7: the warp's
+  // amplitude MUST stay a bounded fraction of one band's period (1/uBandCount)
+  // or its phase shift exceeds a full band cycle and the sin() below stops
+  // reading as latitude-aligned stripes at all — it degenerates into isotropic
+  // wavy/contour "wood-grain" noise instead (confirmed: at a high band count
+  // like Saturn's, the old fixed "* uTurbulence * 0.15" amplitude already
+  // exceeded 1/uBandCount, i.e. it could shift the sin() phase by more than one
+  // full band before the very next sample). Scaling by 1/uBandCount keeps the
+  // warp's worst case a fraction of one band's width for ANY band count, so
+  // bands stay zonal while their edges still snake turbulently.
   vec3 sp = vDir * 3.0 + uNoiseSeed;
-  float warp = snoise(vec3(sp.x, sp.y * 0.5, sp.z + uTime * 0.02)) * uTurbulence * 0.15;
+  float warp = snoise(vec3(sp.x, sp.y * 0.5, sp.z + uTime * 0.02))
+    * uTurbulence * (0.35 / max(uBandCount, 1.0));
   float bands = sin((lat + warp) * uBandCount * 3.14159);
   float t = smoothstep(-0.6, 0.6, bands);
   vec3 col = mix(uBandA, uBandB, t);

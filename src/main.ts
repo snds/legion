@@ -18,14 +18,13 @@
 // ═══════════════════════════════════════════════════════════════════
 
 import './styles.css';
-import { Vector3, Euler, TextureLoader, EquirectangularReflectionMapping, SRGBColorSpace } from 'three';
+import { Vector3, Euler, TextureLoader, EquirectangularReflectionMapping, SRGBColorSpace, type Object3D } from 'three';
 import { asset } from './core/assets';
 
 import { createRenderer, type RendererContext } from './render/renderer';
 import { createScene, registerRenderObject, type SceneContext } from './render/scene';
 import { createBlackHole } from './render/blackhole';
 import { setMaxAnisotropy } from './render/icons';
-import { setBakeRenderer } from './render/texture-baker';
 import { VP } from './render/visual-params';
 import { createCatalogStars } from './render/star-field';
 import { createCatalogSystems, type CatalogSystemsHandle } from './render/catalog-systems';
@@ -34,7 +33,7 @@ import { createTestNebula, type TestNebulaHandle } from './render/nebula';
 import { bakeGalaxyBackdrop } from './render/galaxy-backdrop';
 import {
   createSystemMarker, createCosmicMarker, createMarkerStem, updateSunSystem,
-  updatePlanetShaders, updateOrbitLineResolution,
+  updateOrbitLineResolution,
 } from './render/objects';
 import {
   instantiateLocalSystem, initSystemFocus, updateSystemFocus, requestSystemFocus,
@@ -42,9 +41,10 @@ import {
   type LocalSystemHandle, type LoadableSystemId,
 } from './render/system-loader';
 import { updateSystemStar } from './render/star';
+import { updateContinuumGlobes, activeContinuumGlobeCount } from './render/planet/continuum/registry';
 import { CameraController } from './core/camera';
 import { InputManager } from './core/input';
-import { Game, getCamDist, zoomForPhysicalAu, PERF_BASELINE_AU } from './core/state';
+import { Game, getCamDist, zoomForPhysicalAu, PERF_BASELINE_AU, ZOOM_STEPS } from './core/state';
 import { Events } from './core/events';
 import { world, createSystemEntity } from './core/world';
 import { runSystems, type FrameContext } from './core/systems';
@@ -94,6 +94,7 @@ import { createLensFlare, type LensFlareSystem } from './render/lens-flare';
 import { Debug } from './debug/debug-overlay';
 import { initVisualEditor } from './ui/panels/visual-editor'; // ADMIN VISUAL EDITOR — REMOVE
 import { requestPersistence, startAutosave } from './persistence/save-manager';
+import { flushAllBodyChunkWrites } from './persistence/body-asset-store';
 import { STAR_SYSTEMS } from './data/star-catalog';
 import { COSMIC_OBJECTS } from './data/cosmic-objects';
 import { LY_TO_WU, KPC_TO_WU, SOL_GAL_PC, SYSTEM_TIER_SCALE } from './core/metrics';
@@ -179,9 +180,6 @@ async function boot(): Promise<void> {
   }
 
   setMaxAnisotropy(renderCtx.maxAnisotropy);
-  // Register the renderer with the planet texture baker before the world is
-  // populated (populateWorld → createPlanetMesh → generatePlanetTexture).
-  setBakeRenderer(renderCtx.renderer);
 
   // ── 2. Scene ──
   const sceneCtx = createScene();
@@ -281,6 +279,17 @@ async function boot(): Promise<void> {
   // ── 7. Persistence ──
   await requestPersistence();
   startAutosave(60000);
+  // P2-3 — flush pending Continuum chunk-cache writes before teardown so a
+  // session's last few polish upgrades actually land (Audit A2 §2: a
+  // fire-and-forget write that never gets awaited is the ONE reproduced bug
+  // in the one pipeline that already tried to persist; this cache must not
+  // repeat it). visibilitychange (hidden) covers tab-switch/backgrounding;
+  // pagehide covers navigation/close — neither guarantees completion, but
+  // both give the write a real chance to land where today nothing does.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') void flushAllBodyChunkWrites();
+  });
+  window.addEventListener('pagehide', () => { void flushAllBodyChunkWrites(); });
 
   // ── 8. World Population ──
   const params = new URLSearchParams(window.location.search);
@@ -368,6 +377,71 @@ async function boot(): Promise<void> {
   };
   (globalThis as Record<string, unknown>).__legionActiveSystem = (): string | null =>
     getActiveSystemHandle()?.systemId ?? null;
+
+  // ── 8b-ter. Dev hook: focus camera on a REAL body by name (P2-9 tooling gap).
+  // Three prior Phase-2 sessions (P2-1, P2-1b, P2-2 follow-up) each hand-built and
+  // discarded a throwaway camera-snap for a real-boot (non-Lab) debug screenshot,
+  // and the last one hit a real blocker: a body group's authored `.position` is a
+  // LOCAL-tier coordinate (direct child of `layers.local`, scaled by
+  // SYSTEM_TIER_SCALE), while the camera's focus target lives in an ABSOLUTE,
+  // floating-origin-rebased frame (Broker.getSceneRebase()) — the two do NOT
+  // round-trip via a naive getWorldPosition()+R read at true scale (see
+  // camera.ts:120-136 for why). Do not re-derive that math by hand: `camCtrl`
+  // already carries a correct resolver (wired above, §3) for exactly this case —
+  // `trackObject()` calls it every frame. This hook just finds the body and lets
+  // that existing machinery do the coordinate work.
+  // Console: __legionFocusBody('Earth')  — lists names on a miss.
+  // URL:     ?focusBody=Earth[&focusZoom=0.155]  — fires once, after world load.
+  // Dev-only (import.meta.env.DEV) — not shipped in production builds.
+  if (import.meta.env?.DEV) {
+    // Orbit lines (createOrbitLine) also stamp userData.name = bodyName (objects.ts
+    // ~1090), so a plain name match against ALL of layers.local.children can hit the
+    // line instead of the trackable body group. Require bodyRadius (set on every
+    // real body group — objects.ts, planet/globe.ts, planet/continuum/index.ts —
+    // never on an orbit line) so this is correct by construction, not by add() order.
+    const findBodyByName = (name: string): Object3D | null => {
+      const needle = name.toLowerCase();
+      for (const child of layers.local.children) {
+        const ud = child.userData as { name?: string; bodyRadius?: number };
+        if (typeof ud.name === 'string' && ud.name.toLowerCase() === needle && typeof ud.bodyRadius === 'number') {
+          return child;
+        }
+      }
+      return null;
+    };
+    (globalThis as Record<string, unknown>).__legionFocusBody = (name: string, zoomLevel?: number): boolean => {
+      const obj = findBodyByName(name);
+      if (!obj) {
+        const names = [...new Set(
+          layers.local.children
+            .filter((c) => typeof (c.userData as { bodyRadius?: number }).bodyRadius === 'number')
+            .map((c) => (c.userData as { name?: string }).name)
+            .filter((n): n is string => typeof n === 'string'),
+        )];
+        console.warn(`[focus-body] no body named "${name}" in the active local system. Available: ${names.join(', ')}`);
+        return false;
+      }
+      camCtrl.trackObject(obj);
+      // ORBIT tier by default — frames the body + any close moons/stations,
+      // matching warpZoomForType('planet') in raycast.ts (the shift+dblclick path).
+      Game.data.targetZoom = zoomLevel ?? ZOOM_STEPS[2].val;
+      console.info(`[focus-body] tracking "${obj.userData.name}" (bodyRadius=${obj.userData.bodyRadius ?? 'n/a'}), zoom→${Game.data.targetZoom.toFixed(3)}`);
+      return true;
+    };
+    (globalThis as Record<string, unknown>).__legionListBodies = (): string[] => [...new Set(
+      layers.local.children
+        .filter((c) => typeof (c.userData as { bodyRadius?: number }).bodyRadius === 'number')
+        .map((c) => (c.userData as { name?: string }).name)
+        .filter((n): n is string => typeof n === 'string'),
+    )];
+    const focusBodyParam = params.get('focusBody');
+    if (focusBodyParam) {
+      const zoomParam = params.get('focusZoom');
+      const focusBody = (globalThis as Record<string, unknown>).__legionFocusBody as
+        (n: string, z?: number) => boolean;
+      focusBody(focusBodyParam, zoomParam ? Number(zoomParam) : undefined);
+    }
+  }
 
   // ── 8c. Layer Visibility ──
   initVisibility(
@@ -831,13 +905,7 @@ async function boot(): Promise<void> {
       updateSunSystem(renderCtx.renderer, frameTime);
     }
 
-    // 9b. Planet shader update (sun direction, rotation, storms, non-focused planet culling)
-    // Always pass a focus target so angular culling knows which planet to keep visible.
-    // Default to origin (star) when no entity is selected.
-    const focusTarget = Game.data.camFocusTarget ?? { x: 0, y: 0, z: 0 };
-    updatePlanetShaders(Game.data.gameTime, shaderTime, camera.position, focusTarget, Game.data.zoomDomain);
-
-    // 9b-bis. Procedural planet globes (P1/P2). The star sits at the local-tier
+    // 9b. Procedural planet globes (P1/P2). The star sits at the local-tier
     // root, so it IS each planet's sun position. Refresh world matrices first so
     // LOD reads this frame's floating-origin placement, not last frame's.
     if (planetGlobes.count > 0) {
@@ -846,6 +914,24 @@ async function boot(): Promise<void> {
       planetGlobes.update({
         camera, sunWorldPos: _localRoot, dt: frameTime,
         fovYRad: (camera.fov * Math.PI) / 180, viewportH: window.innerHeight,
+      });
+    }
+
+    // 9b-quater. Real-game Continuum globes (P2-1) — any catalogue body
+    // system-loader.ts routed to ContinuumGlobe instead of the legacy
+    // objects.ts pipeline (deleted, P2-5). Same sun/camera convention as 9b above.
+    // updateContinuumGlobes() is also where setViewDistanceAu() gets fed the
+    // real physical camera distance every frame (P2-0 cold-start fix #1) —
+    // that wiring did not exist anywhere in the real boot path before this.
+    if (activeContinuumGlobeCount() > 0) {
+      camera.updateMatrixWorld();
+      layers.local.updateWorldMatrix(true, true);
+      updateContinuumGlobes({
+        camera, sunWorldPos: _localRoot, dt: frameTime,
+        fovYRad: (camera.fov * Math.PI) / 180, viewportH: window.innerHeight,
+        // P2-19: only the actually-tracked body may drive the approach-flight
+        // camera nudge — see ContinuumGlobe.update()'s `ctx.trackedRoot` gate.
+        trackedRoot: camCtrl.trackedObject,
       });
     }
 

@@ -15,6 +15,7 @@
 
 import type { GenPlanet, PlanetVisualType } from '../../data/system-gen';
 import { channel, range, seedOffset } from './rng';
+import { masterValues, applyOffsets, DEFAULT_SYSTEMIC, type SystemicState } from './variants';
 
 export type RGB = readonly [number, number, number];
 
@@ -84,6 +85,12 @@ export interface PlanetRenderParams {
   // ── emissive (lava) ──
   emissive: RGB;
   emissiveStrength: number;
+
+  // ── whole-body physical record (P2-2) ──
+  /** massEarth / radiusEarth³, Earth = 1. The one bulk-physical scalar the
+   *  pipeline never computed before (Audit A5) — exposed so tests/tools can
+   *  see what drove the atmosphere gate + material shift below. */
+  density: number;
 }
 
 interface Preset {
@@ -273,14 +280,125 @@ function jitterRGB(c: RGB, rng: () => number, amt: number): RGB {
   ];
 }
 
+/** Shift a colour's luminance by a flat amount (positive = darker). Used to
+ *  read bulk density as a material property (denser ⇒ darker/iron-heavy;
+ *  less dense ⇒ paler/icier) without inventing a whole albedo model. */
+function shiftLuma(c: RGB, amt: number): RGB {
+  return [
+    Math.max(0, Math.min(1, c[0] - amt)),
+    Math.max(0, Math.min(1, c[1] - amt)),
+    Math.max(0, Math.min(1, c[2] - amt)),
+  ];
+}
+
+function clamp(v: number, lo: number, hi: number): number {
+  return Math.max(lo, Math.min(hi, v));
+}
+
+/** Bulk density, Earth = 1 (mass/radius³ — the ratio system-gen.ts computes
+ *  both halves of and rendering has never once divided; Audit A5). Cheap
+ *  derived scalar, not a core/interior simulation — the task's explicit
+ *  non-goal. */
+export function computeDensity(planet: Pick<GenPlanet, 'massEarth' | 'radiusEarth'>): number {
+  const r = Math.max(planet.radiusEarth, 1e-3);
+  return Math.max(0, planet.massEarth) / (r * r * r);
+}
+
+// A body needs to be both big enough AND dense enough to plausibly hold a
+// real atmosphere/weather system over geologic time (Mars ≈ 0.53 R⊕ keeps a
+// thin one; smaller/icier bodies don't). `kind: 'dwarf'` is an explicit,
+// harder override: a real plutoid (Pluto/Ceres/Eris) can sit at a moderate
+// bulk density (ice+rock mix) yet still fail to hold an atmosphere — it's the
+// tiny ABSOLUTE mass, not the density ratio, that dooms it, and `kind` is
+// already the more reliable signal for a body that small. This is a size/mass
+// gate, not a full escape-velocity model — deliberately cheap (see A5's "do
+// not build a full interior/core physics simulation" recommendation).
+// 0.5 R⊕ is the PLANET_SIZE dwarf/rocky band boundary (system-gen.ts) — at or
+// above it a body is generated as 'rocky' or larger and should be able to
+// retain a real atmosphere by size alone (Mars, 0.53 R⊕, keeps a thin one);
+// below it (or for a real-archive override that lands there regardless of
+// `kind`) it's gated off on size even without the explicit dwarf check.
+const ATMOSPHERE_RADIUS_FLOOR = 0.5; // R⊕
+const ATMOSPHERE_DENSITY_FLOOR = 0.28; // Earth = 1
+
+function retainsAtmosphere(planet: GenPlanet, density: number, isGiant: boolean): boolean {
+  if (isGiant) return true; // giants are never gated by this — banded material, always has an envelope
+  // P2-12: an authored catalogue fact overrides the heuristic below, either
+  // direction — this is how an explicitly airless body (Mercury/Vulcan, both
+  // of which clear the radius/density floor on their rep-radius stand-ins)
+  // stays airless once routed through Continuum. Only the curated-catalogue
+  // adapter ever sets this field; a procedurally-generated planet leaves it
+  // undefined and falls through to the heuristic exactly as before.
+  if (planet.hasAtmosphere !== undefined) return planet.hasAtmosphere;
+  if (planet.kind === 'dwarf') return false;
+  return planet.radiusEarth >= ATMOSPHERE_RADIUS_FLOOR && density >= ATMOSPHERE_DENSITY_FLOOR;
+}
+
+/** The systemic-master output at the archetype "default" physical state
+ *  (Earth-like insolation/size, in the habitable zone) — computed once. Every
+ *  PRESETS[type] baseline was hand-tuned starting from roughly this point
+ *  (variants.test.ts pins it: mid-dial reproduces PRESETS.ocean's seaLevel/
+ *  moisture exactly), so it's the zero-point the offset model below measures
+ *  a body's physical record against. A body whose record reduces to this
+ *  same state (e.g. the curated catalogue adapter's Earth-insolation,
+ *  rep-radius-1 stand-ins) gets a zero offset — no drift from its tuned look. */
+const SYSTEMIC_BASELINE = masterValues(DEFAULT_SYSTEMIC).preset;
+
+/** Every Preset field the four systemic masters (variants.ts) own. */
+const SYSTEMIC_OWNED_KEYS = Object.keys(SYSTEMIC_BASELINE);
+
+/**
+ * Map a body's PHYSICAL record — never a lab dial — onto the same 4-axis
+ * systemic state variants.ts already models (warmth/hydrosphere/tectonics/
+ * biosphere). This is A7's explicit recommendation: promote that layer from a
+ * lab-only authoring aid to a real per-body driver, evaluated at generation
+ * time instead of once per archetype baseline.
+ */
+function physicalSystemicState(planet: GenPlanet): SystemicState {
+  const insol = Math.max(0.02, planet.insolation);
+  const logInsol = Math.log2(insol);
+
+  // Stellar-flux-driven warmth — insolation 1 (Earth) ⇒ warmth 0.5 exactly.
+  const warmth = clamp(0.5 + 0.28 * logInsol, 0, 1);
+
+  // Ocean worlds evaporate toward Hydrosphere's arid end when hot, ice-lock
+  // toward its water-world end when cold (insolation 1 ⇒ 0.5, the default).
+  // Non-ocean types have no liquid-water field to modulate; they keep the
+  // fixed dry/none baseline their own archetype already encodes.
+  const hydrosphereByType: Partial<Record<PlanetVisualType, number>> = {
+    ocean: clamp(0.5 - 0.22 * logInsol, 0, 1),
+    rocky: 0.32, desert: 0.12, lava: 0.02,
+  };
+  const hydrosphere = hydrosphereByType[planet.type] ?? 0.5;
+
+  // Tectonic vigour from size: a bigger body retains more internal heat and
+  // keeps resurfacing (radiusEarth 1 ⇒ 0.5, the default); small/low-mass ones
+  // cool and go geologically dead — which is also why they keep their
+  // craters (applyTectonics' own inverse craters coupling). Dwarfs/plutoids
+  // are dead by definition (Pluto/Ceres logic).
+  const tectonics = planet.kind === 'dwarf' ? 0.04 : clamp(planet.radiusEarth / 2, 0, 1);
+
+  // Only bodies actually in the habitable zone get meaningfully colonised by
+  // life in this model; everything else stays near-barren.
+  const biosphere = planet.inHZ ? DEFAULT_SYSTEMIC.biosphere : 0.05;
+
+  return { warmth, hydrosphere, tectonics, biosphere };
+}
+
 /**
  * Deterministic per-body render params. Starts from the archetype preset for
  * `planet.type`, then:
+ *  • re-centres the systemic-master-owned fields (variants.ts) on this body's
+ *    OWN physical record instead of the lab's default dial, preserving each
+ *    archetype's hand-tuned offset from that default (P2-2 — promotes the
+ *    systemic layer from a lab-only authoring aid to a real per-body driver,
+ *    per Audit A7),
  *  • jitters palette + band/terrain scalars from the body seed (channel-split so
  *    terrain and clouds don't correlate),
- *  • shifts by the physical record — insolation raises the ice-cap line on cold
- *    worlds and bakes lava glow on scorched ones; a giant's band count scales
- *    with radius,
+ *  • derives bulk density (mass/radius³) and uses it to gate atmosphere/cloud/
+ *    weather presence and to shift one material read (surface albedo +
+ *    roughness) — the whole-body physical coverage Audit A5 found was
+ *    computed and then silently dropped,
  *  • honours `planet.hasRings` downstream (globe.ts) — that flag is Step 0's.
  * Same `seed` ⇒ identical params (pinned by presets.test.ts).
  */
@@ -292,11 +410,33 @@ export function derivePlanetParams(planet: GenPlanet): PlanetRenderParams {
 
   const isGiant = planet.isGasGiant || planet.type === 'gas' || planet.type === 'ice';
 
-  // Colder worlds (low insolation) get bigger polar caps; hot ones lose them.
-  const insol = Math.max(0, planet.insolation);
-  const coldBias = insol < 0.5 ? 0.3 : insol > 1.5 ? -0.2 : 0;
+  // Systemic layer, re-centred per body (see physicalSystemicState doc). Giants
+  // don't use any of these fields (banded material, not terrain) — skip.
+  const live: Record<string, number> = {};
+  for (const k of SYSTEMIC_OWNED_KEYS) live[k] = (base as unknown as Record<string, number>)[k];
+  if (!isGiant) {
+    // P2-23: dampen cold-driven ice/snow growth by how much moisture this
+    // ARCHETYPE actually has to work with (ocean 1.0 ⇒ unchanged; rocky 0.2 /
+    // desert 0.08 / lava 0 ⇒ a cold body gains only a fraction of the
+    // ocean-calibrated polar ice/snow swing). See applyWarmth's doc comment.
+    const wetness = clamp(base.moisture, 0, 1);
+    const target = masterValues(physicalSystemicState(planet), wetness).preset;
+    applyOffsets(live, target, SYSTEMIC_BASELINE);
+  }
 
-  const ramp = base.ramp.map((s) => ({ at: s.at, color: jitterRGB(s.color, pal, 0.04) }));
+  const density = computeDensity(planet);
+  const keepsAtmosphere = retainsAtmosphere(planet, density, isGiant);
+  // Denser bodies read as darker/iron-heavy; low-density ones paler/icier —
+  // one visible material property driven by the density scalar (A5).
+  const albedoShift = isGiant ? 0 : clamp((density - 1) * 0.18, -0.16, 0.16);
+  const roughnessShift = isGiant ? 0 : clamp((density - 1) * 0.12, -0.18, 0.18);
+
+  // P2-23: an authored per-body ramp override (currently Mars only — see
+  // GenPlanet.rampOverride's doc comment) replaces the archetype's own ramp
+  // colours but keeps the same density-shift/jitter treatment as every
+  // other body, so it still varies by seed and isn't a flat special case.
+  const rampSource = planet.rampOverride ?? base.ramp;
+  const ramp = rampSource.map((s) => ({ at: s.at, color: jitterRGB(shiftLuma(s.color, albedoShift), pal, 0.04) }));
 
   // Giant band count scales gently with size (bigger ⇒ more visible banding).
   const sizeBands = Math.round(base.bandCount * (0.8 + Math.min(1.5, planet.radiusEarth / 10)));
@@ -305,54 +445,57 @@ export function derivePlanetParams(planet: GenPlanet): PlanetRenderParams {
     type: planet.type,
     isGiant,
     ramp,
-    seaLevel: base.seaLevel,
+    seaLevel: live.seaLevel,
     oceanShallow: jitterRGB(base.oceanShallow, pal, 0.03),
     oceanDeep: jitterRGB(base.oceanDeep, pal, 0.02),
     displacement: base.displacement * range(ter, 0.85, 1.2),
-    ridged: base.ridged,
+    ridged: live.ridged,
     warp: base.warp * range(ter, 0.8, 1.25),
-    latitudeIce: Math.max(0, Math.min(1, base.latitudeIce + coldBias)),
+    latitudeIce: live.latitudeIce,
     // Lab slider max is 1.5 — do NOT clamp to 1.0 (that made "Base humidity"
     // dead above 1.0: value stuck + fingerprint unchanged → no Continuum remesh).
-    moisture: Math.max(0, Math.min(1.5, base.moisture + range(pal, -0.1, 0.1))),
+    moisture: Math.max(0, Math.min(1.5, live.moisture + range(pal, -0.1, 0.1))),
     // Climate modifiers: jitter the ones that make worlds feel different (belt
     // depth, shadow strength, wind bearing, patchiness); keep the rest stable.
-    aridBelts: Math.max(0, Math.min(1.5, base.aridBelts * range(ter, 0.8, 1.2))),
-    rainShadow: Math.max(0, Math.min(1.5, base.rainShadow * range(ter, 0.8, 1.25))),
-    orographic: Math.max(0, Math.min(1.5, base.orographic * range(ter, 0.85, 1.2))),
-    lapseRate: base.lapseRate,
-    treeline: base.treeline,
+    aridBelts: Math.max(0, Math.min(1.5, live.aridBelts * range(ter, 0.8, 1.2))),
+    rainShadow: Math.max(0, Math.min(1.5, live.rainShadow * range(ter, 0.8, 1.25))),
+    orographic: Math.max(0, Math.min(1.5, live.orographic * range(ter, 0.85, 1.2))),
+    lapseRate: live.lapseRate,
+    treeline: live.treeline,
     windBearing: base.windBearing + range(ter, -0.35, 0.35),
-    continental: base.continental,
-    altitudeDry: base.altitudeDry,
-    patchiness: Math.max(0, Math.min(1.5, base.patchiness * range(ter, 0.85, 1.2))),
-    lushDepth: Math.max(0, Math.min(1.5, base.lushDepth)),
-    snowfall: Math.max(0, Math.min(1.5, base.snowfall)),
-    roughness: base.roughness,
+    continental: live.continental,
+    altitudeDry: live.altitudeDry,
+    patchiness: Math.max(0, Math.min(1.5, live.patchiness * range(ter, 0.85, 1.2))),
+    lushDepth: Math.max(0, Math.min(1.5, live.lushDepth)),
+    snowfall: Math.max(0, Math.min(1.5, live.snowfall)),
+    // Giants keep the archetype's exact roughness (0 — unused by the banded
+    // material); only surface worlds get the density-driven shift + floor.
+    roughness: isGiant ? base.roughness : clamp(base.roughness + roughnessShift, 0.05, 1),
     noiseSeed: seedOffset(seed),
     bandColorA: jitterRGB(base.bandColorA, pal, 0.05),
     bandColorB: jitterRGB(base.bandColorB, pal, 0.05),
     bandCount: Math.max(0, sizeBands),
     bandTurbulence: base.bandTurbulence * range(ter, 0.85, 1.2),
     stormChance: base.stormChance,
-    hasAtmosphere: base.hasAtmosphere,
+    hasAtmosphere: base.hasAtmosphere && keepsAtmosphere,
     atmosphere: jitterRGB(base.atmosphere, pal, 0.03),
-    atmosphereDensity: base.atmosphereDensity,
+    atmosphereDensity: keepsAtmosphere ? base.atmosphereDensity : 0,
     nightLights: base.nightLights,
-    cloudCover: Math.min(1, base.cloudCover * range(ter, 0.8, 1.2)),
-    cloudShadow: base.cloudShadow,
+    cloudCover: keepsAtmosphere ? Math.min(1, live.cloudCover * range(ter, 0.8, 1.2)) : 0,
+    cloudShadow: keepsAtmosphere ? base.cloudShadow : 0,
     cloudFlow: base.cloudFlow * range(ter, 0.85, 1.2),
     cloudTurb: base.cloudTurb,
-    cyclones: base.cyclones * range(ter, 0.6, 1.3),
+    cyclones: keepsAtmosphere ? base.cyclones * range(ter, 0.6, 1.3) : 0,
     cloudTerrain: base.cloudTerrain,
     cloudDetail: base.cloudDetail,
     cloudSpeed: base.cloudSpeed,
     cycloneSize: base.cycloneSize * range(ter, 0.8, 1.25),
     cloudWisp: base.cloudWisp,
     cloudRegion: Math.min(1, base.cloudRegion * range(ter, 0.85, 1.15)),
-    lightning: base.lightning,
+    lightning: keepsAtmosphere ? base.lightning : 0,
     emissive: base.emissive,
     emissiveStrength: base.emissiveStrength,
+    density,
   };
 }
 

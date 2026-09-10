@@ -13,6 +13,7 @@ import {
 import { asteroidVertexShader, asteroidFragmentShader } from './shaders/asteroid';
 import { VP } from './visual-params';
 import { AU_TO_WU as AU_SCALE } from '../core/metrics';
+import { channel, seedFrom } from './planet/rng';
 
 // Kirkwood gap resonance radii (AU) — where asteroids are depleted
 // These are Jupiter resonances adapted to a generic asteroid belt
@@ -31,6 +32,7 @@ function createAsteroidGeometry(
   detail: number,
   noiseMag: number,
   addCrater: boolean,
+  rng: () => number,
 ): IcosahedronGeometry {
   const geo = new IcosahedronGeometry(1, detail);
   const pos = geo.attributes.position;
@@ -43,19 +45,19 @@ function createAsteroidGeometry(
     const len = Math.sqrt(x * x + y * y + z * z);
 
     // Noise displacement along radial direction
-    const noise = 1.0 + (Math.random() - 0.5) * noiseMag * 2;
+    const noise = 1.0 + (rng() - 0.5) * noiseMag * 2;
     pos.setXYZ(i, x * noise, y * noise, z * noise);
   }
 
   // Add crater (indent a random region)
   if (addCrater) {
     const craterDir = new Vector3(
-      Math.random() - 0.5,
-      Math.random() - 0.5,
-      Math.random() - 0.5,
+      rng() - 0.5,
+      rng() - 0.5,
+      rng() - 0.5,
     ).normalize();
-    const craterRadius = 0.3 + Math.random() * 0.3;
-    const craterDepth = 0.15 + Math.random() * 0.15;
+    const craterRadius = 0.3 + rng() * 0.3;
+    const craterDepth = 0.15 + rng() * 0.15;
 
     for (let i = 0; i < pos.count; i++) {
       const v = new Vector3(pos.getX(i), pos.getY(i), pos.getZ(i));
@@ -90,24 +92,24 @@ function inKirkwoodGap(smaAU: number): boolean {
  * Generate a center-biased random SMA within the belt range.
  * Averages multiple random samples for center bias.
  */
-function centeredSMA(innerAU: number, outerAU: number): number {
+function centeredSMA(rng: () => number, innerAU: number, outerAU: number): number {
   // Average 3 random samples for center bias
-  const r = (Math.random() + Math.random() + Math.random()) / 3;
+  const r = (rng() + rng() + rng()) / 3;
   return innerAU + r * (outerAU - innerAU);
 }
 
 /**
  * Generate a random HSL color for an asteroid.
  */
-function randomAsteroidColor(): Color {
+function randomAsteroidColor(rng: () => number): Color {
   const h = VP.get('asteroidMinHue') +
-    Math.random() * (VP.get('asteroidMaxHue') - VP.get('asteroidMinHue'));
+    rng() * (VP.get('asteroidMaxHue') - VP.get('asteroidMinHue'));
   const s = VP.get('asteroidMinSat') +
-    Math.random() * (VP.get('asteroidMaxSat') - VP.get('asteroidMinSat'));
+    rng() * (VP.get('asteroidMaxSat') - VP.get('asteroidMinSat'));
   // Realistic rock albedo: C-type asteroids ~0.05, S-type ~0.15-0.25. The old
   // 0.58-0.88 lightness read as chalky bright blobs; rocks should be DARK,
   // their form carried by lit/shadow facet contrast, not base brightness.
-  const l = 0.22 + Math.random() * 0.23; // lightness 0.22 - 0.45
+  const l = 0.22 + rng() * 0.23; // lightness 0.22 - 0.45
   return new Color().setHSL(h, s, l);
 }
 
@@ -135,6 +137,10 @@ export interface BeltOptions {
   inclinationDeg?: number;
   /** Full vertical spread in AU. Default 0.05 AU = the legacy thin slab. */
   thicknessAU?: number;
+  /** Stable identity for the belt's seeded RNG (e.g. "Sol Main Belt"). Belts
+   *  with the same name+range always look identical across reloads; omit
+   *  only for throwaway/lab belts where determinism doesn't matter. */
+  name?: string;
 }
 
 /**
@@ -157,6 +163,16 @@ export function createAsteroidBelt(
   const noiseMag = VP.get('asteroidNoiseMagnitude');
   const craterProb = VP.get('asteroidCraterProbability');
 
+  // Deterministic per-belt RNG (mulberry32 via the planet renderer's channel
+  // helper) keyed off the belt's stable identity, so the SAME belt looks
+  // byte-identical across reloads/system swaps instead of re-rolling on every
+  // instantiation. Independent channels per concern (geometry/placement/dust)
+  // so they never correlate, matching the discipline in planet/rng.ts.
+  const beltIdentity = seedFrom(`${opts.name ?? 'belt'}|${innerAU}|${outerAU}`);
+  const geomRng = channel(beltIdentity, 'geometry');
+  const mainRng = channel(beltIdentity, 'main-placement');
+  const dustRng = channel(beltIdentity, 'dust-placement');
+
   // ── Generate geometry variants ──
   const VARIANT_COUNT = 12;
   const geoVariants: IcosahedronGeometry[] = [];
@@ -164,7 +180,8 @@ export function createAsteroidBelt(
     geoVariants.push(createAsteroidGeometry(
       detail,
       noiseMag,
-      Math.random() < craterProb,
+      geomRng() < craterProb,
+      geomRng,
     ));
   }
 
@@ -199,13 +216,13 @@ export function createAsteroidBelt(
       let sma: number;
       let attempts = 0;
       do {
-        sma = centeredSMA(innerAU, outerAU);
+        sma = centeredSMA(mainRng, innerAU, outerAU);
         attempts++;
       } while (inKirkwoodGap(sma) && attempts < 20);
 
       const r = sma * AU_SCALE;
-      const theta = Math.random() * Math.PI * 2;
-      const yOffset = (Math.random() - 0.5) * thicknessWU;
+      const theta = mainRng() * Math.PI * 2;
+      const yOffset = (mainRng() - 0.5) * thicknessWU;
 
       pos.set(
         r * Math.cos(theta),
@@ -215,25 +232,25 @@ export function createAsteroidBelt(
 
       // Random rotation
       euler.set(
-        Math.random() * Math.PI * 2,
-        Math.random() * Math.PI * 2,
-        Math.random() * Math.PI * 2,
+        mainRng() * Math.PI * 2,
+        mainRng() * Math.PI * 2,
+        mainRng() * Math.PI * 2,
       );
       quat.setFromEuler(euler);
 
       // Anisotropic scale (elongated rocks)
-      const baseScale = 0.03 + Math.random() * 0.06;
+      const baseScale = 0.03 + mainRng() * 0.06;
       scale.set(
-        baseScale * (0.6 + Math.random() * 0.8),
-        baseScale * (0.6 + Math.random() * 0.8),
-        baseScale * (0.6 + Math.random() * 0.8),
+        baseScale * (0.6 + mainRng() * 0.8),
+        baseScale * (0.6 + mainRng() * 0.8),
+        baseScale * (0.6 + mainRng() * 0.8),
       );
 
       matrix.compose(pos, quat, scale);
       mesh.setMatrixAt(i, matrix);
 
       // Per-instance color
-      const col = randomAsteroidColor();
+      const col = randomAsteroidColor(mainRng);
       colors[i * 3] = col.r;
       colors[i * 3 + 1] = col.g;
       colors[i * 3 + 2] = col.b;
@@ -266,31 +283,31 @@ export function createAsteroidBelt(
     let sma: number;
     let attempts = 0;
     do {
-      sma = centeredSMA(innerAU, outerAU);
+      sma = centeredSMA(dustRng, innerAU, outerAU);
       attempts++;
     } while (inKirkwoodGap(sma) && attempts < 20);
 
     const r = sma * AU_SCALE;
-    const theta = Math.random() * Math.PI * 2;
-    const yOffset = (Math.random() - 0.5) * thicknessWU * 1.2; // dust rides slightly proud of the rocks
+    const theta = dustRng() * Math.PI * 2;
+    const yOffset = (dustRng() - 0.5) * thicknessWU * 1.2; // dust rides slightly proud of the rocks
 
     pos.set(r * Math.cos(theta), yOffset, r * Math.sin(theta));
 
     euler.set(
-      Math.random() * Math.PI * 2,
-      Math.random() * Math.PI * 2,
-      Math.random() * Math.PI * 2,
+      dustRng() * Math.PI * 2,
+      dustRng() * Math.PI * 2,
+      dustRng() * Math.PI * 2,
     );
     quat.setFromEuler(euler);
 
-    const dustScale = 0.008 + Math.random() * 0.02;
+    const dustScale = 0.008 + dustRng() * 0.02;
     scale.set(dustScale, dustScale, dustScale);
 
     matrix.compose(pos, quat, scale);
     dustMesh.setMatrixAt(i, matrix);
 
     // Slightly brighter colors for dust
-    const col = randomAsteroidColor();
+    const col = randomAsteroidColor(dustRng);
     dustColors[i * 3] = col.r * 1.2;
     dustColors[i * 3 + 1] = col.g * 1.2;
     dustColors[i * 3 + 2] = col.b * 1.2;

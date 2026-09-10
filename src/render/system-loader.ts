@@ -30,15 +30,20 @@ import { AU_TO_WU, SYSTEM_TIER_SCALE } from '../core/metrics';
 import { asset } from '../core/assets';
 import { registerRenderObject } from './scene';
 import {
-  createStarMesh, createPlanetMesh, createMoonMesh, createBobMesh, createOrbitLine,
-  unregisterStarMesh, unregisterPlanetMesh, unregisterOrbitLine,
+  createStarMesh, createBobMesh, createOrbitLine,
+  unregisterStarMesh, unregisterOrbitLine,
 } from './objects';
+import { createContinuumPlanetMesh, createContinuumMoonMesh } from './planet-continuum-adapter';
+import { computeInsolation } from '../data/system-gen';
+import type { ContinuumGlobe } from './planet/continuum';
+import { registerContinuumGlobe, unregisterContinuumGlobe } from './planet/continuum/registry';
 import { createStationMesh, createCometMesh, STATION_DATA, COMET_DATA } from './scene-objects';
 import { createHeliopause } from './particles';
 import { createAsteroidBelt } from './asteroid-belt';
-import { hasProceduralRecipe } from './procedural-textures';
 import {
-  EPS_ERI_STAR, EPS_ERI_PLANETS, EPS_ERI_BELTS, SOL_STAR, SOL_PLANETS, SOL_MOONS, SOL_BELTS,
+  EPS_ERI_STAR, EPS_ERI_PLANETS, EPS_ERI_BELTS, EPS_ERI_MOONS,
+  SOL_STAR, SOL_PLANETS, SOL_MOONS, SOL_BELTS,
+  SOL_LUMINOSITY_SOLAR, EPS_ERI_LUMINOSITY_SOLAR,
   createInitialBobs,
 } from '../data/star-catalog';
 import { applySolEphemeris } from '../data/jpl-ephemeris';
@@ -76,35 +81,29 @@ export interface LocalSystemHandle {
 interface MaterialLike {
   dispose(): void;
   map?: { dispose(): void } | null;
-  uniforms?: Record<string, { value: unknown } | undefined>;
 }
 
-/** Dispose a material + the textures it owns. Baked albedo/aux textures for
- *  procedural planets are cache-owned (procedural-textures.ts) and survive the
- *  swap — re-instantiation reuses them; everything else (file textures, icon
- *  canvases, ring textures) is freed. */
-function disposeMaterial(mat: MaterialLike, keepBakedTextures: boolean): void {
+/** Dispose a material + the texture it owns (file textures, icon canvases).
+ *  P2-5: the baked-procedural-texture-cache exception (keepBakedTextures) was
+ *  removed with the legacy objects.ts planet/moon pipeline — Continuum globes
+ *  are disposed separately via their own globe.dispose(), never through this
+ *  generic path, so there is no longer a case where a tree passed here owns a
+ *  cache-owned texture that must survive the swap. */
+function disposeMaterial(mat: MaterialLike): void {
   mat.map?.dispose?.();
-  if (mat.uniforms) {
-    const texKeys = keepBakedTextures ? ['uRingTexture'] : ['uDayTexture', 'uAuxTexture', 'uRingTexture'];
-    for (const key of texKeys) {
-      const t = mat.uniforms[key]?.value as { dispose?: () => void } | null | undefined;
-      t?.dispose?.();
-    }
-  }
   mat.dispose();
 }
 
 /** Deep-dispose an object tree's GPU resources (geometries, materials,
  *  textures). The sun's cubemap pipeline is released separately via
- *  unregisterStarMesh → SunSystem.dispose(). */
+ *  unregisterStarMesh → SunSystem.dispose(); Continuum globes via their own
+ *  globe.dispose() (see the dispose() handler below). */
 function disposeObjectTree(root: Object3D): void {
-  const keepBaked = hasProceduralRecipe((root.userData?.name as string) ?? '');
   root.traverse((obj) => {
     const o = obj as Object3D & { geometry?: { dispose(): void }; material?: unknown };
     o.geometry?.dispose();
     const mats = Array.isArray(o.material) ? o.material : o.material ? [o.material] : [];
-    for (const m of mats) disposeMaterial(m as MaterialLike, keepBaked);
+    for (const m of mats) disposeMaterial(m as MaterialLike);
   });
 }
 
@@ -122,7 +121,12 @@ export function instantiateLocalSystem(
   const bobEids: number[] = [];
   const groups: Object3D[] = [];
   const orbitLines: Line2[] = [];
-  const bodyGroups: Group[] = []; // planet + moon groups (shader-registry unregister)
+  // P2-1 engine consolidation (P2-5: now the only pipeline — the legacy
+  // objects.ts planet/moon path was deleted): catalogue bodies route to
+  // ContinuumGlobe. Tracked separately because they need their OWN dispose()
+  // (chunk pool / clouds / voxels / ring textures), not the generic
+  // disposeObjectTree() the rest of `groups` gets.
+  const continuumGlobes: ContinuumGlobe[] = [];
 
   const add = (obj: Object3D): void => {
     layers.local.add(obj);
@@ -131,11 +135,17 @@ export function instantiateLocalSystem(
 
   const isSol = systemId === 'sol';
   const star = isSol ? SOL_STAR : EPS_ERI_STAR;
+  // P2-20: real per-body insolation for Continuum-routed catalogue bodies —
+  // computed once per system (star luminosity) and once per planet (stored
+  // by name so the moon loop below can look up its parent's value; a moon
+  // has no independent stellar distance of its own).
+  const starLuminositySolar = isSol ? SOL_LUMINOSITY_SOLAR : EPS_ERI_LUMINOSITY_SOLAR;
+  const planetInsolationByName = new Map<string, number>();
   // Sol planets get their real JPL orbital elements (positions + plane
   // orientations) evaluated at the game epoch; fictional systems keep authored
   // elements. Periods then follow from a^1.5 in the on-rails propagator.
   const planets = isSol ? applySolEphemeris(SOL_PLANETS, GAME_EPOCH_ET) : EPS_ERI_PLANETS;
-  const moons = isSol ? SOL_MOONS : [];
+  const moons = isSol ? SOL_MOONS : EPS_ERI_MOONS;
 
   // ── Star ──
   const starEid = createStarEntity(star);
@@ -152,17 +162,29 @@ export function instantiateLocalSystem(
     const eid = createPlanetEntity(pCfg);
     eids.push(eid);
     planetEidMap.set(pCfg.name, eid);
+    // P2-20: computed for every planet regardless of engine routing, so a
+    // continuum-routed moon of a legacy-routed planet can still look up a
+    // real parent insolation below.
+    planetInsolationByName.set(pCfg.name, computeInsolation(starLuminositySolar, pCfg.sma));
 
-    const mesh = createPlanetMesh(
-      pCfg.color, pCfg.size, pCfg.planetType,
-      pCfg.hasAtmosphere, pCfg.atmosColor,
-      pCfg.name, pCfg.status,
-      pCfg.texturePath, pCfg.ringTexturePath,
-      pCfg.axialTilt ?? 0, pCfg.dayLength ?? 1,
-    );
-    add(mesh);
-    bodyGroups.push(mesh);
-    registerRenderObject(renderObjectMap, eid, mesh);
+    // P2-1: per-body engine routing — generic on PlanetConfig.renderEngine,
+    // no system id / body name special-casing here, so this applies equally
+    // to any catalogue star's planet list. P2-5: the legacy objects.ts
+    // fallback (createPlanetMesh) was deleted once every catalogue planet
+    // was verified routed to Continuum — fail loudly rather than silently
+    // dropping a body if the catalogue ever regresses this flag.
+    if (pCfg.renderEngine !== 'continuum') {
+      throw new Error(
+        `[system-loader] Planet "${pCfg.name}" has renderEngine !== 'continuum' — `
+        + 'the legacy planet pipeline was deleted in P2-5. Every catalogue planet '
+        + "must set renderEngine: 'continuum'.",
+      );
+    }
+    const { object, globe } = createContinuumPlanetMesh(pCfg, starLuminositySolar);
+    add(object);
+    continuumGlobes.push(globe);
+    registerContinuumGlobe(globe);
+    registerRenderObject(renderObjectMap, eid, object);
 
     // Orbit line — solid low-opacity white; registered for hover brightening.
     // Full elements so the drawn path matches the propagator exactly.
@@ -183,13 +205,29 @@ export function instantiateLocalSystem(
     const eid = createMoonEntity(mCfg, parentEid);
     eids.push(eid);
 
-    const mesh = createMoonMesh(
-      mCfg.color, mCfg.size, mCfg.name,
-      mCfg.texturePath, mCfg.dayLength ?? 1,
-    );
-    add(mesh);
-    bodyGroups.push(mesh);
-    registerRenderObject(renderObjectMap, eid, mesh);
+    // P2-18 moon-routing: same per-body engine flag pattern as the planet
+    // loop above — generic on MoonConfig.renderEngine, no name special-casing.
+    // P2-5: the legacy objects.ts fallback (createMoonMesh) was deleted once
+    // every catalogue moon was verified routed to Continuum — fail loudly
+    // rather than silently dropping a body if the catalogue ever regresses
+    // this flag.
+    if (mCfg.renderEngine !== 'continuum') {
+      throw new Error(
+        `[system-loader] Moon "${mCfg.name}" has renderEngine !== 'continuum' — `
+        + 'the legacy moon pipeline was deleted in P2-5. Every catalogue moon '
+        + "must set renderEngine: 'continuum'.",
+      );
+    }
+    // P2-20: inherit the parent planet's real insolation — a moon has no
+    // independent stellar distance worth modeling. Falls back to 1 (the
+    // old constant) only if the parent name doesn't resolve, which
+    // shouldn't happen for valid catalogue data.
+    const parentInsolation = planetInsolationByName.get(mCfg.parentName) ?? 1;
+    const { object, globe } = createContinuumMoonMesh(mCfg, parentInsolation);
+    add(object);
+    continuumGlobes.push(globe);
+    registerContinuumGlobe(globe);
+    registerRenderObject(renderObjectMap, eid, object);
   }
 
   // ── Stations (orbiting planets — EE only) ──
@@ -254,8 +292,19 @@ export function instantiateLocalSystem(
     dispose(): void {
       // Shader registries first — stops per-frame updates on dead materials.
       unregisterStarMesh(starMesh);
-      for (const g of bodyGroups) unregisterPlanetMesh(g);
       for (const line of orbitLines) unregisterOrbitLine(line);
+
+      // Continuum globes (P2-1): stop the per-frame registry drive and run
+      // their OWN dispose (chunk pool / clouds / voxels / ring + giant
+      // textures) — the generic disposeObjectTree below doesn't know their
+      // internals, so it cannot safely free these.
+      // globe.dispose() also detaches the root from the scene graph; the
+      // generic loop below still safely no-ops over the (already-disposed)
+      // remainder of the same object.
+      for (const g of continuumGlobes) {
+        unregisterContinuumGlobe(g);
+        g.dispose();
+      }
 
       // Scene graph + GPU resources.
       for (const obj of groups) {
@@ -277,8 +326,8 @@ export function instantiateLocalSystem(
       if (selected != null && eids.includes(selected)) Game.deselectEntity();
 
       groups.length = 0;
-      bodyGroups.length = 0;
       orbitLines.length = 0;
+      continuumGlobes.length = 0;
       eids.length = 0;
       bobEids.length = 0;
     },

@@ -62,6 +62,45 @@ export interface GenPlanet {
   isGasGiant: boolean;    // giant (gas or ice) — rendered as a banded globe, never a surface
   hasRings: boolean;      // deterministic; common for giants, rare for terrestrials
   seed: number;           // stable per-body seed for the renderer's procedural surface generation
+  // Optional so pre-existing literal GenPlanet fixtures elsewhere (lab/test
+  // stand-ins that don't go through derivePlanetPhysical) keep compiling.
+  moonCount?: number;     // deterministic; giants get several, dwarfs rarely any (P2-8)
+  // Optional authored override (P2-12): undefined ⇒ presets.ts's
+  // retainsAtmosphere() heuristic (radius/density floor, or `kind: 'dwarf'`)
+  // decides for a procedurally-generated body, same as before this field
+  // existed. Set ONLY by the curated-catalogue adapter (planet-continuum-
+  // adapter.ts), from PlanetConfig.hasAtmosphere — the catalogue's own
+  // hand-authored fact about a specific body (e.g. Mercury/Vulcan are
+  // explicitly airless despite clearing the radius/density heuristic).
+  // An explicit value here — true OR false — always wins over the heuristic;
+  // giants remain the one hard exception (always true; see retainsAtmosphere).
+  hasAtmosphere?: boolean;
+  // Optional authored override (P2-20): the catalogue's real axial tilt in
+  // degrees (0–180° convention — >90° means retrograde rotation, e.g. Uranus
+  // 97.77°, Venus 177.36°). Set ONLY by the curated-catalogue planet adapter
+  // (planet-continuum-adapter.ts), from PlanetConfig.axialTilt. undefined ⇒
+  // ContinuumGlobe keeps its RNG-derived cosmetic lean, same as before this
+  // field existed — every procedurally-generated body (no authored tilt to
+  // begin with) and every catalogue moon (MoonConfig carries no axialTilt).
+  axialTilt?: number;
+  // Optional authored override (P2-23): a hand-tuned altitude colour ramp
+  // (same shape as presets.ts's `RampStop[]`, duplicated here as a plain
+  // tuple so this data-layer file doesn't import the render layer) that
+  // REPLACES the generic archetype's own ramp for this one body. undefined ⇒
+  // derivePlanetParams keeps using PRESETS[type].ramp exactly as before this
+  // field existed — every procedurally-generated body and every catalogue
+  // body except the one(s) explicitly set below render byte-identically.
+  // Set ONLY by the curated-catalogue adapter (planet-continuum-adapter.ts).
+  // Exists because the generic 'rocky' archetype ramp (correctly tuned for
+  // grey/tan cratered worlds like Mercury) reads as washed-out pale on Mars:
+  // Mars's own authored catalogue colour (0xc1440e, rust-red) is never
+  // otherwise consumed by Continuum at all — only the coarse `type` bucket
+  // is, discarding each body's real hue. `desert` (the only existing
+  // archetype with a warmer ramp) still under-saturates against the
+  // render pipeline's own exposure/tonemap curve at Mars's on-screen size;
+  // real-boot verified (not guessed) against `refs/continuum/stills/p2-7/
+  // after/legacy-mars.png`.
+  rampOverride?: readonly { readonly at: number; readonly color: readonly [number, number, number] }[];
 }
 
 /** A generated asteroid/debris belt. Placement is CONSTRAINED (formation
@@ -237,6 +276,30 @@ const PLANET_SIZE: Record<PlanetKind, { r: readonly [number, number]; mExp: numb
 };
 const GIANT_RADIUS_EARTH = 3.5; // ≥ this ⇒ a giant (Neptune ≈ 3.9 R⊕)
 
+/** Stellar-flux insolation vs Earth (L☉ / au²) — the ONE formula both the
+ *  procedural generator (derivePlanetPhysical, below) and the curated
+ *  catalogue adapter (planet-continuum-adapter.ts, P2-20) use, so a routed
+ *  real body's insolation is computed the same way a generated one's is,
+ *  never a second invented formula. */
+export function computeInsolation(luminositySolar: number, au: number): number {
+  return +(luminositySolar / Math.max(au * au, 1e-6)).toPrecision(3);
+}
+
+/** How many moons a generated body plausibly retains — giants host several
+ *  (Galilean/Saturnian-scale systems), small/dwarf bodies rarely any (a
+ *  Pluto-Charon-style capture is the exception). Deliberately coarse (no
+ *  orbital dynamics), matching presets.ts' retainsAtmosphere size gate. Uses
+ *  its OWN rng stream (never the caller's `rng`) so this is purely additive
+ *  and never perturbs the existing radius/mass/rings draw sequence. */
+function deriveMoonCount(isGiant: boolean, kind: PlanetKind, radiusEarth: number, seed: number): number {
+  const rng = mulberry32((seed ^ 0x6d00f5) >>> 0); // SEPARATE stream — never interleave the caller's
+  if (isGiant) return Math.round(1 + rng() * 3.4); // 1-4, giants always host several
+  if (kind === 'dwarf') return rng() < 0.3 ? 1 : 0; // Pluto/Charon is the exception, not the rule
+  if (radiusEarth < 0.5) return 0;                 // too small to retain one (Mercury/Mars-small analogs)
+  const r = rng();
+  return r < 0.35 ? 0 : r < 0.75 ? 1 : 2;           // rocky/super-earth: 0-2, biased toward fewer
+}
+
 /**
  * Fill a planet's deterministic PHYSICAL record. Uses its own per-body seeded
  * RNG (seedKey|planet|index) — independent of the system's planet-layout stream.
@@ -248,7 +311,7 @@ export function derivePlanetPhysical(
   kind: PlanetKind, au: number, luminositySolar: number, inHZ: boolean,
   seedKey: string, index: number,
   real?: { rade: number | null; masse: number | null },
-): Pick<GenPlanet, 'type' | 'massEarth' | 'radiusEarth' | 'insolation' | 'isGasGiant' | 'hasRings' | 'seed'> {
+): Pick<GenPlanet, 'type' | 'massEarth' | 'radiusEarth' | 'insolation' | 'isGasGiant' | 'hasRings' | 'seed' | 'moonCount'> {
   const seed = seedFrom(`${seedKey}|planet|${index}`);
   const rng = mulberry32(seed);
   const band = PLANET_SIZE[kind];
@@ -264,7 +327,7 @@ export function derivePlanetPhysical(
     massEarth = Math.pow(radiusEarth, band.mExp);
   }
 
-  const insolation = +(luminositySolar / Math.max(au * au, 1e-6)).toPrecision(3);
+  const insolation = computeInsolation(luminositySolar, au);
   const giant = radiusEarth >= GIANT_RADIUS_EARTH;
   const type: PlanetVisualType = giant
     ? (radiusEarth >= 8 ? 'gas' : 'ice')       // Jupiter-class vs Neptune-class
@@ -273,6 +336,7 @@ export function derivePlanetPhysical(
         : insolation >= 0.9 ? 'desert'          // warm but dry
           : 'rocky';                            // cold / outer terrestrial
   const hasRings = rng() < (giant ? 0.55 : 0.04);
+  const moonCount = deriveMoonCount(giant, kind, radiusEarth, seed);
 
   return {
     type,
@@ -282,6 +346,7 @@ export function derivePlanetPhysical(
     isGasGiant: giant,
     hasRings,
     seed,
+    moonCount,
   };
 }
 

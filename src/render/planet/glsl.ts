@@ -221,12 +221,19 @@ float cloudDensity(vec3 d0){
 
 // Lightning: a fast emissive flicker the cloud shell ADDS, so a bolt lights the
 // cloud from WITHIN and glows through it (strongest on the night side, where the
-// base cloud is dark). It fires in two places, exactly as asked:
-//   1. CYCLONE eyewalls — frequent, bright.
-//   2. Scattered STORM CELLS in only SOME regions — a periodic low-frequency
-//      mask picks the electrically-active belts, and inside them a small cell
-//      grid strobes individual cells. Everything is gated by local cloud density
-//      so bolts only appear where cloud is actually clumped.
+// base cloud is dark).
+//
+// P2-6 storm-gate fix (Audit A4 §3, cheapest-fix #1): this used to ALSO fire
+// from a periodic low-frequency "storm belt" (fbm region mask, ~lines 249-261
+// pre-fix) — a broad, position-INDEPENDENT patch of the sphere unrelated to any
+// actual cyclone, which read as "whole-region flashes together" (the exact bug
+// the NORTHSTAR hold names). That mechanism only ever got fixed in the
+// Continuum engine (continuum/shaders.ts, commit f833d6d) and was never ported
+// here. Ported verbatim now: gate strictly on proximity to a real cyclone
+// (uCycPos/uCycStr/uCycSize, the SAME storm-gate stormW / floor(d*28.0) cell
+// grid pattern from continuum/shaders.ts:507-526), so a flash can only appear
+// inside a storm's actual footprint, scattered cell-by-cell within it (not the
+// whole eyewall in unison, and never region-wide).
 // Timed on the RAW clock (uCloudTime seconds), NOT the slow weather clock — a
 // flash is a fraction of a second regardless of how fast the deck drifts.
 float lightningFlash(vec3 d, float density){
@@ -234,29 +241,23 @@ float lightningFlash(vec3 d, float density){
   float t = uCloudTime;
   float flash = 0.0;
 
-  // 1) Cyclone cores: several quick strobes near the eyewall.
+  // stormW: proximity-weighted influence of the nearest active cyclone.
+  float stormW = 0.0;
   for (int i = 0; i < 3; i++){
     float str = abs(uCycStr[i]);
     if (str < 0.02) continue;
     float ang = acos(clamp(dot(d, uCycPos[i]), -1.0, 1.0)) / max(uCycSize, 0.01);
-    float w = exp(-ang * ang);
-    if (w < 0.03) continue;
-    float ph = hash13(uCycPos[i] * 13.0 + 4.0);
-    float strobe = fract(t * (2.5 + 3.0 * ph) + ph);        // high flash rate
-    flash = max(flash, exp(-strobe * 24.0) * w * (0.5 + 0.5 * str));
+    float core = exp(-ang * ang) * str;
+    stormW = max(stormW, core);
   }
-
-  // 2) Periodic storm belts: only some regions are electrically active, and
-  // within them a sparse set of cells strobes on their own phase.
-  float region = fbm(d * 2.2 + uNoiseSeed * 1.3) * 0.5 + 0.5;
-  float belt = smoothstep(0.60, 0.82, region);   // 'active' is a GLSL reserved word
-  if (belt > 0.01){
-    vec3 cell = floor(d * 22.0);
+  float w = clamp(stormW * 2.5, 0.0, 1.0);
+  if (w > 0.05){
+    vec3 cell = floor(d * 28.0);
     float g = hash13(cell + 5.1);
-    if (g < 0.32){                                          // ~a third of cells storm
-      vec3 h = hash33(cell + 2.7);
-      float strobe = fract(t * (0.4 + 0.9 * h.x) + h.y);    // slow, irregular
-      flash = max(flash, exp(-strobe * 30.0) * belt * 0.85);
+    if (g < 0.35){                                          // ~a third of cells storm
+      float ph = hash13(cell + 2.7);
+      float strobe = fract(t * (2.5 + 3.0 * ph) + ph);
+      flash = max(flash, exp(-strobe * 24.0) * w);
     }
   }
   return clamp(flash * density * uLightning, 0.0, 1.6);

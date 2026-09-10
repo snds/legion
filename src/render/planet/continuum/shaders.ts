@@ -87,6 +87,7 @@ export const continuumSurfaceFrag = /* glsl */ `
   #include <logdepthbuf_pars_fragment>
   uniform vec3 uSunDir;
   uniform vec3 uSunDirObj;
+  uniform vec3 uViewAxis;
   uniform float uDebugChunks;
   uniform float uFade;
   uniform sampler2D uAlbedoMap;
@@ -102,6 +103,20 @@ export const continuumSurfaceFrag = /* glsl */ `
   uniform float uAtmosDensity;
   uniform float uPlanetRadius;
   uniform float uVoxelBlend;
+  // Airless bodies (moons — P2-17): knife-edge terminator instead of the
+  // soft atmospheric wrap below, mirroring legacy planet-surface.ts's
+  // uTerminatorSoftness=0.15 convention (day side flat-lit, narrow cutoff)
+  // vs. the continuous Lambertian falloff atmospheric worlds get. Static
+  // per body (set once at ChunkPool construction, never toggles live).
+  uniform float uAirless;
+  // Planetshine (moons — P2-17): a single secondary bounce light from a
+  // nearby lit parent body, mirrors legacy planet-surface.ts's
+  // uBounceDir/uBounceColor/uBounceStrength. uBounceStrength is 0 for
+  // ordinary planets (no visible effect) — set per-frame by whichever
+  // driver knows about sibling bodies (ContinuumGlobe.setPlanetshine()).
+  uniform vec3 uBounceDir;
+  uniform vec3 uBounceColor;
+  uniform float uBounceStrength;
   varying vec3 vNormal;
   varying vec3 vColor;
   varying float vSea;
@@ -171,10 +186,45 @@ export const continuumSurfaceFrag = /* glsl */ `
     float landSoft = (1.0 - seaW) * smoothstep(Rgate * 0.28, Rgate * 0.95, viewDist) * 0.78;
     vec3 N = normalize(mix(Nmesh, Nrad, max(seaW, landSoft)));
     float ndl = max(dot(N, L), 0.0);
-    // C1 — sun-dominant wrap. Soft terminator; night gets atmos fill below (not chalk).
-    float wrap = ndl * 0.94 + 0.028;
-    float term = smoothstep(-0.06, 0.14, dot(N, L));
-    wrap *= mix(0.12, 1.0, term);
+    float wrap;
+    float term;
+    if (uAirless > 0.5) {
+      // P2-17 — airless knife-edge: no atmospheric scattering to soften the
+      // boundary, so the day hemisphere reads FLAT (no continuous cosine
+      // falloff — real photos of the Moon/Mercury show almost no visible
+      // shading gradient until right at the terminator) with a narrow,
+      // hard cutoff into true-black night. This deliberately does NOT
+      // multiply by 'ndl' the way the atmospheric wrap below does.
+      //
+      // P2-18 fix — gate on Nrad (the geometric/radial sphere normal, NOT
+      // the close-range terrain-mesh N above), not dot(N, L). At SURFACE-tier
+      // camera distance N ~= Nmesh (landSoft's distance blend hasn't kicked
+      // in yet — see its own comment above), i.e. the raw per-vertex terrain
+      // normal, full of crater/canyon-relief noise. Feeding that noise
+      // through this window's ultra-narrow ±0.02..0.04 span (real-boot P2-18
+      // verification, not assumed) snapped the gate between full-day and
+      // full-night wherever local terrain slope happened to tip the dot
+      // product either side of the true illumination boundary — a WIDE,
+      // jagged black/white "dazzle" band instead of one sharp line. Nrad is
+      // distance-independent and displacement-free (vNrad is built from the
+      // pre-displacement position, see continuumSurfaceVert), so the true
+      // (sphere-scale) terminator location itself is always clean, sharp,
+      // and un-flickering, regardless of camera range or terrain relief —
+      // "sharp at the illumination boundary itself" without re-triggering
+      // on every crater-scale normal wobble. Per-fragment terrain relief
+      // (crater/canyon detail) still reads within each hemisphere via the
+      // sideLight/micro/meso albedo terms above (driven by ndl, computed
+      // from the terrain-following N, untouched by this change) — only the
+      // binary day/night GATE itself moves to the smooth normal.
+      float dayFactor = smoothstep(-0.02, 0.04, dot(Nrad, L));
+      wrap = dayFactor;
+      term = dayFactor;
+    } else {
+      // C1 — sun-dominant wrap. Soft terminator; night gets atmos fill below (not chalk).
+      wrap = ndl * 0.94 + 0.028;
+      term = smoothstep(-0.06, 0.14, dot(N, L));
+      wrap *= mix(0.12, 1.0, term);
+    }
 
     float micro = fbm(vObj * 64.0);
     float meso = fbm(vObj * 18.0 + 3.1);
@@ -218,6 +268,18 @@ export const continuumSurfaceFrag = /* glsl */ `
 
     // Blend ocean vs land lighting with AA weight (C5).
     vec3 V = normalize(cameraPosition - vWorldPos);
+    // P2-1b — a near-aligned pose (sun ~ ±viewAxis: full-day disc, or
+    // full-night disc incl. the continuum-0.8-night regression lock below)
+    // has no real terminator for the viewer to protect, so 'lateral' is ~0
+    // and the atmos-glow terms below are unchanged. A LATERAL/partial-phase
+    // pose (sun ⟂ viewAxis, both day and night substantially visible at
+    // once — e.g. real-boot ~108 deg phase) is where those terms' flat
+    // per-fragment magnitude washes out the terminator/ocean-land contrast;
+    // 'glowScale' tapers them there. Same sunViewAlign/lateral pattern as the
+    // atmosphere shell's day/night-pose gate (I1).
+    float sunViewAlign = abs(dot(L, normalize(uViewAxis)));
+    float lateral = 1.0 - smoothstep(0.55, 0.92, sunViewAlign);
+    float glowScale = 1.0 - lateral;
     vec3 oceanLit = lit;
     vec3 landLit = lit;
     {
@@ -235,15 +297,29 @@ export const continuumSurfaceFrag = /* glsl */ `
       landLit += albedo * rim * 0.04 * term;
       float night = smoothstep(0.08, -0.04, ndl);
       if (night > 0.01 && uNightLights > 0.01) {
-        float metro = smoothstep(0.58, 0.78, fbm(vObj * 11.0));
-        float towns = smoothstep(0.70, 0.88, fbm(vObj * 42.0 + 5.3));
-        float lights = metro * 0.75 + towns * 0.4;
+        // P2-7 residual-gap tuning (accepted per P2-1b's named contributor):
+        // narrower coverage (tighter smoothstep edges) and a lower ceiling so
+        // this stylistic city-light term contributes less to the sampled
+        // "darkest on-disc region" metric on the true night side, without
+        // removing the feature (real Earth-at-night city glow).
+        float metro = smoothstep(0.62, 0.80, fbm(vObj * 11.0));
+        float towns = smoothstep(0.74, 0.90, fbm(vObj * 42.0 + 5.3));
+        float lights = metro * 0.65 + towns * 0.32;
         lights *= (1.0 - snowish);
         // Night city HDR tick for bloom (still gated to night side only).
-        landLit += vec3(1.0, 0.78, 0.48) * night * lights * uNightLights * 0.85;
+        landLit += vec3(1.0, 0.78, 0.48) * night * lights * uNightLights * 0.55;
       }
     }
     lit = mix(landLit, oceanLit, seaW);
+
+    // Planetshine (moons — P2-17): diffuse fill from a nearby lit parent
+    // body, Lambert on uBounceDir. Additive and dim (uBounceStrength is 0
+    // for ordinary planets), so it only reads where the sun doesn't — the
+    // night side facing the parent — matching legacy planet-surface.ts.
+    if (uBounceStrength > 0.0001) {
+      float bounceNdotL = max(dot(N, normalize(uBounceDir)), 0.0);
+      lit += uBounceColor * (uBounceStrength * bounceNdotL);
+    }
 
     // Night-side atmospheric scatter / bounce — dark side readable without chalk wash.
     // Skylight (Rayleigh-tint) + faint anti-sun bounce through the air column.
@@ -257,7 +333,9 @@ export const continuumSurfaceFrag = /* glsl */ `
       vec3 bounce = albedo * vec3(0.28, 0.38, 0.55) * antiSun * (0.04 + 0.03 * dens);
       // Soft penumbra lift so the terminator isn't a hard cut to black.
       float penumbra = (1.0 - smoothstep(-0.12, 0.2, dot(N, L))) * 0.025 * dens;
-      lit += (skyFill * (0.45 + 0.55 * albedo) + bounce + albedo * penumbra) * nightAmt;
+      // P2-1b — tapered by 'glowScale' at a lateral/partial-phase pose (see
+      // declaration above) so it can't wash out a real, visible terminator.
+      lit += (skyFill * (0.45 + 0.55 * albedo) + bounce + albedo * penumbra) * nightAmt * glowScale;
     }
 
     // C3 — aerial perspective: horizon softening when close. Never wash the
@@ -269,7 +347,11 @@ export const continuumSurfaceFrag = /* glsl */ `
       float nearAir = 1.0 - smoothstep(R * 0.55, R * 2.4, viewDist);
       float optical = uAtmosDensity * 0.55 * graze * nearAir;
       float haze = clamp(1.0 - exp(-optical), 0.0, 0.45);
-      vec3 air = uAtmosColor * (0.22 + 0.78 * wrap);
+      // P2-1b — the 0.22 floor is an unconditional (day/night-independent)
+      // brightening; taper it at a lateral/partial-phase pose for the same
+      // reason as the night-scatter gate above. The 0.78*wrap term is
+      // already day/night-aware (wrap ~0 at night) and left untouched.
+      vec3 air = uAtmosColor * (0.22 * glowScale + 0.78 * wrap);
       lit = mix(lit, air, haze);
     }
 

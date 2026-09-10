@@ -154,6 +154,37 @@ export function texResUpgradeForLevel(level: number, viewAu: number, _settled: b
   return texResCeilingForAu(level, viewAu);
 }
 
+/**
+ * Predicted CPU cost (ms) of an albedo bake at this resolution — quadratic,
+ * calibrated against the SAME measured benchmark points already used to size
+ * texResNextUpgrade's steps above (16²≈20ms, 48²≈55ms, 80²≈143ms, 96²≈204ms;
+ * also consistent with CHUNK_TEX_RES's own "384²≈3s/chunk" comment). P2-0
+ * (cold-start root cause): the chunk pool's per-frame budget used to be a
+ * build-COUNT cap checked only AFTER a build finished, so a single polish
+ * upgrade costing far more than the ~5ms soft budget still ran to completion
+ * once started. This lets the pool PREDICT a candidate's cost before
+ * starting it, so it can cap how many predictably-expensive builds run in
+ * one tick() instead of only discovering the overrun after the fact.
+ */
+export function estimatedBuildCostMs(texRes: number): number {
+  return 0.022 * texRes * texRes;
+}
+
+/**
+ * Inverse of estimatedBuildCostMs — the largest ABSOLUTE texRes whose
+ * predicted cost still fits inside `budgetMs`. Floored at 16 (the pool's own
+ * cheapest tier) so a razor-thin budget still allows some forward progress
+ * rather than stalling forever. NOTE: cost is quadratic in the resolution
+ * actually baked, not in the size of the step taken to reach it — a "small"
+ * step from an already-high current texRes (e.g. 256→288) still pays the
+ * FULL cost of a 288-px bake, not a cheap incremental one. Callers doing a
+ * bounded "cosmetic climb" past an already-acceptable floor should clamp the
+ * ABSOLUTE target to this, not just take a fixed-size step.
+ */
+export function maxTexResForBudget(budgetMs: number): number {
+  return Math.max(16, Math.floor(Math.sqrt(Math.max(0, budgetMs) / 0.022)));
+}
+
 /** Stable cache / mesh key for a quadtree node under a generator fingerprint. */
 export function chunkKey(node: QuadNode, fingerprint: string): string {
   return `${nodeId(node)}|${fingerprint}`;
