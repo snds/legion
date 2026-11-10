@@ -1,6 +1,6 @@
 # vork — offline reference renderer
 
-Added 2026-11-10. Tool: [vork](https://voyager.so/vork) by Voyager, pinned at **0.3.0**.
+Added 2026-11-10. Tool: [vork](https://voyager.so/vork) by Voyager, pinned at **0.4.0** (released the same day; this doc was first written against 0.3.0).
 
 ## What it is, and what it is for here
 
@@ -24,24 +24,26 @@ reference/vork/<id>/scene.json  →  vork  →  refs/vork/<id>/<profile>.png
 
 ## Where it helps, by subject
 
-| Subject | Fit in 0.3 | Why |
+| Subject | Fit in 0.4 | Why |
 |---|---|---|
 | **Black hole** | Strong | Light paths can be bent by a custom program. vork's own example integrates Schwarzschild geodesics, so lensing, the photon ring, and the disk's far side are computed, not painted. Legion's `src/render/blackhole/` can be checked against it |
 | **Units and structures** (`hard-surface`, `hw-hulls`, `scale-silhouette`, `legion-probe`) | Strong | Path-traced hulls, real lens and depth of field, glTF import. This is the layer NORTHSTAR lists as absent |
 | **Airless bodies, rings, eclipses** | Strong | Hard shadows, ring shadow on the globe, globe shadow on the rings, terminator falloff |
 | **Photography layer** | Strong | Camera follows a physical model: focal length, sensor size, aperture. Display is AgX |
-| **Star** | Partial | The photosphere as an emitting surface works. The corona is a volume, so it does not |
-| **Planet with atmosphere, clouds** | Not yet | No volumes in 0.3. Surface and ocean only |
-| **Nebulae, dust, galaxy band** | Not yet | These are volumes. vork says fog returns in 0.4; revisit then |
+| **Star** | Partial | The photosphere as an emitting surface works. The corona needs density that varies, which 0.4 fog cannot do |
+| **Planet with atmosphere** | Crude only | 0.4 adds fog of one uniform density inside a closed convex shape of at most 32 triangles. That gives limb haze and a lit terminator, with no falloff by height and no clouds |
+| **Nebulae, dust, galaxy band** | Not yet | 0.4 fog is uniform. Nebulae need density from noise or a grid, which vork still refuses. Use Blender Cycles for these |
 
-So the first targets are the black hole and the units layer. Nebulae and atmospheres stay on the
-existing references until vork supports volumes.
+So the first targets are the black hole and the units layer. Nebulae, clouds, and real
+atmospheres stay on the existing references until vork supports varying density. Fog also
+cannot be combined with bent light, so a black hole scene cannot have it.
 
 ## Limits that matter
 
 - **Hardware.** Rendering needs Apple Silicon (Metal, macOS 26) or a recent NVIDIA card with
-  hardware ray tracing. There is no CPU mode. Cloud agent sessions have no GPU, so they can
-  write and check scenes but cannot render them.
+  hardware ray tracing. From 0.4, Linux can also render on the CPU through Mesa's software
+  Vulkan driver, which is how cloud agent sessions render. It is slow and has to be asked for
+  with `--cpu`. There is no CPU mode on macOS.
 - **A reference, not a northstar.** A vork plate proves light transport: where shadows fall, how
   light bends, how a lens stages scale. It does not set art direction. A plate becomes a
   NORTHSTAR row only when Sean rates it.
@@ -64,12 +66,16 @@ existing references until vork supports volumes.
 | `npm run ref:vork` | Renders every scene to `refs/vork/<id>/final.png` | Yes |
 | `npm run ref:vork -- ringed-giant --profile std/previs` | One scene, fast blocking pass | Yes |
 | `npm run ref:vork:blackhole` | Renders vork's own black hole example to `refs/vork/upstream-black-hole/path.png` | Yes |
+| `npm run ref:vork -- --cpu` | Any render above, on the CPU. Linux only | No |
 
 Options on `render` and `upstream`: `--profile std/previs|std/draft|std/final|std/path`,
-`--res 1920x1080`, `--at <seconds>`, `--samples <n>`.
+`--res 1920x1080`, `--at <seconds>`, `--samples <n>`, `--cpu`.
 
 `check` validates scene structure and built-in materials. Custom shader code and camera inputs
-are only validated during a real render.
+are only validated during a real render, so `npm run ref:vork:check -- --cpu` is the full check.
+
+CPU rendering on Linux needs the driver once: `apt-get install -y mesa-vulkan-drivers`. The
+first render compiles shaders and can take a minute or more. Later renders reuse them.
 
 `ref:vork:blackhole` clones vork at the pinned tag into `scripts/.cache/` (git-ignored) and runs
 the example's own `generate.py` to build its disk geometry before rendering.
@@ -91,13 +97,15 @@ Scenes for space subjects use a scaled unit and say so in `ref.json`.
 
 | ID | Serves | Status |
 |---|---|---|
-| `ringed-giant` | System rung; `scale-silhouette` (long lens), shadow geometry for giants and rings | Loads cleanly. **Not yet rendered**: exposure and framing are untuned first guesses. 1 unit = 1,000 km |
+| `ringed-giant` | System rung; `scale-silhouette` (long lens), shadow geometry for giants and rings | **Rendered 2026-11-10** on the CPU in a cloud session: `std/previs` 640×360 in 8 s, `std/final` 1280×720 in 2 min 16 s (4 cores, after a first run of about a minute to compile shaders). Exposure was set from the first render. The ring shadow edges are still grainy at the default sample count. Framing and materials are unreviewed. 1 unit = 1,000 km |
 | `upstream-black-hole` | Black hole lensing and disk, as a physics check on `src/render/blackhole/` | vork's example, run in place. **Not yet rendered from this repo** |
 
 ## Next
 
-- Render both on a GPU machine and tune `ringed-giant`.
+- Render `ringed-giant` at `std/final` on a GPU machine and review its framing.
+- Run `ref:vork:blackhole` once; it has not been run end to end.
 - Write a Legion-owned black hole scene at the `?demo=blackhole` pose, so `reference_match` runs
   at the same camera.
 - Write a `legion-probe` scene once the probe model exists: the vessel, lit, at three distances.
-- Re-evaluate nebulae and atmospheres when vork ships volumes.
+- Try a uniform-fog shell around `ringed-giant` as a crude limb-haze check.
+- Re-evaluate nebulae and atmospheres when vork supports varying density.

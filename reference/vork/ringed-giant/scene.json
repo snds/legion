@@ -9,5 +9,5 @@
     {"type":"light","name":"space","shape":"environment","energy":0,"color":[0,0,0]},
     {"type":"camera","name":"long-lens","translation":[-300,320,1450],"target":[0,0,0],"material":{"program":"std/camera","inputs":{"lens":135,"clip_start":10,"clip_end":10000}}}
   ],
-  "render":{"resolution":[1920,1080],"duration":1,"background":[0,0,0],"display":{"program":"std/agx","inputs":{"exposure":3}}}
+  "render":{"resolution":[1920,1080],"duration":1,"background":[0,0,0],"display":{"program":"std/agx","inputs":{"exposure":0.5}}}
 }

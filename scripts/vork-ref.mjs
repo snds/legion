@@ -10,12 +10,15 @@
  *   node scripts/vork-ref.mjs check  [id...]            # no GPU needed
  *   node scripts/vork-ref.mjs render [id...] [--profile std/previs] [--res 1920x1080] [--at 0]
  *   node scripts/vork-ref.mjs upstream black-hole [--res 640x360] [--at 6]
+ *   Add --cpu to render on the CPU (Linux only, slow; see below).
  *
  * Scenes:  reference/vork/<id>/scene.json   (tracked)
  * Output:  refs/vork/<id>/<profile>.png     (git-ignored, like refs/continuum)
  *
  * Rendering needs Apple Silicon (Metal, macOS 26) or a recent NVIDIA card with
- * hardware ray tracing. `check` only loads the scene, so it runs anywhere.
+ * hardware ray tracing. On Linux without one, `--cpu` uses Mesa's software
+ * Vulkan driver (`apt-get install mesa-vulkan-drivers`): slow, but it works in
+ * a cloud session. `check` only loads the scene, so it runs anywhere.
  * Full notes: docs/vork-reference-renderer.md
  */
 
@@ -32,7 +35,7 @@ const CACHE = join(ROOT, 'scripts/.cache/vork-upstream');
 
 // Pinned: the vork Preview License covers one version at a time, and scene
 // fields change between releases (see `vork help upgrade`). Bump on purpose.
-const VORK_VERSION = '0.3.0';
+const VORK_VERSION = '0.4.0';
 const UPSTREAM_REPO = 'https://github.com/voyager-so/vork';
 
 // vork exit codes (`vork help errors`).
@@ -42,9 +45,11 @@ const EXIT_DEVICE = 4;
 const [command = 'list', ...rest] = process.argv.slice(2);
 const ids = [];
 const opts = {};
+const SWITCHES = new Set(['cpu']); // options that take no value
 for (let i = 0; i < rest.length; i++) {
-  if (rest[i].startsWith('--')) opts[rest[i].slice(2)] = rest[++i];
-  else ids.push(rest[i]);
+  if (!rest[i].startsWith('--')) ids.push(rest[i]);
+  else if (SWITCHES.has(rest[i].slice(2))) opts[rest[i].slice(2)] = true;
+  else opts[rest[i].slice(2)] = rest[++i];
 }
 
 /** Use a `vork` already on PATH (or $VORK); otherwise fetch the pinned npm build. */
@@ -67,6 +72,8 @@ function vork(args, { cwd = ROOT, quiet = false } = {}) {
     cwd,
     encoding: 'utf8',
     stdio: quiet ? 'pipe' : 'inherit',
+    // vork never picks the CPU by itself; it has to be asked for.
+    env: opts.cpu ? { ...process.env, VORK_GPU: 'cpu' } : process.env,
   });
 }
 
@@ -109,9 +116,10 @@ function profileSlug(profile) {
 
 function noGpuHelp() {
   console.error(
-    '\nThis machine has no GPU vork can use. Rendering needs Apple Silicon (macOS 26) or a\n' +
-      'recent NVIDIA card with hardware ray tracing. Scenes can still be written and checked\n' +
-      'here: `npm run ref:vork:check`. See docs/vork-reference-renderer.md.',
+    '\nvork found no GPU it can use. Rendering needs Apple Silicon (macOS 26) or a recent\n' +
+      'NVIDIA card with hardware ray tracing. On Linux you can render on the CPU instead:\n' +
+      'install `mesa-vulkan-drivers`, then add `--cpu`. Scenes can always be checked with\n' +
+      '`npm run ref:vork:check`. See docs/vork-reference-renderer.md.',
   );
 }
 
@@ -126,7 +134,7 @@ function list() {
  * Load each scene without needing a GPU. vork reads and validates the scene before
  * it opens the device, so "invalid scene" (3) is a real failure and "device" (4)
  * means the scene loaded. Custom shader code and camera/program inputs are only
- * validated during a real render.
+ * validated during a real render, so pass --cpu on Linux for a full check.
  */
 function check() {
   const tmp = mkdtempSync(join(tmpdir(), 'vork-check-'));
