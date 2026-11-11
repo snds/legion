@@ -12,8 +12,10 @@ copies are local to a machine; the reviewed list is also kept in Sean's workspac
 ## How to use
 
 1. At `shape` time, name the **layer** the change belongs to, then pick the rows that apply.
-2. At `match` time, align stills or video frames and run `render-qa-toolkit` `reference_match` +
-   native grid assess.
+2. At `match` time, align stills or video frames and assess the native grid. The match verdict is
+   `vqa prove` (Workspace `03-skills/visual-prove-engine/`) with a cuespec, the file that names
+   the regions to measure, whose thresholds were scouted from the reference. `render-qa-toolkit`
+   `reference_match` gives distances and diff images as supporting evidence. It gives no verdict.
 3. Motion-sensitive features must cite a **video** northstar (or a recorded path judged against
    still northstars frame-by-frame) — not a single screenshot.
 4. For a Spirit row, the test is the "Proves" column: can each thing it names be pointed to in
@@ -128,7 +130,7 @@ to fill: 0 not a guide, 1 useful, 2 strong, 3 the lead for its context.
 
 | ID | Reference | Contract | Proves |
 |---|---|---|---|
-| `se-planet` | SpaceEngine — planet approach / surface flythrough. Durable refs: `refs/continuum/stills/NORTHSTAR/space engine/`, motion `refs/continuum/motion/NORTHSTAR/space engine/source.mp4` (review copies under `refs/continuum/qa/northstar-review/se/` + `motion-se/`). Same-pose Earth day/coast plates for `reference_match` still needed under `refs/northstars/se-planet/`. | Literal (within WebGPU) | Atmosphere limb, terrain scale continuity, approach without LOD pop chaos |
+| `se-planet` | SpaceEngine — planet approach / surface flythrough. Durable refs: `refs/continuum/stills/NORTHSTAR/space engine/`, motion `refs/continuum/motion/NORTHSTAR/space engine/source.mp4` (review copies under `refs/continuum/qa/northstar-review/se/` + `motion-se/`). Same-pose Earth day/coast plates for the match verdict (`vqa prove`, with a cuespec scouted from them) still needed under `refs/northstars/se-planet/`. | Literal (within WebGPU) | Atmosphere limb, terrain scale continuity, approach without LOD pop chaos |
 | `se-star` | SpaceEngine — star close views | Spirit / Literal mix | Photosphere energy, corona restraint, exposure |
 | `aaa-atmos` | Modern AAA atmospheric demos (e.g. Hillaire-class real-time skies) | Spirit | Multiple scattering sky, horizon energy |
 | `esa-sky` (new) | **Motion and stills.** ESA videos in `$LEGION_REF/galaxy videos/` and the Gaia fly-through at the folder root; stills `frame-017`, `frame-018`, `frame-021`, `frame-022` | Fidelity required at each rung; see [S-1](#s-1) | Star colour varies and size follows brightness. Density changes across the frame, so the sky has structure. One object on true black, with emptiness doing the work of scale. In motion: stars near the camera pass as points, far structure holds still, and nothing pops or swims |
@@ -156,7 +158,7 @@ Do **not** mark signed until:
 (1) cloud lightning is storm-gated and re-captured motion shows no whole-deck flash,
 (2) stills are native 1920×1080 (or documented backing-store size) with scorecard ≥2 on all P-LOOK axes,
 (3) budget: `lab-continuum-0.8au` worst ≤16.67 ms **and** `lab-continuum-0.3au` addressed or explicitly waived,
-(4) for `se-planet` `reference_match`: same-pose SE Earth day / coast / terminator plates exist and Continuum stills clear cloud-seam + hard-white-limb + night≠day gates.
+(4) for the `se-planet` match verdict (`vqa prove` with a cuespec scouted from the plates; `reference_match` distances are supporting evidence only): same-pose SE Earth day / coast / terminator plates exist and Continuum stills clear cloud-seam + hard-white-limb + night≠day gates.
 See [`docs/render-acceptance-harness.md`](docs/render-acceptance-harness.md#continuum-look-verification-pack) and [`docs/superpowers/specs/2026-08-06-continuum-fidelity-qa-notes.md`](docs/superpowers/specs/2026-08-06-continuum-fidelity-qa-notes.md).
 
 ## Match protocol
