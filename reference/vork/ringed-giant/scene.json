@@ -1,0 +1,13 @@
+{
+  "$schema": "https://voyager.so/vork/schema/scene.schema.json",
+  "version": 2,
+  "nodes": [
+    {"type":"mesh","name":"giant","scale":[1,0.9,1],"geometry":{"std":"sphere","radius":60,"segments":192,"rings":96},"materials":[{"inputs":{"base_color":[0.62,0.52,0.36],"specular_weight":0,"specular_roughness":1}}]},
+    {"type":"mesh","name":"rings","geometry":{"std":"revolve","profile":[[74,0],[92,0],[117,0],[122,0],[137,0]],"segments":256},"materials":[{"inputs":{"base_color":[0.55,0.5,0.42],"specular_weight":0,"specular_roughness":1,"geometry_opacity":0.75,"geometry_thin_walled":true}}]},
+    {"type":"mesh","name":"moon","translation":[-170,0,250],"geometry":{"std":"sphere","radius":2.6,"segments":64,"rings":32},"materials":[{"inputs":{"base_color":[0.4,0.38,0.35],"specular_weight":0,"specular_roughness":1}}]},
+    {"type":"light","name":"sun","shape":"sun","translation":[2000,500,1200],"target":[0,0,0],"energy":15,"color":[1,0.96,0.9]},
+    {"type":"light","name":"space","shape":"environment","energy":0,"color":[0,0,0]},
+    {"type":"camera","name":"long-lens","translation":[-300,320,1450],"target":[0,0,0],"material":{"program":"std/camera","inputs":{"lens":135,"clip_start":10,"clip_end":10000}}}
+  ],
+  "render":{"resolution":[1920,1080],"duration":1,"background":[0,0,0],"display":{"program":"std/agx","inputs":{"exposure":0.5}}}
+}

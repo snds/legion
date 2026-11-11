@@ -9,6 +9,7 @@ Legion is the **test platform** for Workspace realtime photoreal rigor. Skills l
 | [`RENDER.md`](../RENDER.md) | Look doctrine + official interaction paths |
 | [`BUDGET.md`](../BUDGET.md) | 60fps floor + `?perfcapture` poses |
 | [`NORTHSTAR.md`](../NORTHSTAR.md) | Movie / SpaceEngine / signed baselines |
+| [`vork-reference-renderer.md`](vork-reference-renderer.md) | Offline ray-traced reference plates for `reference_match` (`npm run ref:vork`) |
 
 ## Workspace load chain
 

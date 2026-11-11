@@ -15,7 +15,10 @@
     "accept:continuum:motion": "PLAYWRIGHT_BROWSERS_PATH=0 node scripts/continuum-accept.mjs --only motion",
     "accept:continuum:qa": "PLAYWRIGHT_BROWSERS_PATH=0 node scripts/continuum-accept.mjs --only stills,perf,motion",
     "accept:demos": "PLAYWRIGHT_BROWSERS_PATH=0 node scripts/legion-accept.mjs --demo star,blackhole,nebula,galaxy --only stills --skip-qa",
-    "accept:archetypes": "PLAYWRIGHT_BROWSERS_PATH=0 node scripts/continuum-accept.mjs --type all --only stills --skip-qa"
+    "accept:archetypes": "PLAYWRIGHT_BROWSERS_PATH=0 node scripts/continuum-accept.mjs --type all --only stills --skip-qa",
+    "ref:vork": "node scripts/vork-ref.mjs render",
+    "ref:vork:check": "node scripts/vork-ref.mjs check",
+    "ref:vork:blackhole": "node scripts/vork-ref.mjs upstream black-hole"
   },
   "dependencies": {
     "bitecs": "^0.3.40",

@@ -54,6 +54,15 @@ Record visually lossless (or lossless) at native canvas resolution. Review **fra
 
 This protocol records evidence only. It does not establish ship readiness or change the default engine.
 
+## Offline reference renders
+
+`vork` (pinned 0.4.0) renders ray-traced reference plates from `reference/vork/<id>/scene.json` into
+`refs/vork/`. It is a reference source for `match`, never part of the shipped frame. Strong for
+the black hole, hard-surface units, airless bodies, rings, and lens staging. Its fog is uniform
+only, so it is not for nebulae, clouds, or coronae. Needs Apple Silicon or NVIDIA ray-tracing
+hardware, or `--cpu` on Linux. Run `npm run ref:vork:check` (no GPU) and `npm run ref:vork`. See
+[`docs/vork-reference-renderer.md`](docs/vork-reference-renderer.md).
+
 ## Debug views expected
 
 When materials/lighting are in scope: albedo, normals, roughness/metalness, emissive, and final beauty — labeled captures.
