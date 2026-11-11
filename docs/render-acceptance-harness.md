@@ -36,6 +36,11 @@ python qa-suite.py --config configs/legion.yaml --output ./_qa-out \
   --only frame_budget,pass_attribution,native_grid,histogram_hdr,reference_match,temporal_delta
 ```
 
+`reference_match` reports distances (SSIM, RGB MAD, Lab MAD, diff-region count) and writes diff
+images. It prints "Distances only, no verdict" and never moves the exit code on a distance. Use it
+as supporting evidence. The match verdict is `vqa prove` (Workspace
+`03-skills/visual-prove-engine/`) with a cuespec whose thresholds were scouted from the reference.
+
 ## Full acceptance pass (per change)
 
 1. **Budget** — open official pose URL from `BUDGET.md`, paste `window.__perfCapture` → `frame_budget` / `pass_attribution`  
@@ -91,7 +96,9 @@ Writes `refs/continuum/stills/` (and motion/perf) plus `refs/demos/<id>/stills/`
 Star / blackhole / nebula **labs** are still `available: false` in `src/ui/labs.ts`. Until they
 ship, `--lab star|blackhole|nebula` (or `--demo …`) captures the matching review demos into
 `refs/demos/<id>/stills/`. Human scorecard vs northstars still required for sign-off.
-Optional SE plates: drop under `refs/northstars/se-planet/` for a later `reference_match` pass.
+Optional SE plates: drop under `refs/northstars/se-planet/` for a later match pass. `vqa prove`
+with a cuespec scouted from the plates gives the verdict; `reference_match` adds distances and
+diff images.
 
 ### Author capture commands (manual fallback)
 
@@ -152,5 +159,6 @@ Do not fabricate perf JSON or mark the budget gate signed until native Chrome ca
 | Date | Result |
 |---|---|
 | 2026-08-03 | `render-qa-toolkit` suite green on synthetic fixtures (frame_budget under 14 ms, native_grid, histogram, reference_match, temporal_delta) |
+| 2026-11-11 | Note on the row above: read `reference_match` "green" as "the check ran", not "the frame matched". Its thresholds were retired after they passed all eight planted defects on the prove engine's calibration scene ([snds/workspace#105](https://github.com/snds/workspace/pull/105)). It now reports distances and diff images only. The match verdict is `vqa prove` with a cuespec. |
 
 Authoritative visual/perf claims still require native Chrome captures on declared hardware — not IDE-browser alone.

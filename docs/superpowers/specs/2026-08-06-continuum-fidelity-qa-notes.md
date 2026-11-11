@@ -131,6 +131,7 @@ Prior list was: night → cloud seam → close tex → Rayleigh → thin clouds+
 ### Signing status
 
 - `se-planet`: **cannot sign** `reference_match` yet. Missing same-pose SE Earth day / coast / terminator plates under `refs/northstars/se-planet/` (or documented crops from NORTHSTAR stills with pose alignment). Current SE plates are strong for limb/eclipse language only.
+  - _Note, 2026-11-11: `reference_match` no longer signs anything, here or further down these notes. It reports distances and diff images only. The match verdict is `vqa prove` with a cuespec scouted from the reference ([snds/workspace#105](https://github.com/snds/workspace/pull/105)). The missing-plates blocker still stands._
 - `legion-continuum-ideal` / `legion-fly-approach`: remain **UNSIGNED** (night fail, cloud seam, soft 0.3 AU, HUD leaks, prior cloud-flash hold).
 - SC assets are **spirit / technique** refs for Continuum orbit look; they do not replace `se-planet` Literal contract.
 

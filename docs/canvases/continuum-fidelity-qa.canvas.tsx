@@ -185,6 +185,11 @@ export default function ContinuumFidelityQa() {
 
       <Divider />
       <H2>Signing / reference_match</H2>
+      <Text tone="secondary">
+        Note, 2026-11-11: reference_match no longer signs anything. It reports distances and diff images only.
+        The match verdict is vqa prove with a cuespec scouted from the reference (snds/workspace#105). The
+        callouts below are kept as written on 2026-08-06.
+      </Text>
       <Callout tone="danger" title="Cannot sign yet (F10: still NOT signed, per task brief)">
         se-planet remains Literal-within-WebGPU but unsigned for reference_match: still need same-pose SE Earth
         day / coast / terminator under refs/northstars/se-planet/. Current SE plates prove limb/eclipse language
