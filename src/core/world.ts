@@ -131,6 +131,17 @@ export interface PlanetConfig {
   ringTexturePath?: string;
   axialTilt?: number;    // degrees
   dayLength?: number;    // in Earth days
+  /**
+   * Render pipeline for this body's mesh (P2-1 engine consolidation). Routes
+   * through ContinuumGlobe (system-loader.ts), generically for ANY catalogue
+   * star's planet list — this field is the ONLY thing that decides the
+   * routing, so the integration point itself never special-cases a system id
+   * or body name. Required: the legacy `objects.ts` createPlanetMesh fallback
+   * for an omitted/other value was deleted once every catalogue planet was
+   * verified routed to Continuum (P2-5) — system-loader.ts now throws if a
+   * planet doesn't carry `'continuum'` here, so the type requires it too.
+   */
+  renderEngine: 'continuum';
 }
 
 export function createPlanetEntity(cfg: PlanetConfig): number {
@@ -185,6 +196,17 @@ export interface MoonConfig {
   dayLength?: number;
   tidalLock?: boolean;
   texturePath?: string;
+  /**
+   * Render pipeline for this body's mesh (P2-18 moon-routing, mirrors
+   * PlanetConfig.renderEngine — see its doc comment). Routes through
+   * ContinuumGlobe's isMoon mode (system-loader.ts), generically for ANY
+   * catalogue moon, no per-body name special-casing. Required: the legacy
+   * `objects.ts` createMoonMesh fallback for an omitted/other value was
+   * deleted once every catalogue moon was verified routed to Continuum
+   * (P2-5) — system-loader.ts now throws if a moon doesn't carry
+   * `'continuum'` here, so the type requires it too.
+   */
+  renderEngine: 'continuum';
 }
 
 export function createMoonEntity(cfg: MoonConfig, parentEid: number): number {

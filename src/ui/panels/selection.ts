@@ -230,8 +230,9 @@ function renderInspector(d: TooltipData): void {
         + R('HABITABLE', String(sys.habitableCount));
       sys.planets.forEach((p, i) => {
         // Letter designations b, c, … in orbit order (archive convention).
+        const moons = p.moonCount ? ' · ' + p.moonCount + (p.moonCount > 1 ? ' MOONS' : ' MOON') : '';
         ph += R(String.fromCharCode(98 + i) + ' · ' + p.kind.toUpperCase(),
-          p.au + ' AU' + (p.inHZ ? ' · HZ' : ''));
+          p.au + ' AU' + (p.inHZ ? ' · HZ' : '') + moons);
       });
       if (sys.planets.length === 0) ph += R('PLANETS', 'NONE DETECTED');
       h += S(sys.real ? 'PLANETS · CONFIRMED' : 'PLANETS · PREDICTED', ph);

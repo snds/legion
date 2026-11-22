@@ -84,11 +84,18 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
   const engParam = new URLSearchParams(location.search).get('engine');
   let engine: LabEngine = engParam === 'continuum' ? 'continuum' : 'legacy';
 
+  // P2-17 — synthetic test-moon opt-in: ?lab=planet&engine=continuum&moon=1.
+  // Builds the selected archetype as a ContinuumGlobe moon ({ isMoon: true })
+  // instead of an ordinary planet, and drives a fixed synthetic planetshine
+  // bounce each frame. Lab-only proof harness — never routes a real
+  // catalogue MoonConfig (that's P2-18's job).
+  const moonParam = new URLSearchParams(location.search).has('moon') && engine === 'continuum';
+
   const typeParam = new URLSearchParams(location.search).get('type');
   let selected: PlanetVisualType =
     typeParam && (PLANET_TYPES as readonly string[]).includes(typeParam)
       ? (typeParam as PlanetVisualType)
-      : 'ocean';
+      : moonParam ? 'rocky' : 'ocean'; // moon test defaults to rocky (crater/canyon terrain, airless preset)
   // View: auto-spin on by default; arrow keys hand-turn the subject either way.
   let autoRotate = true;
   let cloudsVisible = true;
@@ -174,10 +181,18 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
   );
   labSun.add(labSunGlow);
   const build = (type: PlanetVisualType): void => {
-    const planet: GenPlanet = { ...EXEMPLARS[type], seed: seeds[type] };
+    // P2-17 — moon test: same seed/exemplar base, but dwarf-kind (forces
+    // hasAtmosphere:false via presets.ts's retainsAtmosphere(), same path
+    // already proven for Helheim/P2-16) and a much smaller radiusEarth —
+    // real catalogue moons are Luna-to-Ganymede scale, a small fraction of
+    // their parent's radius. LAB_VIEW_R normalization below makes this
+    // display at the same apparent size as every other archetype anyway.
+    const planet: GenPlanet = moonParam
+      ? { ...EXEMPLARS[type], seed: seeds[type], kind: 'dwarf', radiusEarth: 0.27, massEarth: 0.1 }
+      : { ...EXEMPLARS[type], seed: seeds[type] };
     const r = visualRadius(planet);
     const globe: LabBody = engine === 'continuum'
-      ? new ContinuumGlobe(planet, r)
+      ? new ContinuumGlobe(planet, r, moonParam ? { isMoon: true } : undefined)
       : (() => {
         const g = new PlanetGlobe(planet, r);
         g.setBakeAuto(false); // lab owns bake via the Baked toggle / A/B harness
@@ -288,6 +303,15 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
   } catch { /* ignore */ }
   // Auto-bake stays off at every load (ideal / interim may still carry true).
   for (const t of Object.keys(baked) as PlanetVisualType[]) baked[t] = false;
+  // P2-9: explicit ?seed=<n> overrides the SELECTED archetype's seed, applied
+  // LAST (after ideal + any saved interim) so it always wins — this is what
+  // lets the accept harness sample multiple seeds per archetype (one page
+  // load per seed) instead of only ever the one fixed EXEMPLARS seed.
+  const seedParam = new URLSearchParams(location.search).get('seed');
+  if (seedParam !== null) {
+    const n = Number(seedParam);
+    if (Number.isFinite(n)) seeds[selected] = n;
+  }
   seedBaseline(); // after ideal + interim so World-dial offsets match live presets
 
   mountSelected(); // build the initial selected archetype (after saved tuning applied)
@@ -753,6 +777,22 @@ export function createPlanetLab(parent: Object3D): PlanetLabHandle {
       for (const g of globes.values()) {
         if (g instanceof ContinuumGlobe) g.setViewDistanceAu(au);
         g.update(full);
+      }
+      // P2-17 — synthetic planetshine: no real parent body is mounted in
+      // this test (Lab is a single-body gallery), so the "parent" is
+      // simulated analytically as a bounce direction/color/strength. Using
+      // -sunDir guarantees the bounce is visible somewhere on the night
+      // hemisphere regardless of camera azimuth (the entire night side gets
+      // Lambert-falloff fill from the anti-solar point) — deliberately the
+      // most reliable placement for a one-shot visual proof, not a claim
+      // about a specific parent's real position (P2-18 wires that for real
+      // routed moons, using each parent's own live position + albedo color).
+      if (moonParam) {
+        const g = globes.get(selected);
+        if (g instanceof ContinuumGlobe) {
+          const bounceDir: [number, number, number] = [-sunDir.x, -sunDir.y, -sunDir.z];
+          g.setPlanetshine(bounceDir, [1.0, 0.65, 0.25], 0.22);
+        }
       }
     },
     renderOverlays(renderer, camera) {

@@ -67,7 +67,21 @@ export function snowCover(
   if (snowfall <= 0) return 0;
   // Colder threshold than before — only truly cold air whitens.
   const line = 0.02 + 0.28 * clamp01(latitudeIce);
-  const cold = smoothstep(line + 0.10, line - 0.06, temp);
+  // P2-23: this used to be a single reversed-argument call —
+  // `smoothstep(line + 0.10, line - 0.06, temp)` (e0 > e1), relying on a
+  // descending interpolation to make `cold` decrease as `temp` rises. But
+  // this file's own `smoothstep` floors its denominator at
+  // `Math.max(1e-6, e1 - e0)` (guarding only the e0===e1 case), so a
+  // reversed call divides by that tiny POSITIVE epsilon instead of the
+  // intended negative span — inverting the result: `cold` came out ≈1 for
+  // WARM temp and ≈0 for COLD temp, backwards. On any body with a non-zero
+  // snowfall + moderate/high elevation ("alpine" gate) this painted warm,
+  // equatorial highlands white instead of leaving true cold poles/peaks
+  // white (Mars, whose warmth-driven snowfall rose further after P2-20,
+  // is where it first became visually obvious). Fixed by composing the
+  // same descending shape from a FORWARD (e0<e1) smoothstep call, which
+  // this helper always evaluates correctly.
+  const cold = 1 - smoothstep(line - 0.06, line + 0.10, temp);
   const alpine = smoothstep(0.22, 0.55, elev);
   const polar = smoothstep(0.58, 0.88, lat);
   const where = Math.max(alpine, polar);

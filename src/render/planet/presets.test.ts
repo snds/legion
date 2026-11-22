@@ -72,6 +72,45 @@ describe('physical record shifts the look', () => {
     const hot = derivePlanetParams(planet({ type: 'rocky', insolation: 3 }));
     expect(cold.latitudeIce).toBeGreaterThan(hot.latitudeIce);
   });
+
+  it('P2-23: a dry archetype (rocky) gains much less cold-driven ice/snow than a wet one (ocean) at the same insolation', () => {
+    const coldRocky = derivePlanetParams(planet({ type: 'rocky', insolation: 0.1 }));
+    const coldOcean = derivePlanetParams(planet({ type: 'ocean', insolation: 0.1 }));
+    expect(coldRocky.latitudeIce).toBeLessThan(coldOcean.latitudeIce);
+    expect(coldRocky.snowfall).toBeLessThan(coldOcean.snowfall);
+  });
+
+  it('P2-23: the wetness dampening never touches the hot-end (insolation >= Earth) response', () => {
+    // Mercury-shaped case: hot rocky body — latitudeIce/snowfall should match
+    // whatever the undampened (wetness=1) formula alone would already give,
+    // since dampening only ever applies to the t<0.5 (cold) branch.
+    const hotRocky = derivePlanetParams(planet({ type: 'rocky', insolation: 8 }));
+    const hotOcean = derivePlanetParams(planet({ type: 'ocean', insolation: 8 }));
+    // Both archetypes' hot-end latitudeIce clamps to the same floor (0).
+    expect(hotRocky.latitudeIce).toBe(0);
+    expect(hotOcean.latitudeIce).toBe(0);
+  });
+});
+
+describe('P2-23 — per-body ramp override', () => {
+  it('rampOverride replaces the archetype ramp colours when present', () => {
+    const overrideRamp = [
+      { at: 0, color: [0.9, 0.1, 0.1] as const },
+      { at: 1, color: [0.2, 0.05, 0.02] as const },
+    ];
+    const p = derivePlanetParams(planet({ type: 'rocky', rampOverride: overrideRamp }));
+    expect(p.ramp).toHaveLength(2);
+    // Jittered/density-shifted, but still clearly derived from the override
+    // (high red channel), not the default rocky ramp's muted brown.
+    expect(p.ramp[0].color[0]).toBeGreaterThan(0.6);
+  });
+
+  it('omitting rampOverride keeps the default archetype ramp (no regression for every other body)', () => {
+    const withOverride = derivePlanetParams(planet({ type: 'rocky', rampOverride: undefined }));
+    const withoutField = derivePlanetParams(planet({ type: 'rocky' }));
+    expect(withOverride.ramp).toEqual(withoutField.ramp);
+    expect(withoutField.ramp).toHaveLength(PRESETS.rocky.ramp.length);
+  });
 });
 
 describe('C1 - shared ocean preset ships the pre-F4 cover (Continuum thinning lives in lab-ideal.json)', () => {
@@ -85,6 +124,42 @@ describe('C1 - shared ocean preset ships the pre-F4 cover (Continuum thinning li
     // value here so a future Continuum-motivated edit doesn't regress Legacy.
     expect(PRESETS.ocean.cloudCover).toBeCloseTo(0.55, 5);
     expect(PRESETS.ocean.cloudShadow).toBeCloseTo(0.6, 5);
+  });
+});
+
+describe('P2-12 - authored hasAtmosphere overrides the radius/density heuristic', () => {
+  // Mercury/Vulcan stand-ins: rep-radius-1 rocky bodies with a real gravity-
+  // derived massEarth (~0.38-0.4) that clears BOTH the radius floor (0.5 R⊕)
+  // and the density floor (0.28) the heuristic gates on — so without an
+  // explicit override they'd wrongly retain a full atmosphere + clouds.
+  const airlessMassEarth = 0.38;
+
+  it('an explicit false zeroes atmosphere/clouds even though the body clears the heuristic floor', () => {
+    const withoutOverride = planet({ type: 'rocky', radiusEarth: 1, massEarth: airlessMassEarth });
+    // Control: confirm the heuristic alone (no authored fact) really would
+    // have kept an atmosphere here — otherwise this test wouldn't be proving
+    // the override does anything.
+    expect(derivePlanetParams(withoutOverride).hasAtmosphere).toBe(true);
+
+    const airless = planet({ type: 'rocky', radiusEarth: 1, massEarth: airlessMassEarth, hasAtmosphere: false });
+    const p = derivePlanetParams(airless);
+    expect(p.hasAtmosphere).toBe(false);
+    expect(p.atmosphereDensity).toBe(0);
+    expect(p.cloudCover).toBe(0);
+    expect(p.cyclones).toBe(0);
+  });
+
+  it('an explicit true grants an atmosphere even for a dwarf that the heuristic would otherwise zero', () => {
+    const dwarf = planet({ kind: 'dwarf', type: 'rocky', radiusEarth: 0.2, massEarth: 0.01 });
+    expect(derivePlanetParams(dwarf).hasAtmosphere).toBe(false);
+
+    const overridden = planet({ kind: 'dwarf', type: 'rocky', radiusEarth: 0.2, massEarth: 0.01, hasAtmosphere: true });
+    expect(derivePlanetParams(overridden).hasAtmosphere).toBe(true);
+  });
+
+  it('leaves the heuristic untouched for procedurally-generated bodies (no authored fact)', () => {
+    const belowFloor = planet({ type: 'rocky', radiusEarth: 0.3, massEarth: 0.05 });
+    expect(derivePlanetParams(belowFloor).hasAtmosphere).toBe(false);
   });
 });
 

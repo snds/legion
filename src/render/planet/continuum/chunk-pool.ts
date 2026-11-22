@@ -9,6 +9,7 @@ import type { GeneratorBundle } from '../generators';
 import { sampleHeightfieldChunk } from './chunk-sample';
 import { makeChunkOutlineLines, meshHeightfieldChunk } from './chunk-mesher';
 import { isDescendant, prefetchApproachLeaves, selectChunkLeaves, sortLeavesByFacing, uniformLevelForDistance } from './chunk-lod';
+import { earthEquivalentAu } from './body-scale';
 import {
   CHUNK_BUILDS_PER_FRAME, CHUNK_BUILD_MS_BUDGET, LOD_FADE_SEC, LOD_HYSTERESIS,
   LOD_MIN_REBUILD_MS, LOD_SPIN_ANGLE, LOD_STICKY_MOVING, LOD_STICKY_PASSES,
@@ -16,8 +17,27 @@ import {
   APPROACH_COVER_SLA_SEC, APPROACH_FIDELITY_MIN_TEX_AT_03AU,
   nodeFromKey, nodeKey, parentNodeKey,
   texResCoarseForLevel, texResStreamForLevel, texResNextUpgrade, texResCeilingForAu,
-  meshGridForLevel, meshGridStreamForLevel, type ChunkHudStats,
+  meshGridForLevel, meshGridStreamForLevel, estimatedBuildCostMs, maxTexResForBudget,
+  type ChunkHudStats,
 } from './chunk-types';
+
+/**
+ * (P2-3) Structural interface — `BodyChunkCache`
+ * (src/persistence/body-asset-store.ts) satisfies this without ChunkPool
+ * importing anything from `src/persistence/*`, keeping the render layer
+ * decoupled from the storage backend. Only the ALBEDO bake is cached
+ * (see body-asset-worker.ts header for why heights/mesh are not): a hit
+ * lets `buildOne` skip straight to a previously-reached polish
+ * resolution instead of starting at stream/coarse and re-climbing, and
+ * `upgradeOneAlbedo` writes back once a build crosses the persistence
+ * floor (`APPROACH_FIDELITY_MIN_TEX_AT_03AU`, same constant the SLA
+ * fidelity floor already uses — one definition of "expensive enough to
+ * be worth persisting").
+ */
+export interface ChunkAssetCache {
+  get(nodeKey: string): { texRes: number; albedoRGBA: Uint8Array } | undefined;
+  put(nodeKey: string, texRes: number, albedoRGBA: Uint8Array): void;
+}
 import { continuumSurfaceFrag, continuumSurfaceVert } from './shaders';
 import { estimateCoverSeconds } from './stream-metrics';
 
@@ -249,11 +269,25 @@ export class ChunkPool {
   private readonly wireMatCache = new Map<number, LineBasicMaterial>();
   private readonly _sun = new Vector3(0.6, 0.35, 0.72);
   private readonly _sunObj = new Vector3(0.6, 0.35, 0.72);
+  /** Planet-center → camera direction (world space, same frame as uSunDir).
+   *  Lets the fragment shader tell a near-aligned pose (sun ~ ±viewAxis —
+   *  either a full-day or full-night disc, no meaningful terminator to
+   *  protect) from a lateral/partial-phase pose (sun ⟂ viewAxis, a real
+   *  terminator crosses the visible disc) — see P2-1b night-scatter gate. */
+  private readonly _viewAxis = new Vector3(0, 0, 1);
 
   constructor(
     private radius: number,
     private getBundle: () => GeneratorBundle,
     private getDisplacement: () => number,
+    /** (P2-3) Optional — undefined behaves exactly as before this task
+     *  (no persistence, pure live generation). */
+    private readonly assetCache?: ChunkAssetCache,
+    /** P2-17 — airless body (moon): knife-edge terminator instead of the
+     *  soft atmospheric wrap. Static for the body's lifetime (a body's
+     *  airless-ness never changes at runtime), so it's a constructor
+     *  argument rather than a live setter like the other surface looks. */
+    private readonly airless = false,
   ) {
     this.group.name = 'continuum-chunks';
     this.debugGroup.name = 'continuum-chunk-debug';
@@ -273,6 +307,7 @@ export class ChunkPool {
       uniforms: {
         uSunDir: { value: this._sun },
         uSunDirObj: { value: this._sunObj },
+        uViewAxis: { value: this._viewAxis },
         uDebugChunks: { value: 0 },
         uFade: { value: 1 },
         uAlbedoMap: { value: this.dummyAlbedo },
@@ -288,6 +323,10 @@ export class ChunkPool {
         uAtmosDensity: { value: 0 },
         uPlanetRadius: { value: radius },
         uVoxelBlend: { value: 0 },
+        uAirless: { value: airless ? 1 : 0 },
+        uBounceDir: { value: new Vector3(0, 1, 0) },
+        uBounceColor: { value: new Vector3(1, 1, 1) },
+        uBounceStrength: { value: 0 },
       },
       side: DoubleSide,
     });
@@ -308,8 +347,15 @@ export class ChunkPool {
 
   get showChunksOn(): boolean { return this.showChunks; }
 
+  /** P2-24 — normalize the shared global camera-distance AU to THIS body's
+   *  own radius before storing (see body-scale.ts doc comment): every
+   *  `this.viewAu` comparison below (closeBand, uniformLevelForDistance,
+   *  selectChunkLeaves/prefetchApproachLeaves's viewAu gates in chunk-lod.ts,
+   *  the cover-quality gate, pickPolishCandidate, texResCeilingForAu) reads
+   *  the normalized value, so the whole approach/LOD/polish ladder becomes
+   *  body-relative for free from this one seam. */
   setViewDistanceAu(au: number): void {
-    this.viewAu = au;
+    this.viewAu = earthEquivalentAu(au, this.radius);
   }
 
   /** Build queue depth — surface voxels wait until this is quiet. */
@@ -324,6 +370,10 @@ export class ChunkPool {
 
   setSunDirObj(x: number, y: number, z: number): void {
     this._sunObj.set(x, y, z);
+  }
+
+  setViewAxis(x: number, y: number, z: number): void {
+    this._viewAxis.set(x, y, z);
   }
 
   setSurfaceLook(roughness: number, nightLights: number): void {
@@ -359,6 +409,22 @@ export class ChunkPool {
     const apply = (u: ShaderMaterial['uniforms']): void => {
       (u.uAtmosColor.value as Vector3).set(color[0], color[1], color[2]);
       u.uAtmosDensity.value = density;
+    };
+    apply(this.surfaceMat.uniforms);
+    for (const r of this.residents.values()) apply(r.mat.uniforms);
+  }
+
+  /** P2-17 — planetshine: diffuse bounce from a nearby lit parent body.
+   *  `dir` is world-space (direction toward the parent), `color` the
+   *  parent's own albedo tint, `strength` 0 for "no bright neighbour"
+   *  (the default — safe no-op for ordinary planets). The caller (a
+   *  body-registry-aware driver, since ChunkPool/ContinuumGlobe has no
+   *  visibility into sibling bodies) recomputes this every frame. */
+  setPlanetshine(dir: readonly [number, number, number], color: readonly [number, number, number], strength: number): void {
+    const apply = (u: ShaderMaterial['uniforms']): void => {
+      (u.uBounceDir.value as Vector3).set(dir[0], dir[1], dir[2]);
+      (u.uBounceColor.value as Vector3).set(color[0], color[1], color[2]);
+      u.uBounceStrength.value = strength;
     };
     apply(this.surfaceMat.uniforms);
     for (const r of this.residents.values()) apply(r.mat.uniforms);
@@ -722,8 +788,21 @@ export class ChunkPool {
     );
     if (canPolish && this.building < maxBuilds) {
       const polishBuildCap = Math.min(maxBuilds, this.building + POLISH_UPGRADES_PER_FRAME);
+      // P2-0 fix #2 — a real TIME cap, not a build-COUNT cap: predict each
+      // candidate's cost (estimatedBuildCostMs) BEFORE starting it, instead of
+      // only checking elapsed time between builds (which let several
+      // predictably-expensive upgrades stack into one multi-hundred-ms frame —
+      // "up to 3-4 of them run before the next check"). At most ONE build
+      // whose predicted cost exceeds this tick's own budget is allowed per
+      // tick(); once that quota is spent, only cheap (fits-in-budget) upgrades
+      // may still run this tick.
+      let expensiveBudgetSpent = false;
       while (this.building < polishBuildCap && performance.now() - t0 < budget) {
-        if (!this.upgradeOneAlbedo()) break;
+        const remainingMs = budget - (performance.now() - t0);
+        const maxCostMs = expensiveBudgetSpent ? budget : Infinity;
+        const result = this.upgradeOneAlbedo(maxCostMs, remainingMs);
+        if (!result) break;
+        if (result.costMs > budget) expensiveBudgetSpent = true;
         this.building++;
       }
     }
@@ -814,9 +893,20 @@ export class ChunkPool {
       seaLevel,
     });
 
+    // (P2-3) A previously-polished albedo (this session or a persisted one
+    // from a prior visit) is always at least as good as — and cheaper to use
+    // than — the fresh (stream/coarse-quality) bake just sampled above: no
+    // noise sampling, just a byte copy into the DataTexture. Mesh geometry
+    // stays from the live `chunk` sample either way (see chunk-pool.ts
+    // ChunkAssetCache doc comment — heights are never cached).
+    const cachedAlbedo = this.assetCache?.get(id);
+    const useCached = !!cachedAlbedo && cachedAlbedo.texRes > chunk.texRes;
+    const albedoRGBA = useCached ? cachedAlbedo!.albedoRGBA : chunk.albedoRGBA;
+    const albedoTexRes = useCached ? cachedAlbedo!.texRes : chunk.texRes;
+
     const albedoTex = new DataTexture(
-      chunk.albedoRGBA as unknown as BufferSource,
-      chunk.texRes, chunk.texRes, RGBAFormat, UnsignedByteType,
+      albedoRGBA as unknown as BufferSource,
+      albedoTexRes, albedoTexRes, RGBAFormat, UnsignedByteType,
     );
     albedoTex.magFilter = LinearFilter;
     albedoTex.minFilter = LinearMipmapLinearFilter;
@@ -831,6 +921,7 @@ export class ChunkPool {
     const mat = this.surfaceMat.clone();
     mat.uniforms.uSunDir.value = this._sun;
     mat.uniforms.uSunDirObj.value = this._sunObj;
+    mat.uniforms.uViewAxis.value = this._viewAxis;
     mat.uniforms.uAlbedoMap.value = albedoTex;
     mat.uniforms.uUseAlbedoMap.value = 1;
     mat.uniforms.uDebugChunks.value = this.showChunks ? 1 : 0;
@@ -845,6 +936,10 @@ export class ChunkPool {
     mat.uniforms.uAtmosDensity.value = this.surfaceMat.uniforms.uAtmosDensity.value;
     mat.uniforms.uPlanetRadius.value = this.surfaceMat.uniforms.uPlanetRadius.value;
     mat.uniforms.uVoxelBlend.value = this.surfaceMat.uniforms.uVoxelBlend.value;
+    mat.uniforms.uAirless.value = this.surfaceMat.uniforms.uAirless.value;
+    mat.uniforms.uBounceDir.value = (this.surfaceMat.uniforms.uBounceDir.value as Vector3).clone();
+    mat.uniforms.uBounceColor.value = (this.surfaceMat.uniforms.uBounceColor.value as Vector3).clone();
+    mat.uniforms.uBounceStrength.value = this.surfaceMat.uniforms.uBounceStrength.value;
 
     const mesh = new Mesh(geo, mat);
     mesh.frustumCulled = true;
@@ -877,7 +972,7 @@ export class ChunkPool {
       wire: null,
       geo,
       albedoTex,
-      texRes: chunk.texRes,
+      texRes: albedoTexRes,
       fingerprint: chunk.fingerprint,
       lastUsed: ++this.frame,
       fade: fade0,
@@ -897,8 +992,33 @@ export class ChunkPool {
     if (isWarmOnly) this.warmKeys.add(id);
   }
 
-  /** Replace albedo only — stepped climb toward AU ceiling (facing first, below-floor priority). */
-  private upgradeOneAlbedo(): boolean {
+  /**
+   * Replace albedo only — stepped climb toward AU ceiling (facing first,
+   * below-floor priority).
+   *
+   * P2-0 fix #2 (real time cap, not a build-count cap), TWO complementary
+   * gates:
+   *  - `maxCostMs`: skip the candidate entirely (no bake at all) if its
+   *    predicted cost exceeds it. The caller uses this to allow at most one
+   *    predictably-expensive (reach-the-SLA-floor) build per tick().
+   *  - `remainingMs`: once a leaf is already AT/PAST the SLA fidelity floor
+   *    (APPROACH_FIDELITY_MIN_TEX_AT_03AU), further climbing toward the full
+   *    ceiling is COSMETIC, not SLA-critical (chunk-types.ts's own
+   *    texResNextUpgrade comment). Bake cost is quadratic in the ABSOLUTE
+   *    target resolution, not the size of the step — a "small" texel step
+   *    from an already-high current texRes still pays the full cost of the
+   *    new (high) resolution. So for that case only, the ABSOLUTE target is
+   *    clamped to whatever fits `remainingMs` (maxTexResForBudget) instead of
+   *    always jumping straight to the desired next step and finding out the
+   *    true cost only after the frame already blew its budget. Below the
+   *    floor, the jump always runs in full (subject only to `maxCostMs`) —
+   *    reaching baseline quality fast is worth the one-time cost; the
+   *    cosmetic overshoot past it is not.
+   *
+   * Returns the predicted cost of the build actually run, or null when no
+   * candidate ran (none available, too expensive, or no affordable step).
+   */
+  private upgradeOneAlbedo(maxCostMs: number, remainingMs: number): { costMs: number } | null {
     const cam = norm3(this.lodCamLocal);
     const candidates: PolishCandidate[] = [];
     for (const n of this.desired) {
@@ -908,17 +1028,26 @@ export class ChunkPool {
       candidates.push({ key: id, node: n, texRes: r.texRes });
     }
     const picked = pickPolishCandidate(candidates, cam, this.viewAu);
-    if (!picked) return false;
+    if (!picked) return null;
     const best = this.residents.get(picked.key);
     const bestNext = picked.next;
-    if (!best || bestNext <= best.texRes) return false;
+    if (!best || bestNext <= best.texRes) return null;
+
+    let targetTexRes = bestNext;
+    if (best.texRes >= APPROACH_FIDELITY_MIN_TEX_AT_03AU) {
+      targetTexRes = Math.min(bestNext, maxTexResForBudget(remainingMs));
+      if (targetTexRes <= best.texRes) return null;
+    }
+
+    const costMs = estimatedBuildCostMs(targetTexRes);
+    if (costMs > maxCostMs) return null;
 
     const bundle = this.getBundle();
     const ceiling = texResCeilingForAu(best.node.level, this.viewAu);
     // Relief/coast only on higher steps once we've been quiet a bit.
-    const skipRelief = bestNext < 96 || this.settledFrames < 20 || bestNext < ceiling;
+    const skipRelief = targetTexRes < 96 || this.settledFrames < 20 || targetTexRes < ceiling;
     const chunk = sampleHeightfieldChunk(bundle, best.node, {
-      texRes: bestNext,
+      texRes: targetTexRes,
       meshGrid: meshGridForLevel(best.node.level),
       skipRelief,
     });
@@ -938,7 +1067,27 @@ export class ChunkPool {
     best.texRes = chunk.texRes;
     best.mat.uniforms.uAlbedoMap.value = next;
     best.lastUsed = ++this.frame;
-    return true;
+
+    // (P2-3) Persist once a build crosses the SLA fidelity floor — the same
+    // threshold the "below-floor climbs outrank everything else" polish
+    // priority (pickPolishCandidate) already treats as the meaningful
+    // quality bar. Deliberately NOT gated on `!skipRelief` (full-ceiling +
+    // relief/coast treatment): with dozens of facing leaves competing for
+    // polish budget, ALL of them typically cross the floor long before ANY
+    // single one reaches its full ceiling (see F6 comment above — "the
+    // facing population needs most of its leaves past the floor" first) —
+    // gating on the ceiling would mean short/typical play sessions almost
+    // never persist anything. A mid-climb (skipRelief=true) bake is still
+    // strictly monotonic: later same-session upgrades keep overwriting this
+    // cache entry with a higher texRes (BodyChunkCache.put never downgrades)
+    // as the climb continues, so what ends up persisted is always exactly
+    // "whatever this session actually reached" — the correct thing to
+    // reproduce on reload, whether or not the player stayed long enough to
+    // hit full relief.
+    if (chunk.texRes >= APPROACH_FIDELITY_MIN_TEX_AT_03AU) {
+      this.assetCache?.put(picked.key, chunk.texRes, chunk.albedoRGBA);
+    }
+    return { costMs };
   }
 
   private attachOutline(r: Resident): void {

@@ -14,7 +14,8 @@ Vague "photoreal" without a northstar row is rejected at `shape` time.
 
 ## Engine target
 
-- **Primary:** Three.js + WebGPU/TSL (`adapter-webgpu-three`)
+- **Current (shipping):** Three.js + WebGL2 + GLSL, hardcoded `WebGLRenderer` (`src/render/renderer.ts`). This is the sole rendering path for all 28 catalogue bodies via the Continuum engine (`src/render/planet/continuum/`) — the legacy `objects.ts`/`procedural-textures.ts`/`shaders/planet-surface.ts` pipeline it replaced has been deleted (P2-5).
+- **Roadmap (not shipped, not scheduled):** `Three.js + WebGPU/TSL (adapter-webgpu-three)` was previously stated here as the primary target in present tense; that never reflected the actual tree (zero TSL/NodeMaterial usage, WebGPU touches only a standalone compute benchmark). Workspace Audit A8 (render stack evaluation) recommends *against* a renderer migration at this time and instead scopes WebGPU adoption narrowly to compute-only generation bakes (e.g. hydraulic erosion), not the renderer itself — and P2-4's scope check found even that narrower still, since the bake code in question isn't consumed by the shipping Continuum engine at all. A full WebGPU/TSL renderer migration remains a possible future direction, contingent on a real, currently-unevidenced perf/precision need, not an active plan.
 - **Doctrine:** Workspace `#12` + `realtime-render-performance` + `imaging-foundations`
 - **Conflict guard:** Cursor plugin marketing-3D Three.js skills are API lookup only; Workspace doctrine wins (no frag log-depth default, post order, native eval, uncapped-with-floor FPS)
 
@@ -43,16 +44,16 @@ Still-only approval is an automatic fail for LOD, volumetrics, dither, TAA, casc
 
 Record visually lossless (or lossless) at native canvas resolution. Review **frame-by-frame** (`interactive-capture-eval` + `reference-video-review`).
 
-### `continuum-ab` protocol
+### `continuum-ab` protocol (historical — records the pre-cutover decision)
 
-`engine=continuum` is a lab-only comparison path. Legacy remains the shipping default.
+This protocol describes how the Legacy-vs-Continuum engine cutover was evidenced. **That cutover is now complete: Continuum is the sole, shipping engine for all 28 catalogue bodies, and the legacy `objects.ts`/`procedural-textures.ts`/`shaders/planet-surface.ts` pipeline it was compared against has been deleted (P2-5).** `?engine=continuum`/`engine=legacy` A/B flags may still exist in scripts as vestigial opt-in support, but there is no longer a live "Legacy" render path to compare against — kept below for reference on how the cutover decision was made, not as an active dual-engine workflow.
 
 1. Start from the same Terran state: identical seed, climate inputs, and `src/render/planet/lab-ideal.json` configuration.
 2. Reset the lab before each pass, then record the same `approach-surface` and `look-orient` camera inputs once on Legacy and once with `?engine=continuum`.
 3. Keep canvas dimensions, DPR, browser, hardware, capture method, warmup, and relevant lab controls identical. Record native still poses and visually lossless motion for both passes.
 4. Export `__perfCapture` for the equivalent settled and approach poses. Assess native still grids, motion frames, and budget results together in `docs/superpowers/specs/2026-08-03-continuum-ab-cutover-decision.md`.
 
-This protocol records evidence only. It does not establish ship readiness or change the default engine.
+This protocol recorded evidence only; it predates and fed into the cutover decision, and does not describe the current engine state (see "Engine target" above).
 
 ## Offline reference renders
 

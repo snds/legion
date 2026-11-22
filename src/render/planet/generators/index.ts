@@ -6,6 +6,7 @@ import { createClimateProvider } from './climate-provider';
 import { createWeatherProvider } from './weather-provider';
 import { createAuthoringStore } from './authoring-store';
 import type { GeneratorBundle, SurfaceSample, Vec3 } from './types';
+import { getRealAlbedoSampler, isRealAlbedoReady } from '../continuum/real-albedo';
 
 export type {
   GeneratorBundle, SurfaceSample, Vec3,
@@ -23,7 +24,15 @@ export function sampleSurface(bundle: GeneratorBundle, dir: Vec3, chunkKey = '')
   // Climate thresholds use continuous macro elev (Legacy hex-seam lesson).
   const elev = bundle.plates.macroHeight(dir);
   const c = bundle.climate.sample(dir, h, elev);
-  return { height: h, ...c };
+  // Real-photo override (curated Sol bodies/moons — continuum/real-albedo.ts):
+  // ONLY the colour swaps to the real photo; height/sea/temp/moisture/ice/
+  // habit all stay the procedural values above, so relief, water specular,
+  // cloud-shadow compositing, terminator, and planetshine (all driven off
+  // those fields downstream, not `color`) are unaffected — "the shader
+  // doesn't know the difference". `null` while the body's photo hasn't
+  // loaded yet — keeps the procedural colour in the meantime.
+  const real = bundle.realAlbedo?.(dir);
+  return real ? { height: h, ...c, color: real } : { height: h, ...c };
 }
 
 function f3(n: number): string { return n.toFixed(3); }
@@ -34,6 +43,13 @@ export function surfaceFingerprint(
   p: PlanetRenderParams,
   macro: MacroParams,
   authoringFp: string,
+  // Real-photo readiness tag (continuum/real-albedo.ts) — '' for every
+  // procedurally-generated body. Bumping this the moment a curated body's
+  // photo finishes loading gives the chunk identity a genuine change, so
+  // body-asset-store.ts's persisted chunk cache (keyed by this fingerprint)
+  // can't keep serving pre-photo procedural bytes for a chunk that was
+  // built/cached in the brief pending window before the texture landed.
+  realAlbedoTag = '',
 ): string {
   return [
     seed, p.type,
@@ -52,6 +68,7 @@ export function surfaceFingerprint(
     f3(macro.canyons), f3(macro.canyonFreq), f3(macro.canyonDepth),
     f3(macro.normalStrength),
     authoringFp,
+    realAlbedoTag,
   ].join('|');
 }
 
@@ -64,6 +81,7 @@ export function createGeneratorBundle(planet: GenPlanet): GeneratorBundle {
   const climate = createClimateProvider(paramsRef);
   const weather = createWeatherProvider(seed, paramsRef, plates);
   const authoring = createAuthoringStore();
+  const realTextureBody = planet.realTextureBody;
 
   return {
     seed,
@@ -74,8 +92,12 @@ export function createGeneratorBundle(planet: GenPlanet): GeneratorBundle {
     climate,
     weather,
     authoring,
+    realAlbedo: realTextureBody
+      ? (dir: Vec3) => getRealAlbedoSampler(realTextureBody)?.(dir) ?? null
+      : undefined,
     fingerprint() {
-      return surfaceFingerprint(seed, paramsRef.current, macroRef.current, authoring.fingerprint());
+      const albedoTag = realTextureBody ? (isRealAlbedoReady(realTextureBody) ? '1' : '0') : '';
+      return surfaceFingerprint(seed, paramsRef.current, macroRef.current, authoring.fingerprint(), albedoTag);
     },
     refreshParams(next: PlanetRenderParams, nextMacro: MacroParams) {
       paramsRef.current = next;

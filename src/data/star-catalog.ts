@@ -10,6 +10,7 @@
 import type { SystemConfig, PlanetConfig, BobConfig, StarConfig, MoonConfig, BeltConfig } from '../core/world';
 import { PlanetType, ExplorationStatus, BobFocus, BobAutonomy } from '../core/components';
 import { CURATED_SYSTEMS, regionalScenePos, distanceLy } from './curated-systems';
+import { parseSpectral } from './system-gen';
 
 // ── Star Systems ─────────────────────────────────────────────────
 //
@@ -42,6 +43,17 @@ export const EPS_ERI_STAR: StarConfig = {
   radius: 0.6,
 };
 
+/** Real stellar luminosity (L☉) for the two curated home stars, derived from
+ *  their authored spectral type (CURATED_SYSTEMS' own `spect` field — the
+ *  single source of truth, not a re-typed literal) via `parseSpectral` —
+ *  system-gen.ts's existing coarse stellar model, the same one procedurally-
+ *  generated systems already use. P2-20: lets the catalogue adapter compute
+ *  each planet's REAL insolation (L☉/au²) instead of a hardcoded 1. */
+const solCurated = CURATED_SYSTEMS.find((s) => s.name === 'Sol');
+const epsEriCurated = CURATED_SYSTEMS.find((s) => s.name === 'Epsilon Eridani');
+export const SOL_LUMINOSITY_SOLAR = parseSpectral(solCurated?.spect ?? 'G2V').luminositySolar;
+export const EPS_ERI_LUMINOSITY_SOLAR = parseSpectral(epsEriCurated?.spect ?? 'K2V').luminositySolar;
+
 export const EPS_ERI_PLANETS: PlanetConfig[] = [
   {
     name: 'Vulcan',      designation: 'EE-I',
@@ -49,6 +61,8 @@ export const EPS_ERI_PLANETS: PlanetConfig[] = [
     color: 0x887766, surfaceTemp: 600, gravity: 0.4, status: ExplorationStatus.Surveyed,
     hasAtmosphere: false, atmosColor: 0, inclination: 0.02,
     axialTilt: 0, dayLength: 58.6,
+    // P2-13 rocky cluster — airless, exercises P2-12's atmosphere-gate fix.
+    renderEngine: 'continuum',
   },
   {
     name: 'Ragnarok',    designation: 'EE-II',
@@ -56,6 +70,9 @@ export const EPS_ERI_PLANETS: PlanetConfig[] = [
     color: 0xcc8844, surfaceTemp: 380, gravity: 0.8, status: ExplorationStatus.Mining,
     hasAtmosphere: true, atmosColor: 0xccaa77, inclination: 0.05,
     axialTilt: 177, dayLength: 243,
+    // P2-13 rocky cluster — cloud content pre-verified in isolation (P2-6),
+    // needs in-scene confirmation.
+    renderEngine: 'continuum',
   },
   {
     name: 'Romulus',      designation: 'EE-III',
@@ -63,6 +80,9 @@ export const EPS_ERI_PLANETS: PlanetConfig[] = [
     color: 0x4488bb, surfaceTemp: 290, gravity: 1.1, status: ExplorationStatus.Habitable,
     hasAtmosphere: true, atmosColor: 0x6699cc, inclination: 0.01,
     axialTilt: 23, dayLength: 1.0,
+    // P2-1 engine consolidation test body — EE's rocky/ocean parity coverage
+    // (DoD requires reachable for "at least Sol/EE", not just Sol).
+    renderEngine: 'continuum',
   },
   {
     name: 'Pax',          designation: 'EE-IV',
@@ -70,6 +90,8 @@ export const EPS_ERI_PLANETS: PlanetConfig[] = [
     color: 0xcc6644, surfaceTemp: 220, gravity: 0.6, status: ExplorationStatus.Surveyed,
     hasAtmosphere: true, atmosColor: 0xddaa88, inclination: 0.08,
     axialTilt: 25, dayLength: 1.03,
+    // P2-13 rocky cluster.
+    renderEngine: 'continuum',
   },
   {
     name: 'Jotunheim',    designation: 'EE-V',
@@ -77,6 +99,8 @@ export const EPS_ERI_PLANETS: PlanetConfig[] = [
     color: 0xddbb88, surfaceTemp: 130, gravity: 2.5, status: ExplorationStatus.Surveyed,
     hasAtmosphere: true, atmosColor: 0xeedd99, inclination: 0.03,
     axialTilt: 3, dayLength: 0.41,
+    // P2-14 gas-giant sub-cluster — banded/turbulent giant shading parity.
+    renderEngine: 'continuum',
   },
   {
     name: 'Niflheim',     designation: 'EE-VI',
@@ -85,6 +109,9 @@ export const EPS_ERI_PLANETS: PlanetConfig[] = [
     hasAtmosphere: true, atmosColor: 0x99bbdd, inclination: 0.1,
     ringTexturePath: '/textures/saturn_ring_alpha.png',
     axialTilt: 27, dayLength: 0.44,
+    // P2-15 ice-giant cluster — same giant-shader path verified on Uranus,
+    // plus re-exercises the ring path (already proven clean on Saturn, P2-1).
+    renderEngine: 'continuum',
   },
   {
     name: 'Helheim',      designation: 'EE-VII',
@@ -92,6 +119,12 @@ export const EPS_ERI_PLANETS: PlanetConfig[] = [
     color: 0x667788, surfaceTemp: 45, gravity: 0.2, status: ExplorationStatus.Uncharted,
     hasAtmosphere: false, atmosColor: 0, inclination: 0.15,
     axialTilt: 28, dayLength: 0.67,
+    // P2-16 — own cluster of one: first sub-1-R⊕-representative body (0.2 R⊕
+    // rep-radius, planet-scale.ts REP_R_EARTH) routed to Continuum. Scale-
+    // tuning risk (terrain frequency/LOD never validated this small), not a
+    // shared-bug risk — verified via close-approach (SURFACE zoom) real-boot
+    // capture, see task note.
+    renderEngine: 'continuum',
   },
 ];
 
@@ -106,6 +139,58 @@ export const EPS_ERI_PLANETS: PlanetConfig[] = [
 export const EPS_ERI_BELTS: BeltConfig[] = [
   { name: 'Main Belt',         innerAU: 1.9, outerAU: 2.6, density: 1.0,  thicknessAU: 0.06 },
   { name: 'Outer Debris Belt', innerAU: 14,  outerAU: 20,  density: 0.35, inclinationDeg: 3, thicknessAU: 0.9 },
+];
+
+// ε Eridani moons — P2-8: EE previously had zero moons even though its own
+// giants (Jotunheim/Niflheim) and habitable world (Romulus) are exactly the
+// bodies real solar-system formation gives moons to. `sma`/`size` follow the
+// same parent-radius ratio Sol's own moons use (e.g. Luna's sma/size ≈ Io's
+// ≈ Titan's ≈ Triton's, all ~11-16× the parent's `size`), scaled up by EE's
+// larger authored planet-size convention (≈2.5× Sol's per-body `size` units)
+// so these read at the same relative visual scale as Sol's moons. Names
+// follow the systems's existing mixed-mythology convention (Roman: Romulus/
+// Remus twins; Norse: Jotunheim/Niflheim's own giant/frost-realm figures).
+export const EPS_ERI_MOONS: MoonConfig[] = [
+  // Romulus (EE-III, habitable ocean world) — one large moon, Luna-analog.
+  {
+    name: 'Remus', parentName: 'Romulus',
+    size: 0.21, color: 0xaaaaaa, sma: 5.0, ecc: 0.04,
+    inclination: 0.09, dayLength: 45, tidalLock: true,
+    // P2-18.4 — final moon batch.
+    renderEngine: 'continuum',
+  },
+  // Jotunheim (EE-V, gas giant) — three moons, Galilean-analog scale/spacing.
+  {
+    name: 'Ymir', parentName: 'Jotunheim',
+    size: 0.22, color: 0xaa9988, sma: 8.0, ecc: 0.01,
+    inclination: 0.01, dayLength: 2.0, tidalLock: true,
+    renderEngine: 'continuum',
+  },
+  {
+    name: 'Surtr', parentName: 'Jotunheim',
+    size: 0.19, color: 0xcc6644, sma: 11.0, ecc: 0.015,
+    inclination: 0.02, dayLength: 4.0, tidalLock: true,
+    renderEngine: 'continuum',
+  },
+  {
+    name: 'Thrym', parentName: 'Jotunheim',
+    size: 0.30, color: 0xbbaa99, sma: 15.0, ecc: 0.02,
+    inclination: 0.03, dayLength: 8.0, tidalLock: true,
+    renderEngine: 'continuum',
+  },
+  // Niflheim (EE-VI, ice giant) — two moons, Titan/Triton-analog.
+  {
+    name: 'Elivagar', parentName: 'Niflheim',
+    size: 0.09, color: 0xaaccdd, sma: 9.0, ecc: 0.01,
+    inclination: 0.02, dayLength: 3.0, tidalLock: true,
+    renderEngine: 'continuum',
+  },
+  {
+    name: 'Hvergelmir', parentName: 'Niflheim',
+    size: 0.14, color: 0x7788aa, sma: 14.0, ecc: 0.05,
+    inclination: 2.5, dayLength: 6.5, tidalLock: true,
+    renderEngine: 'continuum',
+  },
 ];
 
 // ── Sol System ─────────────────────────────────────────────────
@@ -124,6 +209,9 @@ export const SOL_PLANETS: PlanetConfig[] = [
     hasAtmosphere: false, atmosColor: 0, inclination: 0.122,
     axialTilt: 0.034, dayLength: 58.646,
     texturePath: '/textures/sol/mercury.jpg',
+    // P2-13 rocky-cluster pathfinder — airless body exercising P2-12's
+    // atmosphere-gate fix + chunk-pool for the first time on a routed body.
+    renderEngine: 'continuum',
   },
   {
     name: 'Venus',       designation: 'Sol-II',
@@ -132,6 +220,9 @@ export const SOL_PLANETS: PlanetConfig[] = [
     hasAtmosphere: true, atmosColor: 0xccaa77, inclination: 0.059,
     axialTilt: 177.36, dayLength: -243.025,
     texturePath: '/textures/sol/venus.jpg',
+    // P2-13 rocky cluster — never visually verified on Continuum before
+    // (existing PASS status is legacy-pipeline only).
+    renderEngine: 'continuum',
   },
   {
     name: 'Earth',       designation: 'Sol-III',
@@ -140,6 +231,8 @@ export const SOL_PLANETS: PlanetConfig[] = [
     hasAtmosphere: true, atmosColor: 0x6699cc, inclination: 0,
     axialTilt: 23.44, dayLength: 0.997,
     texturePath: '/textures/sol/earth.jpg',
+    // P2-1 engine consolidation test body — rocky/ocean surface parity.
+    renderEngine: 'continuum',
   },
   {
     name: 'Mars',        designation: 'Sol-IV',
@@ -148,6 +241,9 @@ export const SOL_PLANETS: PlanetConfig[] = [
     hasAtmosphere: true, atmosColor: 0xcc8866, inclination: 0.032,
     axialTilt: 25.19, dayLength: 1.026,
     texturePath: '/textures/sol/mars.jpg',
+    // P2-13 rocky cluster — never visually verified on Continuum before
+    // (existing PASS status is legacy-pipeline only).
+    renderEngine: 'continuum',
   },
   {
     name: 'Jupiter',     designation: 'Sol-V',
@@ -156,6 +252,8 @@ export const SOL_PLANETS: PlanetConfig[] = [
     hasAtmosphere: true, atmosColor: 0xddcc88, inclination: 0.023,
     axialTilt: 3.13, dayLength: 0.414,
     texturePath: '/textures/sol/jupiter.jpg',
+    // P2-14 gas-giant sub-cluster — banded/turbulent giant shading parity.
+    renderEngine: 'continuum',
   },
   {
     name: 'Saturn',      designation: 'Sol-VI',
@@ -165,6 +263,8 @@ export const SOL_PLANETS: PlanetConfig[] = [
     axialTilt: 26.73, dayLength: 0.444,
     texturePath: '/textures/sol/saturn.jpg',
     ringTexturePath: '/textures/sol/saturn_ring_alpha.png',
+    // P2-1 engine consolidation test body — giant shading + rings parity.
+    renderEngine: 'continuum',
   },
   {
     name: 'Uranus',      designation: 'Sol-VII',
@@ -173,6 +273,14 @@ export const SOL_PLANETS: PlanetConfig[] = [
     hasAtmosphere: true, atmosColor: 0x88bbcc, inclination: 0.013,
     axialTilt: 97.77, dayLength: -0.718,
     texturePath: '/textures/sol/uranus.jpg',
+    // P2-15 ice-giant cluster pathfinder — first-ever PlanetVisualType:'ice'
+    // body routed to Continuum. Renders via the same isGiant branch already
+    // verified on Jupiter/Saturn/Jotunheim (P2-14): banded GIANT_FRAG shader
+    // only, no chunk pool / climate provider / atmosMesh. P2-20: the
+    // authored 97.77° here IS now what Continuum renders — the catalogue
+    // adapter threads it into GenPlanet.axialTilt and ContinuumGlobe applies
+    // it to tiltGroup.rotation.z in place of the old RNG-derived lean.
+    renderEngine: 'continuum',
   },
   {
     name: 'Neptune',     designation: 'Sol-VIII',
@@ -181,6 +289,10 @@ export const SOL_PLANETS: PlanetConfig[] = [
     hasAtmosphere: true, atmosColor: 0x6688cc, inclination: 0.031,
     axialTilt: 28.32, dayLength: 0.671,
     texturePath: '/textures/sol/neptune.jpg',
+    // P2-15 ice-giant cluster — same giant-shader path verified on the
+    // Uranus pathfinder; lower risk (Earth-like 28.32° tilt — P2-20: now
+    // real-tilt-driven too, see Uranus's routing comment above).
+    renderEngine: 'continuum',
   },
 ];
 
@@ -190,41 +302,52 @@ export const SOL_MOONS: MoonConfig[] = [
     size: 0.08, color: 0xaaaaaa, sma: 1.9, ecc: 0.0549,
     inclination: 0.09, dayLength: 27.322, tidalLock: true,
     texturePath: '/textures/sol/moon.jpg',
+    // P2-18 pathfinder — first real catalogue moon routed to Continuum's
+    // isMoon mode + real per-frame Earth-parent planetshine.
+    renderEngine: 'continuum',
   },
   {
     name: 'Io', parentName: 'Jupiter',
     size: 0.09, color: 0xddcc44, sma: 4.6, ecc: 0.004,
     inclination: 0.001, dayLength: 1.769, tidalLock: true,
     texturePath: '/textures/sol/io.jpg',
+    // P2-18.2 — Galilean batch (worst-case simultaneous-body-count test).
+    renderEngine: 'continuum',
   },
   {
     name: 'Europa', parentName: 'Jupiter',
     size: 0.075, color: 0xccbbaa, sma: 5.4, ecc: 0.009,
     inclination: 0.008, dayLength: 3.553, tidalLock: true,
     texturePath: '/textures/sol/europa.jpg',
+    renderEngine: 'continuum',
   },
   {
     name: 'Ganymede', parentName: 'Jupiter',
     size: 0.12, color: 0x887766, sma: 6.6, ecc: 0.0013,
     inclination: 0.003, dayLength: 7.155, tidalLock: true,
     texturePath: '/textures/sol/ganymede.jpg',
+    renderEngine: 'continuum',
   },
   {
     name: 'Callisto', parentName: 'Jupiter',
     size: 0.11, color: 0x665544, sma: 8.4, ecc: 0.007,
     inclination: 0.003, dayLength: 16.689, tidalLock: true,
     texturePath: '/textures/sol/callisto.jpg',
+    renderEngine: 'continuum',
   },
   {
     name: 'Titan', parentName: 'Saturn',
     size: 0.12, color: 0xcc9944, sma: 8.2, ecc: 0.0288,
     inclination: 0.005, dayLength: 15.945, tidalLock: true,
     texturePath: '/textures/sol/titan.jpg',
+    // P2-18.3.
+    renderEngine: 'continuum',
   },
   {
     name: 'Triton', parentName: 'Neptune',
     size: 0.03, color: 0x99aabb, sma: 5.0, ecc: 0.00002,
     inclination: 2.737, dayLength: 5.877, tidalLock: true,
+    renderEngine: 'continuum',
   },
 ];
 

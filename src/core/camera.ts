@@ -111,11 +111,22 @@ export class CameraController {
   // moving objects (planets, bobs in flight) or stay locked on static
   // objects (stations, galactic markers) regardless of scene-graph
   // transforms above them.
-  private trackedObject: Object3D | null = null;
+  private _trackedObject: Object3D | null = null;
   private readonly _trackPos = new Vector3();
   // Per-object scale (set from trackedObject.userData.bodyRadius). 1.0
   // means "use absolute camDist"; >1 multiplies close-tier distances.
   private focusScale = 1.0;
+
+  /**
+   * The Object3D the camera is currently locked onto (via `trackObject`), or
+   * null when not tracking (free focus point / no active follow). P2-19:
+   * Continuum's per-body approach-flight camera nudge (applyApproachFlightCamera)
+   * must only ever be driven by the ACTUALLY-focused body — a bystander body
+   * that merely happens to be visually large from the current vantage must
+   * never touch the camera. `updateContinuumGlobes()` reads this each frame to
+   * gate that call; see registry.ts / continuum/index.ts.
+   */
+  get trackedObject(): Object3D | null { return this._trackedObject; }
 
   // Scale-unification U2: resolve a tracked object's ABSOLUTE world position
   // directly, injected by main.ts so the camera stays decoupled from the tier/
@@ -300,7 +311,7 @@ export class CameraController {
     // Drop any active object tracking during flight (the destination is
     // a position, not an object; if the user wants to lock on, they can
     // dblclick after landing).
-    this.trackedObject = null;
+    this._trackedObject = null;
     this.focusScale = 1.0;
   }
 
@@ -344,7 +355,7 @@ export class CameraController {
     // Stop tracking on deselect / Escape so the camera doesn't keep
     // chasing the previous focus after the user dismisses it.
     Events.on('select:clear', () => {
-      this.trackedObject = null;
+      this._trackedObject = null;
     });
   }
 
@@ -354,7 +365,7 @@ export class CameraController {
    * Clears any active object tracking — explicit position wins.
    */
   focusOn(x: number, y: number, z: number): void {
-    this.trackedObject = null;
+    this._trackedObject = null;
     this.focusScale = 1.0;
     // Callers pass a re-rooted render-frame position (from a raycast hit); store
     // it ABSOLUTE so the orbit math + rebase stay consistent. R≡0 when inactive.
@@ -368,7 +379,7 @@ export class CameraController {
    * Pass null to release.
    */
   trackObject(obj: Object3D | null): void {
-    this.trackedObject = obj;
+    this._trackedObject = obj;
     if (obj) {
       // Seed the focus target immediately so the first frame doesn't
       // lurch from wherever the camera previously was. ABSOLUTE frame — via the
@@ -446,13 +457,13 @@ export class CameraController {
     // ── Tracking ──
     // If the camera is locked onto an object, refresh focus target from
     // its current world position before the focus lerp runs.
-    if (this.trackedObject) {
+    if (this._trackedObject) {
       // Refresh the focus target from the tracked object's ABSOLUTE world
       // position (the frame the orbit math + rebase work in). The direct
       // resolver computes it from the authored local coordinate + anchor + scale
       // (true-scale-safe, no oscillation); regional/galactic markers fall back
       // to the residual read + R. R≡0 when the floating origin is inactive.
-      const abs = this._trackedAbsolute(this.trackedObject);
+      const abs = this._trackedAbsolute(this._trackedObject);
       data.camFocusTarget = { x: abs.x, y: abs.y, z: abs.z };
     }
 

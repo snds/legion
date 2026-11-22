@@ -50,6 +50,32 @@ as supporting evidence. The match verdict is `vqa prove` (Workspace
 4. **Guild / photoreal QA** — close only when still + motion + ms all pass  
 5. **Ledger** — any new failure mode → Workspace `visual-failure-mode-ledger.md` (technique-keyed)
 
+## Real-boot (non-Lab) body capture
+
+The Continuum look/budget packs below drive the **Lab** (`?lab=planet`) — a separate pipeline
+from the shipped game (`src/render/system-loader.ts`, `?system=sol|ee`). QA/verification passes
+that need a screenshot of a REAL body (Sol/EE catalogue planet or moon, as actually rendered
+in-game) need the camera pointed at that body's true position, which is **not** the same
+coordinate space as the body group's authored `.position` (see `src/core/camera.ts` §absolute
+resolver / `Broker.getSceneRebase()` in `src/render/scale-manager.ts`) — three prior sessions
+each hand-rolled and discarded a throwaway coordinate hack for this before P2-9 added a real
+utility (main.ts, dev-only, `import.meta.env.DEV`):
+
+```
+# Console (after boot, any ?system=sol|ee):
+__legionFocusBody('Earth')                 // track + frame at ORBIT tier
+__legionFocusBody('Earth', 0.03)           // optional 2nd arg: explicit zoom level (state.ts ZOOM_STEPS)
+__legionListBodies()                       // names available in the active local system
+
+# URL flag (fires once, after world load):
+?system=sol&focusBody=Earth
+?system=sol&focusBody=Mars&focusZoom=0.085 // LOW ORBIT
+```
+
+A bogus name logs a warning + the available list and returns `false` — it never throws. Chunk-pool
+HUD (`chunks`/`tris`) climbing off zero after the call is the proximity-detection tell that the
+camera actually reached the body (the old broken hand-rolled attempts pinned it at 0 chunks).
+
 ## Continuum look verification pack
 
 Capture in native Chrome at 1920×1080, DPR 1, as lossless PNG. The query strings below are the official
@@ -73,6 +99,20 @@ scores from locator captures.
 | `approach-surface` | Native/lossless far-to-low-orbit approach | `refs/continuum/motion/approach-surface/` | Flag hitch frames and LOD pops |
 | `orbit-0.8au` | Native/lossless 10–20 s orbit at 0.8 AU | `refs/continuum/motion/orbit-0.8au/` | Extract 1 fps plus dense lighting-change frames |
 | `look-orient` | Native/lossless pitch, yaw, and roll at fixed distance | `refs/continuum/motion/look-orient/` | Flag temporal crawl, cascade swim, and dither crawl |
+
+### Seed sweep (P2-9)
+
+The 4 poses above always used the ONE fixed seed baked into planet-lab.ts's `EXEMPLARS`
+(e.g. ocean=2002) — Audit A7 flagged this as a real gap: a systemic-dial regression that
+only breaks at a seed other than the canonical one was never caught. `?seed=<n>` (any
+`?lab=planet` URL, either engine) overrides the selected archetype's seed at boot, and
+`scripts/legion-accept.mjs`'s "stills" pass now samples `--seeds <n>` (default **3**,
+`--seeds 1` restores old single-seed-only behaviour) at the 0.8 AU day pose per archetype,
+written to `refs/continuum/stills/seed-sweep/<prefix>-seed<seed>.png`. Review: flag any seed
+that reads broken/degenerate (blown-out terrain, missing continents, saturated cloud deck)
+relative to the canonical-seed reference still — same human-scorecard process as above, just
+watching for seed variance instead of pose variance. Not run through the numeric toolkit
+(`runToolkitQa`) — this is a targeted human spot-check, not a full acceptance pack.
 
 ### Automated capture (preferred)
 

@@ -32,6 +32,30 @@ import {
 
 const MIP_COUNT = 5;
 
+// P2-24/isolation task — energy-conservation fix for the additive mip
+// accumulation below. Root cause (confirmed via scripts/p2-24-agx-diagnostic.mjs
+// on Mercury/Vulcan: the bloom/vignette/grade bucket alone — no exposure gain,
+// no AgX curve — added +85 and +79 (of 255) to on-disc brightLumAvg, dwarfing
+// exposureGainOnly (+26/+19) and agxCurveOnly (negative — AgX COMPRESSES
+// highlights)): a uniformly-bright, spatially-COMPACT-BUT-NOT-TINY region (a
+// close-zoom planet disc against near-black space) stays fully resolved —
+// undiluted by background — at every one of the 5 mip levels (e.g. a ~170px
+// disc in a 1280px frame is still ~5px wide at the coarsest 1/32 mip). The
+// upsample loop below previously added each level's contribution at full
+// weight, so `mips[0]` ended up ≈ MIP_COUNT× (≈5×) the source radiance for
+// such a region — literal energy duplication, not a lens-glow PSF. Large,
+// already-diffuse HDR emissives (city lights, lava, storm lightning) DO get
+// diluted at coarser mips well before reaching this level, so they are far
+// less affected — this fix targets exactly "small isolated bright area vs.
+// large dark background", not bloom in general, and applies NO threshold.
+// Fix: weight each upsample-accumulate step by MIP_ACCUM_WEIGHT (a geometric
+// falloff) instead of full 1.0, so the additive series bounds to a fixed
+// multiple (1/(1-w) — 1.9375× at w=0.5 for 5 levels) instead of growing
+// linearly with MIP_COUNT. Diffuse, already-attenuated glow contributions
+// from coarser levels are the ones most reduced; a source that stays hot
+// through every level (the bug case) is the one most corrected.
+const MIP_ACCUM_WEIGHT = 0.5;
+
 const VERT = /* glsl */ `
   varying vec2 vUv;
   void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }
@@ -89,6 +113,9 @@ const UP_FRAG = /* glsl */ `
   varying vec2 vUv;
   uniform sampler2D uSource;
   uniform float uRadius;
+  // Per-accumulation-step energy weight (see MIP_ACCUM_WEIGHT above) — keeps
+  // the additive mip-pyramid sum bounded instead of growing with MIP_COUNT.
+  uniform float uWeight;
   void main() {
     float x = uRadius, y = uRadius;
     vec3 a = texture2D(uSource, vUv + vec2(-x,  y)).rgb;
@@ -101,7 +128,7 @@ const UP_FRAG = /* glsl */ `
     vec3 h = texture2D(uSource, vUv + vec2( 0.0,-y)).rgb;
     vec3 i = texture2D(uSource, vUv + vec2( x, -y)).rgb;
     vec3 result = e * 4.0 + (b + d + f + h) * 2.0 + (a + c + g + i);
-    gl_FragColor = vec4(result * (1.0 / 16.0), 1.0);
+    gl_FragColor = vec4(result * (uWeight / 16.0), 1.0);
   }
 `;
 
@@ -142,7 +169,7 @@ export class KarisBloomPass extends Pass {
       vertexShader: VERT, fragmentShader: DOWN_FRAG, blending: NoBlending, depthTest: false, depthWrite: false,
     });
     this.upMat = new ShaderMaterial({
-      uniforms: { uSource: { value: null }, uRadius: { value: filterRadius } },
+      uniforms: { uSource: { value: null }, uRadius: { value: filterRadius }, uWeight: { value: MIP_ACCUM_WEIGHT } },
       vertexShader: VERT, fragmentShader: UP_FRAG, blending: AdditiveBlending, depthTest: false, depthWrite: false,
     });
     this.compositeMat = new ShaderMaterial({

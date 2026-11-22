@@ -93,7 +93,12 @@ export function showcaseSystem(): GenSystem {
     mk({ type: 'lava', au: 0.2, seed: 101, kind: 'rocky', radiusEarth: 1.1, insolation: 12 }),
     mk({ type: 'desert', au: 0.6, seed: 202, kind: 'rocky', radiusEarth: 0.9, insolation: 1.8 }),
     mk({ type: 'ocean', au: 1.0, seed: 303, kind: 'rocky', radiusEarth: 1.0, insolation: 1.0, inHZ: true }),
-    mk({ type: 'rocky', au: 1.6, seed: 404, kind: 'super-earth', radiusEarth: 1.7, insolation: 0.4 }),
+    // P2-2: massEarth left at the default (1) here would give this body a
+    // physically-absurd bulk density (~0.2 Earth) once derivePlanetParams()
+    // actually reads mass/radius — enough to trip the new atmosphere-retention
+    // gate and strip its atmosphere in the showcase demo. Scaled with the same
+    // r^3.7 rocky mass-radius law system-gen.ts uses (PLANET_SIZE.rocky).
+    mk({ type: 'rocky', au: 1.6, seed: 404, kind: 'super-earth', radiusEarth: 1.7, massEarth: 7.12, insolation: 0.4 }),
     mk({ type: 'gas', au: 3.4, seed: 505, kind: 'gas-giant', radiusEarth: 11, massEarth: 300, insolation: 0.09, isGasGiant: true, hasRings: true }),
     mk({ type: 'ice', au: 6.0, seed: 606, kind: 'ice-giant', radiusEarth: 4.2, massEarth: 17, insolation: 0.03, isGasGiant: true, hasRings: true }),
   ];

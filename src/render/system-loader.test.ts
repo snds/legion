@@ -14,8 +14,6 @@ import { entityExists } from 'bitecs';
 
 vi.mock('./objects', () => ({
   createStarMesh: () => new Group(),
-  createPlanetMesh: () => new Group(),
-  createMoonMesh: () => new Group(),
   createBobMesh: () => new Group(),
   createOrbitLine: (_el: unknown, opts?: { bodyName?: string }) => {
     const g = new Group();
@@ -23,7 +21,6 @@ vi.mock('./objects', () => ({
     return g;
   },
   unregisterStarMesh: vi.fn(),
-  unregisterPlanetMesh: vi.fn(),
   unregisterOrbitLine: vi.fn(),
 }));
 vi.mock('./scene-objects', () => ({
@@ -41,9 +38,6 @@ vi.mock('./particles', () => ({
 }));
 vi.mock('./asteroid-belt', () => ({
   createAsteroidBelt: () => ({ group: new Group() }),
-}));
-vi.mock('./procedural-textures', () => ({
-  hasProceduralRecipe: () => false,
 }));
 
 // Stage-A warm-up fetches (Sol textures + exoplanet sidecar) must not hit the
@@ -65,17 +59,19 @@ function makeCtx(): SystemLoaderCtx {
 }
 
 describe('instantiateLocalSystem — lifecycle', () => {
-  it('EE: creates star + 7 planets + 3 bobs, registers render objects, mounts groups', () => {
+  it('EE: creates star + 7 planets + 6 moons + 3 bobs, registers render objects, mounts groups', () => {
     const ctx = makeCtx();
     const h = instantiateLocalSystem(ctx, 'ee', null);
     expect(h.systemId).toBe('ee');
-    expect(h.eids).toHaveLength(11);      // 1 star + 7 planets + 3 bobs (no EE moons)
+    // 1 star + 7 planets + 6 moons (P2-8: Remus/Ymir/Surtr/Thrym/Elivagar/Hvergelmir) + 3 bobs
+    expect(h.eids).toHaveLength(17);
     expect(h.bobEids).toHaveLength(3);
-    expect(ctx.renderObjectMap.size).toBe(11);
+    expect(ctx.renderObjectMap.size).toBe(17);
     // Everything the handle reports is a live child of layers.local
     expect(ctx.layers.local.children.length).toBe(h.groups.length);
-    // star + 7 planets + 7 orbits + 1 station + 3 bobs + comet body+line + 2 belts (main + outer debris) + heliopause
-    expect(h.groups).toHaveLength(24);
+    // star + 7 planets + 7 orbits + 6 moons + 1 station + 3 bobs + comet body+line
+    // + 2 belts (main + outer debris) + heliopause
+    expect(h.groups).toHaveLength(30);
     h.dispose();
   });
 

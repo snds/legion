@@ -184,16 +184,30 @@ const via = (lo: number, mid: number, hi: number, t: number): number =>
 
 /** WARMTH owns: latitudeIce, treeline, moisture, aridBelts, lapseRate, cloudCover.
  *  Colder is also DRIER (cold air holds less water) and has stronger latitudinal
- *  contrast — the LGM lesson — so those move together, not independently. */
-export function applyWarmth(t: number, p: Record<string, number>): void {
-  p.latitudeIce = via(0.95, 0.5, 0.04, t);
+ *  contrast — the LGM lesson — so those move together, not independently.
+ *
+ *  `wetness` (0..1, default 1 = unchanged) dampens ONLY the cold-end (t<0.5)
+ *  growth of latitudeIce/snowfall — P2-23: those two extremes (0.95/1.35) were
+ *  calibrated against OCEAN_VARIANTS' Glacial state, a world with abundant
+ *  moisture to precipitate as snow/ice. Applied at full strength to a bone-dry
+ *  archetype (rocky/desert/lava), a cold body gains implausibly large polar
+ *  ice/snow coverage it has no water to support (real Mars: genuinely cold,
+ *  insolation ~0.53x Earth, yet its ice caps stay small — it's a desert, not
+ *  a glacial ocean world). The hot-end depletion (t>=0.5, toward 0) is left
+ *  untouched: a hot dry world correctly has even less ice regardless of how
+ *  little moisture it started with, so `wetness` only ever REDUCES the
+ *  cold-end target back toward the neutral midpoint, never expands it. */
+export function applyWarmth(t: number, p: Record<string, number>, wetness = 1): void {
+  const iceLo = 0.5 + (0.95 - 0.5) * wetness;
+  const snowLo = 0.75 + (1.35 - 0.75) * wetness;
+  p.latitudeIce = via(iceLo, 0.5, 0.04, t);
   p.treeline    = via(0.24, 0.09, 0.02, t);
   p.moisture    = via(0.55, 1.0, 1.22, t);
   p.aridBelts   = via(1.15, 0.8, 0.42, t);   // flatter gradient when warm
   p.lapseRate   = via(0.78, 0.55, 0.42, t);
   // Cloud cover is capped BELOW the white-out threshold (~0.6) on purpose: past
   // it the deck closes and the surface stops reading at all (caught in review).
-  p.snowfall    = via(1.35, 0.75, 0.12, t);   // cold worlds whiten far past their caps
+  p.snowfall    = via(snowLo, 0.75, 0.12, t);   // cold worlds whiten far past their caps
   p.cloudCover  = via(0.40, 0.55, 0.58, t);
 }
 
@@ -230,13 +244,13 @@ export function applyBiosphere(t: number, p: Record<string, number>): void {
 
 /** Every owned parameter at a given dial setting, computed WITHOUT touching the
  *  live world — this is the baseline the offset model measures hand edits from. */
-export function masterValues(s: SystemicState): {
+export function masterValues(s: SystemicState, wetness = 1): {
   preset: Record<string, number>;
   macro: Record<string, number>;
 } {
   const preset: Record<string, number> = {};
   const macro: Record<string, number> = {};
-  applyWarmth(s.warmth, preset);
+  applyWarmth(s.warmth, preset, wetness);
   applyHydrosphere(s.hydrosphere, preset, macro);
   applyTectonics(s.tectonics, preset, macro);
   applyBiosphere(s.biosphere, preset);

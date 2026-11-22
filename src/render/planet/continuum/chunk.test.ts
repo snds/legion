@@ -1,16 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { rootNode, childNodes } from '../cube-sphere';
+import { Mesh, type ShaderMaterial } from 'three';
+import { rootNode, childNodes, type Vec3 } from '../cube-sphere';
 import { allNodesAtLevel, isDescendant, selectChunkLeaves, uniformLevelForDistance } from './chunk-lod';
 import {
   parentNodeKey, nodeFromKey, nodeKey, CHUNK_MESH_GRID, meshGridForLevel,
-  texResForLevel, texResCoarseForLevel, texResStreamForLevel,
+  texResForLevel, texResCoarseForLevel, texResStreamForLevel, estimatedBuildCostMs,
 } from './chunk-types';
 import { sampleHeightfieldChunk } from './chunk-sample';
 import { meshHeightfieldChunk } from './chunk-mesher';
 import {
   canPolishCover, canWarmPrefetch, coverCatchUpNeeded, coverTickLimits,
   coverTiming, readyIdealCoversLeaf, selectChunkBuildQuality, shouldKeepStickyLeaf,
-  pickPolishCandidate, type PolishCandidate,
+  pickPolishCandidate, ChunkPool, type PolishCandidate,
 } from './chunk-pool';
 import { createGeneratorBundle, sampleSurface } from '../generators';
 import type { GenPlanet } from '../../../data/system-gen';
@@ -295,6 +296,22 @@ describe('continuum chunks', () => {
     expect(coverTickLimits(true, true, 96)).toEqual({ budgetMs: 12, maxBuilds: 4 });
   });
 
+  // P2-0 fix #2 — the estimated-cost model the chunk pool uses to predict
+  // whether a polish candidate is expensive BEFORE starting it (real time
+  // cap, not a build-count cap). Calibrated against the same measured
+  // benchmark points texResNextUpgrade's own comment cites.
+  it('predicts bake cost roughly matching the measured benchmark points', () => {
+    expect(estimatedBuildCostMs(16)).toBeCloseTo(5.6, 0);
+    expect(estimatedBuildCostMs(96)).toBeGreaterThan(150);
+    expect(estimatedBuildCostMs(96)).toBeLessThan(260);
+    expect(estimatedBuildCostMs(384)).toBeGreaterThan(2500);
+  });
+
+  it('grows monotonically with resolution', () => {
+    expect(estimatedBuildCostMs(32)).toBeLessThan(estimatedBuildCostMs(96));
+    expect(estimatedBuildCostMs(96)).toBeLessThan(estimatedBuildCostMs(256));
+  });
+
   it('skips warm prefetch and polish while cover catch-up is active', () => {
     expect(canWarmPrefetch(true, false, 0, 0, 3, 0.8, 31)).toBe(false);
     expect(canPolishCover(true, 0, false, 4)).toBe(false);
@@ -374,5 +391,61 @@ describe('continuum chunks', () => {
     // to clear the 96 floor — three small steps cost ~2.3x more serial CPU
     // per leaf, which is why the facing population stalled near stream res.
     expect(oneJumpMs).toBeLessThan(threeStepMs);
+  });
+});
+
+// P2-17 — ChunkPool's moon-mode uniform wiring: airless flag (constructor,
+// static per body) and setPlanetshine() (live setter). Both must reach
+// actual resident chunk materials — inspected here via the pool's public
+// `.group` (chunk meshes are its children), never private internals.
+describe('ChunkPool moon mode (P2-17)', () => {
+  const bundle = createGeneratorBundle(rocky);
+  /** Close view-LOD camera — forces at least one real chunk build within a
+   *  handful of ticks (mirrors chunk-pool-cache.test.ts's own CLOSE_CAM). */
+  const CLOSE_CAM: Vec3 = [0, 0, 1.15];
+
+  function firstResidentMat(pool: ChunkPool): ShaderMaterial {
+    pool.updateLod(CLOSE_CAM, CLOSE_CAM, 0, true);
+    for (let i = 0; i < 10 && pool.pendingCount > 0; i++) pool.tick(1 / 60);
+    const mesh = pool.group.children.find((c): c is Mesh => c instanceof Mesh);
+    expect(mesh).toBeTruthy();
+    return mesh!.material as ShaderMaterial;
+  }
+
+  it('airless=false (default) builds chunks with uAirless at 0', () => {
+    const pool = new ChunkPool(1, () => bundle, () => 0.04);
+    expect(firstResidentMat(pool).uniforms.uAirless.value).toBe(0);
+    pool.dispose();
+  });
+
+  it('airless=true builds chunks with uAirless at 1', () => {
+    const pool = new ChunkPool(1, () => bundle, () => 0.04, undefined, true);
+    expect(firstResidentMat(pool).uniforms.uAirless.value).toBe(1);
+    pool.dispose();
+  });
+
+  it('setPlanetshine() called before a build reaches the resident chunk material', () => {
+    const pool = new ChunkPool(1, () => bundle, () => 0.04, undefined, true);
+    pool.setPlanetshine([0, 1, 0], [0.6, 0.7, 0.9], 0.22);
+    const u = firstResidentMat(pool).uniforms;
+    expect(u.uBounceStrength.value).toBe(0.22);
+    expect(u.uBounceDir.value).toMatchObject({ x: 0, y: 1, z: 0 });
+    expect(u.uBounceColor.value).toMatchObject({ x: 0.6, y: 0.7, z: 0.9 });
+    pool.dispose();
+  });
+
+  it('setPlanetshine() called after a build updates the already-resident chunk material too', () => {
+    const pool = new ChunkPool(1, () => bundle, () => 0.04, undefined, true);
+    const mat = firstResidentMat(pool);
+    expect(mat.uniforms.uBounceStrength.value).toBe(0);
+    pool.setPlanetshine([1, 0, 0], [1, 0.5, 0.2], 0.18);
+    expect(mat.uniforms.uBounceStrength.value).toBe(0.18);
+    pool.dispose();
+  });
+
+  it('setPlanetshine() defaults to strength 0 (no-op) on an ordinary planet pool', () => {
+    const pool = new ChunkPool(1, () => bundle, () => 0.04);
+    expect(firstResidentMat(pool).uniforms.uBounceStrength.value).toBe(0);
+    pool.dispose();
   });
 });

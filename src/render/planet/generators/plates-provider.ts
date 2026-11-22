@@ -5,6 +5,7 @@ import { warpDir, fbm3, snoise3 } from '../simplex';
 import type { Vec3 } from '../cube-sphere';
 import type { PlateTectonicsProvider } from './types';
 import { iceCapCoverage } from './ice';
+import { getCraterField, sampleCraterHeight } from './craters';
 
 function clamp01(x: number): number {
   return Math.max(0, Math.min(1, x));
@@ -114,6 +115,19 @@ function canyonField(
   return -carve * mask * dv * depth;
 }
 
+/** Real airless bodies (Mercury/Luna-class) have no plate tectonics — no
+ *  continent-scale mountain ranges — so the plate-sim macro shape is
+ *  flattened toward a gentle mid-elevation baseline, letting the dedicated
+ *  Lague crater stamps (craters.ts) read as the dominant relief instead of
+ *  one faint ripple lost under terrain built for tectonically active
+ *  worlds. Shared by terrainHeight() and the public macroHeight() so the
+ *  climate/albedo ramp (which reads macroHeight as `climateElev`) and the
+ *  mesh height stay consistent. */
+function flattenMacroForAirless(macro: number, p: PlanetRenderParams): number {
+  if (p.type !== 'rocky' || p.hasAtmosphere) return macro;
+  return 0.5 + (macro - 0.5) * 0.12;
+}
+
 function syncFieldFromMacro(field: PlateField, m: MacroParams): void {
   field.uplift = m.uplift;
   field.rangeWidth = m.rangeWidth;
@@ -138,13 +152,26 @@ export function createPlateProvider(
     syncFieldFromMacro(field, mp);
     const seed3 = p.noiseSeed as Vec3;
     const wdir = warpDir(dir, p.warp, seed3);
-    const macro = macroHeight(field, wdir);
+    // Rocky-airless (Mercury/Vulcan/Luna-class, docs/planet-visual-realism.md
+    // §2.4(a)): dedicated Lague crater stamps (below) replace the generic
+    // hash-lattice craterField(), on top of a flattened macro (see
+    // flattenMacroForAirless) and a dialed-back ridged-fBm bump amplitude —
+    // otherwise craters are one faint ripple lost under terrain built for
+    // tectonically active worlds. Thin-atmosphere Rocky (Mars/Pax) keeps its
+    // existing recipe untouched (out of scope).
+    const macro = flattenMacroForAirless(macroHeight(field, wdir), p);
+    const isAirlessRocky = p.type === 'rocky' && !p.hasAtmosphere;
     const ds = Math.max(1, mp.detailScale);
     const sx = dir[0] * 1.7 * ds, sy = dir[1] * 1.7 * ds, sz = dir[2] * 1.7 * ds;
     const d = fbm3(sx + 11.3, sy + 47.7, sz + 83.1) * 0.5 + 0.5;
+    const reliefScale = isAirlessRocky ? 0.15 : 1;
     const relief = 0.16 + 0.16 * Math.max(0, Math.min(1, (macro - 0.55) / 0.3));
-    let h = macro + (d - 0.5) * relief * (0.5 + 0.5 * p.ridged);
-    h += craterField(wdir, mp.craters, mp.craterFreq, mp.craterDepth);
+    let h = macro + (d - 0.5) * relief * (0.5 + 0.5 * p.ridged) * reliefScale;
+    if (isAirlessRocky) {
+      h += sampleCraterHeight(wdir, getCraterField(seed));
+    } else {
+      h += craterField(wdir, mp.craters, mp.craterFreq, mp.craterDepth);
+    }
     h += canyonField(wdir, mp.canyons, mp.canyonFreq, mp.canyonDepth, seed3);
     const cap = iceCapCoverage(dir, h, p.seaLevel, p.latitudeIce, seed3);
     if (cap > 0) {
@@ -160,7 +187,7 @@ export function createPlateProvider(
     macroHeight(dir: Vec3) {
       const p = paramsRef.current;
       syncFieldFromMacro(field, macroRef.current);
-      return macroHeight(field, warpDir(dir, p.warp, p.noiseSeed as Vec3));
+      return flattenMacroForAirless(macroHeight(field, warpDir(dir, p.warp, p.noiseSeed as Vec3)), p);
     },
     terrainHeight,
     invalidate() {

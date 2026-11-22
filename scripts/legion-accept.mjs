@@ -65,6 +65,18 @@ const HEADLESS = flag('headless', 'false') !== 'false';
 const SETTLE_MS = Number(flag('settle-ms', 5000));
 const DEMO_SETTLE_MS = Number(flag('demo-settle-ms', 8000));
 const MOTION_FPS = Number(flag('motion-fps', 12));
+// P2-9: seeds sampled per archetype for the "stills" pass (Audit A7: the
+// accept harness scored exactly ONE fixed seed per archetype — the
+// EXEMPLARS seed baked into planet-lab.ts — so a systemic-dial regression
+// that only shows up at a different seed was never caught). Default 3;
+// `--seeds 1` restores the old single-seed-only behaviour for fast iteration.
+const SEEDS_PER_TYPE = Math.max(1, Number(flag('seeds', 3)));
+// Mirrors planet-lab.ts's `seeds` record — the canonical EXEMPLARS seed per
+// archetype. Duplicated here (small, stable, already duplicated the same way
+// as PLANET_TYPES above) so this script has no runtime dependency on the Lab
+// module graph. Sweep = canonical, canonical+1, canonical+2, … so seed #0 of
+// the sweep is directly comparable to the existing single-seed captures.
+const EXEMPLAR_SEEDS = { rocky: 1001, ocean: 2002, desert: 3003, lava: 4004, ice: 5005, gas: 6006 };
 
 const MODE = DEMO_LIST.length ? 'demo' : 'planet';
 
@@ -204,9 +216,13 @@ async function poseSun(page, mode) {
   }
 }
 
-async function capturePlanetStill(page, type, { id, au, pose, clouds = true, idleMs = SETTLE_MS }, attempt = 0) {
+async function capturePlanetStill(page, type, { id, au, pose, clouds = true, idleMs = SETTLE_MS, seed }, attempt = 0) {
   const eng = ENGINE === 'legacy' ? '' : '&engine=continuum';
-  const url = `${BASE}/?lab=planet${eng}&accept=1&type=${encodeURIComponent(type)}&au=${au}&w=1920&h=1080&dpr=1`;
+  // P2-9: optional &seed=<n> (planet-lab.ts applies it as a boot-time override
+  // of the archetype's canonical EXEMPLARS seed) — lets the harness sample
+  // seed variance per archetype instead of only ever the one fixed seed.
+  const seedQS = seed != null ? `&seed=${seed}` : '';
+  const url = `${BASE}/?lab=planet${eng}&accept=1&type=${encodeURIComponent(type)}&au=${au}${seedQS}&w=1920&h=1080&dpr=1`;
   console.log(`[still] ${id} → ${url}`);
   try {
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 120000 });
@@ -244,7 +260,7 @@ async function capturePlanetStill(page, type, { id, au, pose, clouds = true, idl
   } catch (err) {
     if (attempt < 2 && /Execution context was destroyed|Target closed|navigation/i.test(String(err))) {
       console.warn(`[still] ${id} retry after ${err.message?.split('\n')[0] || err}`);
-      await capturePlanetStill(page, type, { id, au, pose, clouds, idleMs }, attempt + 1);
+      await capturePlanetStill(page, type, { id, au, pose, clouds, idleMs, seed }, attempt + 1);
       return;
     }
     throw err;
@@ -329,6 +345,29 @@ async function captureDemoStill(page, demoId) {
   console.log(`[demo] wrote ${out}`);
 }
 
+/**
+ * P2-9 — sample SEEDS_PER_TYPE seeds at ONE representative pose (0.8 AU day,
+ * the same framing as the primary look reference) per archetype, instead of
+ * the single fixed EXEMPLARS seed every prior pass captured. Writes to a
+ * dedicated `seed-sweep/` subfolder so it never collides with (or gets
+ * mistaken for) the canonical single-seed reference stills. Human review
+ * (docs/render-acceptance-harness.md) flags any seed that reads broken/
+ * degenerate — e.g. a systemic bundle that only breaks at an extreme the
+ * canonical seed happens not to land on.
+ */
+async function capturePlanetSeedSweep(page, type, prefix) {
+  if (SEEDS_PER_TYPE <= 1) return;
+  const base = EXEMPLAR_SEEDS[type] ?? 1000;
+  const outDir = join(continuumRefs(), 'stills', 'seed-sweep');
+  mkdirSync(outDir, { recursive: true });
+  for (let i = 0; i < SEEDS_PER_TYPE; i++) {
+    const seed = base + i;
+    const id = join('seed-sweep', `${prefix}-seed${seed}`);
+    await capturePlanetStill(page, type, { id, au: 0.8, pose: 'day', seed });
+  }
+  console.log(`[seed-sweep] ${type}: ${SEEDS_PER_TYPE} seed(s) → refs/continuum/stills/seed-sweep/${prefix}-seed*.png`);
+}
+
 async function runPlanetType(page, type) {
   if (!PLANET_TYPES.includes(type)) {
     console.warn(`[accept] unknown planet type "${type}" — skip`);
@@ -349,6 +388,7 @@ async function runPlanetType(page, type) {
         id: `${prefix}-0.8-day-noclouds`, au: 0.8, pose: 'day', clouds: false,
       });
     }
+    await capturePlanetSeedSweep(page, type, prefix);
   }
   if (ONLY.has('perf') && ENGINE === 'continuum') {
     const perfTag = type === 'ocean' ? 'lab-continuum' : `lab-continuum-${type}`;

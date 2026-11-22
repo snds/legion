@@ -50,6 +50,16 @@ export interface UpdateCtx {
   dt: number;
   fovYRad: number;
   viewportH: number;
+  /**
+   * P2-19: the Object3D the camera is currently locked onto (CameraController's
+   * own `trackedObject`), or null/undefined when not tracking. Continuum globes
+   * use this to gate the approach-flight camera nudge (applyApproachFlightCamera)
+   * to the ACTUALLY-focused body only — every registered globe gets an `update()`
+   * call each frame regardless of focus, but only one of them may ever be allowed
+   * to touch the shared camera. Optional so the legacy (non-Continuum) PlanetGlobe
+   * and the Lab's own update loop, which never read this, don't need to supply it.
+   */
+  trackedRoot?: Object3D | null;
 }
 
 const NODE_RES = 16;    // grid resolution per quadtree leaf

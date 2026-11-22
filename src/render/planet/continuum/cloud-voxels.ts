@@ -6,6 +6,7 @@ import {
   continuumCloudBrickFrag, continuumCloudBrickVert,
   continuumCloudShellFrag, continuumCloudShellVert,
 } from './shaders';
+import { earthEquivalentAu } from './body-scale';
 
 /** AU distance below which near voxel bricks engage (airplane / low orbit). */
 export const NEAR_CLOUD_AU = 0.12;
@@ -90,8 +91,12 @@ export class ContinuumClouds {
     this.group.visible = on;
   }
 
+  /** P2-24 — normalize the shared global camera-distance AU to THIS body's
+   *  own radius before storing (see body-scale.ts doc comment), so the
+   *  `NEAR_CLOUD_AU` engage gate below is body-relative instead of a fixed
+   *  AU number shared by every planet regardless of size. */
   setViewDistanceAu(au: number): void {
-    this.viewAu = au;
+    this.viewAu = earthEquivalentAu(au, this.radius);
   }
 
   /** Shared weather clock for shell + ground shadow field. */

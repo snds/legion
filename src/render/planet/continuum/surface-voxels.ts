@@ -9,6 +9,7 @@ import { sampleSurface, type GeneratorBundle } from '../generators';
 import type { Vec3 } from '../cube-sphere';
 import { continuumSurfaceBrickFrag, continuumSurfaceBrickVert } from './shaders';
 import { NEAR_CLOUD_AU } from './cloud-voxels';
+import { earthEquivalentAu } from './body-scale';
 
 /** Engage slightly tighter than cloud bricks (spec §5.2). */
 export const NEAR_SURFACE_AU = NEAR_CLOUD_AU * 0.85; // ~0.102
@@ -191,8 +192,13 @@ export class ContinuumSurfaceVoxels {
     }
   }
 
+  /** P2-24 — normalize the shared global camera-distance AU to THIS body's
+   *  own radius before storing (see body-scale.ts doc comment), so the
+   *  NEAR_SURFACE_AU/SURFACE_EXIT_AU/SURFACE_WARM_AU engage/exit/warm gates
+   *  below are body-relative instead of a fixed AU number shared by every
+   *  planet regardless of size. */
   setViewDistanceAu(au: number): void {
-    this.viewAu = au;
+    this.viewAu = earthEquivalentAu(au, this.radius);
   }
 
   get voxelBlend(): number {
