@@ -9,6 +9,7 @@ import type { GeneratorBundle } from '../generators';
 import { sampleHeightfieldChunk } from './chunk-sample';
 import { makeChunkOutlineLines, meshHeightfieldChunk } from './chunk-mesher';
 import { isDescendant, prefetchApproachLeaves, selectChunkLeaves, sortLeavesByFacing, uniformLevelForDistance } from './chunk-lod';
+import { earthEquivalentAu } from './body-scale';
 import {
   CHUNK_BUILDS_PER_FRAME, CHUNK_BUILD_MS_BUDGET, LOD_FADE_SEC, LOD_HYSTERESIS,
   LOD_MIN_REBUILD_MS, LOD_SPIN_ANGLE, LOD_STICKY_MOVING, LOD_STICKY_PASSES,
@@ -346,8 +347,15 @@ export class ChunkPool {
 
   get showChunksOn(): boolean { return this.showChunks; }
 
+  /** P2-24 — normalize the shared global camera-distance AU to THIS body's
+   *  own radius before storing (see body-scale.ts doc comment): every
+   *  `this.viewAu` comparison below (closeBand, uniformLevelForDistance,
+   *  selectChunkLeaves/prefetchApproachLeaves's viewAu gates in chunk-lod.ts,
+   *  the cover-quality gate, pickPolishCandidate, texResCeilingForAu) reads
+   *  the normalized value, so the whole approach/LOD/polish ladder becomes
+   *  body-relative for free from this one seam. */
   setViewDistanceAu(au: number): void {
-    this.viewAu = au;
+    this.viewAu = earthEquivalentAu(au, this.radius);
   }
 
   /** Build queue depth — surface voxels wait until this is quiet. */

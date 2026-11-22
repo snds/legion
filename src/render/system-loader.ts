@@ -5,8 +5,9 @@
 // local tier can be disposed and re-instantiated at runtime.
 //
 // Staged loading for focusable systems (Sol, ε Eridani):
-//   Stage A "preload"  (single-click) — warm the HTTP cache for the
-//     system's file textures + the exoplanet sidecar. Idempotent,
+//   Stage A "preload"  (single-click) — kicks the real per-body albedo
+//     photo loads (real-albedo.ts, an actual THREE.TextureLoader load, not
+//     just an HTTP-cache warm-up) + the exoplanet sidecar. Idempotent,
 //     fire-and-forget, low priority.
 //   Stage B "activate" (double-click) — dispose the active system and
 //     instantiate the new one, DEFERRED to a frame where the local tier
@@ -34,6 +35,7 @@ import {
   unregisterStarMesh, unregisterOrbitLine,
 } from './objects';
 import { createContinuumPlanetMesh, createContinuumMoonMesh } from './planet-continuum-adapter';
+import { preloadRealAlbedo } from './planet/continuum/real-albedo';
 import { computeInsolation } from '../data/system-gen';
 import type { ContinuumGlobe } from './planet/continuum';
 import { registerContinuumGlobe, unregisterContinuumGlobe } from './planet/continuum/registry';
@@ -391,24 +393,38 @@ export function getActiveSystemHandle(): LocalSystemHandle | null {
   return activeHandle;
 }
 
-/** Stage A — warm the browser HTTP cache for the system's file assets and
- *  kick the exoplanet sidecar. Idempotent, fire-and-forget, low priority. */
+/** Stage A — kick the real per-body albedo photo loads (real-albedo.ts) and
+ *  the exoplanet sidecar. Idempotent, fire-and-forget, low priority.
+ *
+ *  Audit fix: this used to only `fetch()` each texturePath to warm the HTTP
+ *  cache — nothing ever loaded the bytes as a texture or fed `uAlbedoMap`.
+ *  `preloadRealAlbedo` now does the real `THREE.TextureLoader.load()`
+ *  directly, so by the time Stage B activates the system (usually well
+ *  after this ran — single-click then double-click) the photo has often
+ *  already decoded, same "no visible pop-in" property the old fetch-warm
+ *  aimed for. planet-continuum-adapter.ts ALSO calls `preloadRealAlbedo`
+ *  directly at body-construction time (idempotent, so redundant here is
+ *  harmless) — that is the correctness path for a body built without Stage A
+ *  ever running (e.g. the `?system=sol` direct-boot path). */
 export function preloadSystem(systemId: LoadableSystemId): void {
   if (preloaded.has(systemId)) return;
   preloaded.add(systemId);
   void loadExoplanets(); // powers resolveSystem's real-planet path (idempotent)
   if (systemId !== 'sol') return; // EE assets are procedural (IndexedDB-cached)
-  const paths = new Set<string>();
   for (const p of SOL_PLANETS) {
-    if (p.texturePath) paths.add(p.texturePath);
-    if (p.ringTexturePath) paths.add(p.ringTexturePath);
+    if (p.texturePath) preloadRealAlbedo(p.name, p.texturePath);
   }
-  for (const m of SOL_MOONS) if (m.texturePath) paths.add(m.texturePath);
-  for (const path of paths) {
-    // Stage B's TextureLoader.load() then hits a hot cache, so the textures
-    // resolve inside the zoom transition — no visible pop-in.
+  for (const m of SOL_MOONS) {
+    if (m.texturePath) preloadRealAlbedo(m.name, m.texturePath);
+  }
+  // Ring alpha textures have no real-sampler consumer yet (rings render via
+  // a procedural density LUT — rings.ts/RING_FRAG — not an image), so this
+  // one path still just warms the HTTP cache, unchanged from before.
+  const ringPaths = new Set<string>();
+  for (const p of SOL_PLANETS) if (p.ringTexturePath) ringPaths.add(p.ringTexturePath);
+  for (const path of ringPaths) {
     void fetch(asset(path), { priority: 'low' } as RequestInit)
-      .catch(() => { /* warm-up only — Stage B loads normally regardless */ });
+      .catch(() => { /* warm-up only */ });
   }
 }
 

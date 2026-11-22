@@ -70,16 +70,20 @@ const continuumCloudFieldGlsl = /* glsl */ `
     f += 0.28 * cFbm(p * (18.0 * det) + vec3(uCloudTime * 0.03 * flow, 0.0, 0.0));
     float region = cFbm(p * 1.8 + 9.0);
     f += (region - 0.5) * 0.25;
-    // F4: this field has no turb/region-driven amplitude (cheap ground-shadow
+    // P2-24: this field has no turb/region-driven amplitude (cheap ground-shadow
     // approximation), so its raw f sits lower on average than the cloud shell's
-    // (Monte Carlo: mean ~0.62 vs ~0.79). At the shell's 0.14 window offset the
-    // shadow term was nearly always zero once F4 lowered uCloudCover for the
-    // shell's own overcast fix, so a 0.25 offset restores visible ground-shadow
-    // contrast at the new lower cover without touching the shear/advection
-    // above (F1 gate) or the shell's own curve.
-    float c0 = 1.0 - uCloudCover * 0.85;
-    float t = clamp((f - (c0 - 0.25)) / 0.28, 0.0, 1.0);
-    return t * t * (3.0 - 2.0 * t);
+    // (Monte Carlo: mean ~0.62 vs ~0.79). The old curve shifted this threshold
+    // by uCloudCover itself (c0 = 1.0 - uCloudCover * 0.85), which saturates:
+    // once the moving threshold drops below f's mean the whole field pins at
+    // t=1 well before uCloudCover reaches 1, so moderate cover already reads
+    // as a fully shadowed disc. Fixed threshold (centered on f's own mean, so
+    // roughly half the field is above/below it, preserving patchiness) plus a
+    // final linear multiply by uCloudCover — same shape as continuumCloudBrickFrag's
+    // dens = band * uCover * smoothstep(...) — keeps density proportional to
+    // cover across its whole range instead of saturating early.
+    float t = clamp((f - 0.48) / 0.28, 0.0, 1.0);
+    float shape = t * t * (3.0 - 2.0 * t);
+    return shape * uCloudCover;
   }
 `;
 
@@ -534,9 +538,15 @@ export const continuumCloudShellFrag = /* glsl */ `
     // Clear vs overcast patches (cloudRegion).
     float region = fbm(p * (1.4 + 1.6 * clamp(uRegion, 0.0, 1.0)) + 9.0);
     f += (region - 0.5) * (0.15 + 0.35 * clamp(uRegion, 0.0, 1.0));
-    float c0 = 1.0 - uCover * 0.85;
-    float t = clamp((f - (c0 - 0.14)) / 0.28, 0.0, 1.0);
-    float dens = t * t * (3.0 - 2.0 * t);
+    // P2-24: fixed threshold (centered on this field's own Monte Carlo mean
+    // ~0.79, so roughly half the shape is above/below it) plus a final linear
+    // multiply by uCover — mirrors continuumCloudBrickFrag's
+    // dens = band * uCover * smoothstep(...) — instead of the old moving-
+    // threshold curve (c0 = 1.0 - uCover * 0.85) that saturated the whole
+    // shell to t=1 well before uCover reached 1, reading as total overcast
+    // at moderate cover.
+    float t = clamp((f - 0.65) / 0.28, 0.0, 1.0);
+    float dens = t * t * (3.0 - 2.0 * t) * uCover;
     dens *= mix(0.55, 1.0, smoothstep(0.08, 0.55, dens));
     dens *= mix(1.0, 0.72 + 0.28 * dens, clamp(uWisp, 0.0, 1.0));
     if (dens < 0.03) discard;

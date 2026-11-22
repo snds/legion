@@ -60,7 +60,9 @@ export interface PlanetRenderParams {
   bandColorB: RGB;
   bandCount: number;         // number of latitude cloud bands
   bandTurbulence: number;    // swirl/turbulence in the bands
-  stormChance: number;       // probability the body sports a great-spot storm
+  bandContrast: number;      // 0..1 — how strongly bands read (ice giants: barely visible)
+  stormChance: number;       // probability of the primary seeded storm feature (gas: the
+                              // giant anticyclone; ice: the transient bright-streak population)
 
   // ── atmosphere shell (P2) ──
   hasAtmosphere: boolean;
@@ -119,6 +121,7 @@ interface Preset {
   bandColorB: RGB;
   bandCount: number;
   bandTurbulence: number;
+  bandContrast: number;
   stormChance: number;
   hasAtmosphere: boolean;
   atmosphere: RGB;
@@ -167,7 +170,7 @@ export const PRESETS: Record<PlanetVisualType, Preset> = {
     // Slightly softer ridged/displacement — orbit silhouette + albedo isolines.
     displacement: 0.034, ridged: 0.48, warp: 0.4, latitudeIce: 0.12, moisture: 0.2, aridBelts: 0.7, rainShadow: 0.5, orographic: 0.5, lapseRate: 0.5, treeline: 0.10, windBearing: 0.2, continental: 0.6, altitudeDry: 0.6, patchiness: 0.35, lushDepth: 0.5, snowfall: 0.75,
     roughness: 0.9,
-    bandColorA: G0, bandColorB: G0, bandCount: 0, bandTurbulence: 0, stormChance: 0,
+    bandColorA: G0, bandColorB: G0, bandCount: 0, bandTurbulence: 0, bandContrast: 0, stormChance: 0,
     hasAtmosphere: true, atmosphere: [0.55, 0.42, 0.32], atmosphereDensity: 0.38, nightLights: 0,
     cloudCover: 0.08, cloudShadow: 0.55, cloudFlow: 0.4, cloudTurb: 0.3, cyclones: 0.1, cloudTerrain: 0.5, cloudDetail: 1.6, cloudSpeed: 0.12, cycloneSize: 0.11, cloudWisp: 0.55, cloudRegion: 0.75, lightning: 0.8,
     emissive: G0, emissiveStrength: 0,
@@ -188,19 +191,24 @@ export const PRESETS: Record<PlanetVisualType, Preset> = {
     seaLevel: 0.55, oceanShallow: [0.10, 0.42, 0.52], oceanDeep: [0.02, 0.09, 0.22],
     displacement: 0, ridged: 0.45, warp: 0.6, latitudeIce: 0.3, moisture: 1.0, aridBelts: 0.8, rainShadow: 0.65, orographic: 0.7, lapseRate: 0.55, treeline: 0.09, windBearing: 0.25, continental: 0.5, altitudeDry: 0.55, patchiness: 0.4, lushDepth: 1.0, snowfall: 0.75,
     roughness: 0.25,
-    bandColorA: G0, bandColorB: G0, bandCount: 0, bandTurbulence: 0, stormChance: 0,
+    bandColorA: G0, bandColorB: G0, bandCount: 0, bandTurbulence: 0, bandContrast: 0, stormChance: 0,
     hasAtmosphere: true, atmosphere: [0.30, 0.52, 0.92], atmosphereDensity: 1.0, nightLights: 0.8,
     // F4 (2026-08-06) briefly cut cloudCover 0.55->0.22 / raised cloudShadow
     // 0.6->0.75 here to fix a Continuum-only whiteout — but this Preset is
     // SHARED (Legacy + Continuum both call derivePlanetParams against it for
     // real, non-lab gameplay), so that thinned every Legacy ocean world too.
-    // Reverted to the pre-F4 shipping values. Continuum's cloud-shell curve
-    // additively folds cloudTurb/cloudRegion into its noise sum (see
-    // continuum/shaders.ts) and saturates at this cover, but Continuum only
-    // ever runs inside the Generator Lab (continuum/index.ts header), which
-    // applies lab-ideal.json's cloudCover:0.22/cloudShadow:0.75 override onto
-    // PRESETS *before* the globe is built (planet-lab.ts applyLab) — so the
-    // Continuum-only thinning still lands there without touching Legacy.
+    // Reverted to the pre-F4 shipping values.
+    // P2-24 correction: the "Continuum only ever runs inside the Generator
+    // Lab, so lab-ideal.json's cloudCover:0.22 override covers real boot too"
+    // premise above was WRONG — the real boot path (planet-lab.ts is a dev
+    // tool; ordinary Continuum globes are built straight from PRESETS) never
+    // calls applyLab()/refreshParams() with the lab override, so a real-boot
+    // Continuum Earth inherited this unmitigated 0.55 straight into the
+    // saturating cloud-shell/ground-shadow curves and whited out. Fixed at
+    // the root instead: continuum/shaders.ts's cloud density curves (shell +
+    // ground-shadow) no longer saturate well before uCloudCover reaches 1, so
+    // this shared 0.55 now renders correctly on both paths without needing a
+    // Lab-only override to compensate for a shader bug.
     cloudCover: 0.55, cloudShadow: 0.6, cloudFlow: 0.7, cloudTurb: 0.91, cyclones: 0.34, cloudTerrain: 0.8, cloudDetail: 1.45, cloudSpeed: 0.12, cycloneSize: 0.13, cloudWisp: 0.6, cloudRegion: 0.82, lightning: 0.8,
     emissive: G0, emissiveStrength: 0,
   },
@@ -214,7 +222,7 @@ export const PRESETS: Record<PlanetVisualType, Preset> = {
     seaLevel: 0, oceanShallow: G0, oceanDeep: G0,
     displacement: 0.05, ridged: 0.7, warp: 0.5, latitudeIce: 0.05, moisture: 0.08, aridBelts: 1.0, rainShadow: 0.8, orographic: 0.45, lapseRate: 0.5, treeline: 0.09, windBearing: 0.15, continental: 0.9, altitudeDry: 0.5, patchiness: 0.5, lushDepth: 0.7, snowfall: 0.75,
     roughness: 0.85,
-    bandColorA: G0, bandColorB: G0, bandCount: 0, bandTurbulence: 0, stormChance: 0,
+    bandColorA: G0, bandColorB: G0, bandCount: 0, bandTurbulence: 0, bandContrast: 0, stormChance: 0,
     hasAtmosphere: true, atmosphere: [0.82, 0.62, 0.40], atmosphereDensity: 0.5, nightLights: 0.15,
     cloudCover: 0.10, cloudShadow: 0.45, cloudFlow: 0.55, cloudTurb: 0.35, cyclones: 0.15, cloudTerrain: 0.5, cloudDetail: 1.6, cloudSpeed: 0.12, cycloneSize: 0.11, cloudWisp: 0.55, cloudRegion: 0.75, lightning: 0.8,
     emissive: G0, emissiveStrength: 0,
@@ -229,17 +237,28 @@ export const PRESETS: Record<PlanetVisualType, Preset> = {
     seaLevel: 0.4, oceanShallow: [1.0, 0.45, 0.10], oceanDeep: [0.9, 0.18, 0.03],
     displacement: 0.06, ridged: 0.85, warp: 0.35, latitudeIce: 0, moisture: 0, aridBelts: 0, rainShadow: 0, orographic: 0, lapseRate: 0.5, treeline: 0.09, windBearing: 0, continental: 0, altitudeDry: 0, patchiness: 0, lushDepth: 0, snowfall: 0.75,
     roughness: 0.7,
-    bandColorA: G0, bandColorB: G0, bandCount: 0, bandTurbulence: 0, stormChance: 0,
+    bandColorA: G0, bandColorB: G0, bandCount: 0, bandTurbulence: 0, bandContrast: 0, stormChance: 0,
     hasAtmosphere: true, atmosphere: [0.9, 0.35, 0.15], atmosphereDensity: 0.6, nightLights: 0,
     cloudCover: 0.08, cloudShadow: 0.4, cloudFlow: 0.35, cloudTurb: 0.5, cyclones: 0.0, cloudTerrain: 0.4, cloudDetail: 1.5, cloudSpeed: 0.12, cycloneSize: 0.11, cloudWisp: 0.45, cloudRegion: 0.6, lightning: 0.8,
     emissive: [1.0, 0.35, 0.08], emissiveStrength: 1.0,
   },
   ice: {
-    // "ice" as a Neptune-class ICE GIANT (Step 0: radius 3.5–8 R⊕ ⇒ giant).
+    // "ice" as a Neptune/Uranus-class ICE GIANT (Step 0: radius 3.5–8 R⊕ ⇒
+    // giant). Palette per docs/planet-visual-realism.md §2.2 — Uranus photo
+    // ramp (#D5FBFC/#BBE1E4/#93B8BE/#65868B): pale greenish-cyan, NOT the
+    // "cinematic cobalt" Neptune myth (Irwin et al. 2024 — Voyager contrast-
+    // stretch artifact; real Neptune is near-identical to Uranus). Both
+    // sub-looks default to this family. bandCount/bandContrast are clamped
+    // to the doc's 2-4 / ≤0.06 caps in derivePlanetParams regardless of this
+    // baseline (defensive against a future radius-scaling change).
     ramp: [], seaLevel: 0, oceanShallow: G0, oceanDeep: G0,
     displacement: 0, ridged: 0, warp: 0, latitudeIce: 0, moisture: 0, aridBelts: 0, rainShadow: 0, orographic: 0, lapseRate: 0.5, treeline: 0.09, windBearing: 0, continental: 0, altitudeDry: 0, patchiness: 0, lushDepth: 0, snowfall: 0.75, roughness: 0,
-    bandColorA: [0.42, 0.60, 0.78], bandColorB: [0.26, 0.44, 0.66],
-    bandCount: 9, bandTurbulence: 0.35, stormChance: 0.5,
+    bandColorA: [0.72, 0.86, 0.86], bandColorB: [0.50, 0.68, 0.68],
+    // Heavy methane-haze low-pass (§2.2): low turbulence + near-zero contrast
+    // — "almost featureless is correct here". stormChance is repurposed for
+    // giants of this class as the ~30% chance of 1-3 bright transient cloud
+    // streaks (not a great-spot oval).
+    bandCount: 3, bandTurbulence: 0.10, bandContrast: 0.06, stormChance: 0.3,
     hasAtmosphere: true, atmosphere: [0.45, 0.70, 0.90], atmosphereDensity: 1.1, nightLights: 0,
     cloudCover: 0, cloudShadow: 0, cloudFlow: 0, cloudTurb: 0, cyclones: 0, cloudTerrain: 0, cloudDetail: 1, cloudSpeed: 0.1, cycloneSize: 0.12, cloudWisp: 0, cloudRegion: 0, lightning: 0,
     emissive: G0, emissiveStrength: 0,
@@ -248,7 +267,11 @@ export const PRESETS: Record<PlanetVisualType, Preset> = {
     ramp: [], seaLevel: 0, oceanShallow: G0, oceanDeep: G0,
     displacement: 0, ridged: 0, warp: 0, latitudeIce: 0, moisture: 0, aridBelts: 0, rainShadow: 0, orographic: 0, lapseRate: 0.5, treeline: 0.09, windBearing: 0, continental: 0, altitudeDry: 0, patchiness: 0, lushDepth: 0, snowfall: 0.75, roughness: 0,
     bandColorA: [0.86, 0.74, 0.54], bandColorB: [0.66, 0.50, 0.34],
-    bandCount: 14, bandTurbulence: 0.6, stormChance: 0.7,
+    // bandCount baseline within the doc's 10-14 Jupiter-class visible-band
+    // range (§2.1); derivePlanetParams clamps the size-scaled result to the
+    // same range so a large rep-radius never blows past it (was 14 * ~1.9 ⇒
+    // ~27 bands pre-fix). stormChance gates the 1 giant anticyclone.
+    bandCount: 12, bandTurbulence: 0.6, bandContrast: 0.85, stormChance: 0.7,
     hasAtmosphere: true, atmosphere: [0.92, 0.82, 0.55], atmosphereDensity: 1.2, nightLights: 0,
     cloudCover: 0, cloudShadow: 0, cloudFlow: 0, cloudTurb: 0, cyclones: 0, cloudTerrain: 0, cloudDetail: 1, cloudSpeed: 0.1, cycloneSize: 0.12, cloudWisp: 0, cloudRegion: 0, lightning: 0,
     emissive: G0, emissiveStrength: 0,
@@ -438,8 +461,17 @@ export function derivePlanetParams(planet: GenPlanet): PlanetRenderParams {
   const rampSource = planet.rampOverride ?? base.ramp;
   const ramp = rampSource.map((s) => ({ at: s.at, color: jitterRGB(shiftLuma(s.color, albedoShift), pal, 0.04) }));
 
-  // Giant band count scales gently with size (bigger ⇒ more visible banding).
-  const sizeBands = Math.round(base.bandCount * (0.8 + Math.min(1.5, planet.radiusEarth / 10)));
+  // Giant band count scales gently with size (bigger ⇒ more visible banding),
+  // then clamped to this class's photographic-realism cap (design doc §2.1/
+  // §2.2: gas 10-14 visible bands, ice 2-4) — the raw size scale alone can
+  // exceed it (a rep-radius-11 gas giant scaled bandCount:14 up to ~27 bands
+  // pre-fix, well past Jupiter's real ~dozen zonal jets).
+  const sizeBandsRaw = Math.round(base.bandCount * (0.8 + Math.min(1.5, planet.radiusEarth / 10)));
+  const bandCountRange: readonly [number, number] | null =
+    planet.type === 'gas' ? [10, 14] : planet.type === 'ice' ? [2, 4] : null;
+  const sizeBands = bandCountRange
+    ? clamp(sizeBandsRaw, bandCountRange[0], bandCountRange[1])
+    : sizeBandsRaw;
 
   return {
     type: planet.type,
@@ -476,6 +508,7 @@ export function derivePlanetParams(planet: GenPlanet): PlanetRenderParams {
     bandColorB: jitterRGB(base.bandColorB, pal, 0.05),
     bandCount: Math.max(0, sizeBands),
     bandTurbulence: base.bandTurbulence * range(ter, 0.85, 1.2),
+    bandContrast: base.bandContrast,
     stormChance: base.stormChance,
     hasAtmosphere: base.hasAtmosphere && keepsAtmosphere,
     atmosphere: jitterRGB(base.atmosphere, pal, 0.03),

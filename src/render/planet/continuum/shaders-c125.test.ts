@@ -175,14 +175,22 @@ describe('continuum C1/C2/C5 shader contract', () => {
     expect(alphaLine).not.toContain('lateral');
   });
 
-  it('F4: ground-shadow cloud field keeps its own (lower) coverage threshold, decoupled from the shell', () => {
+  it('P2-24: ground-shadow cloud field keeps its own (lower) fixed threshold, decoupled from the shell', () => {
     // The ground-shadow field (continuumCloudDens) has no turb/region terms,
-    // so it sits fainter than the shell at the same uCloudCover. Once F4
-    // lowered the Terran cover to fix the shell whiteout, the shadow term
-    // needed its own threshold offset (0.25, not the shell's 0.14) or it
-    // would go invisible. Assert the two curves are NOT sharing one constant.
-    expect(continuumSurfaceFrag).toContain('float t = clamp((f - (c0 - 0.25)) / 0.28, 0.0, 1.0);');
-    expect(continuumCloudShellFrag).toContain('float t = clamp((f - (c0 - 0.14)) / 0.28, 0.0, 1.0);');
+    // so it sits fainter than the shell at the same uCloudCover (Monte Carlo
+    // mean ~0.62 vs the shell's ~0.79). Both curves now use a FIXED threshold
+    // centered on their own mean, then multiply the shaped result linearly by
+    // cover — assert the two curves keep their own (different) constants
+    // rather than sharing one, and that neither reintroduces a moving,
+    // cover-dependent threshold (the saturation bug).
+    expect(continuumSurfaceFrag).toContain('float t = clamp((f - 0.48) / 0.28, 0.0, 1.0);');
+    expect(continuumSurfaceFrag).toContain('return shape * uCloudCover;');
+    expect(continuumCloudShellFrag).toContain('float t = clamp((f - 0.65) / 0.28, 0.0, 1.0);');
+    expect(continuumCloudShellFrag).toContain('float dens = t * t * (3.0 - 2.0 * t) * uCover;');
+    // Neither field's live code should reintroduce the old cover-dependent
+    // (moving) threshold — only explanatory comments may still name it.
+    expect(continuumSurfaceFrag).not.toContain('float c0 = 1.0 - uCloudCover * 0.85;');
+    expect(continuumCloudShellFrag).not.toContain('float c0 = 1.0 - uCover * 0.85;');
   });
 
   it('F4: cloud shell keeps a real day-gated alpha ceiling below fully opaque (breaks stay readable)', () => {

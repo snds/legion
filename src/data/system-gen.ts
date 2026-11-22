@@ -101,6 +101,15 @@ export interface GenPlanet {
   // real-boot verified (not guessed) against `refs/continuum/stills/p2-7/
   // after/legacy-mars.png`.
   rampOverride?: readonly { readonly at: number; readonly color: readonly [number, number, number] }[];
+  // Optional authored override — the curated-catalogue body's own display
+  // name (PlanetConfig.name / MoonConfig.name), set ONLY by
+  // planet-continuum-adapter.ts whenever the catalogue also carries a real
+  // `texturePath`. Used purely as a lookup key into continuum/real-albedo.ts's
+  // preloaded real-photo registry (a plain string, same "no render-layer
+  // import in the data layer" precedent as rampOverride above) — undefined
+  // for every procedurally-generated body and every catalogue body without a
+  // bundled photo, which keep their existing 100%-procedural bake unchanged.
+  realTextureBody?: string;
 }
 
 /** A generated asteroid/debris belt. Placement is CONSTRAINED (formation

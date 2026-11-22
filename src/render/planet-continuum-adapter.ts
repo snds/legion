@@ -24,6 +24,7 @@ import { PlanetType } from '../core/components';
 import { computeInsolation, type GenPlanet, type PlanetKind, type PlanetVisualType } from '../data/system-gen';
 import { ContinuumGlobe } from './planet/continuum';
 import { planetTypeRepRadiusEarth, MOON_REP_R_EARTH } from './planet-scale';
+import { preloadRealAlbedo } from './planet/continuum/real-albedo';
 
 const VISUAL_TYPE_BY_ENUM: Readonly<Record<number, PlanetVisualType>> = {
   [PlanetType.Rocky]: 'rocky',
@@ -121,6 +122,13 @@ export function genPlanetFromCatalog(pCfg: PlanetConfig, starLuminositySolar: nu
   const isGasGiant = pCfg.planetType === PlanetType.GasGiant || pCfg.planetType === PlanetType.IceGiant;
   const type = VISUAL_TYPE_BY_ENUM[pCfg.planetType] ?? 'rocky';
   const radiusEarth = planetTypeRepRadiusEarth(pCfg.planetType);
+  // Real-texture wiring (Audit fix): kick the actual TextureLoader load here
+  // (not just system-loader.ts's Stage A hover-preload) — this is the ONE
+  // path every curated body's GenPlanet is built through, regardless of
+  // whether Stage A ever ran (e.g. the `?system=sol` direct-boot path skips
+  // it entirely). preloadRealAlbedo is idempotent, so calling it from both
+  // places is harmless.
+  if (pCfg.texturePath) preloadRealAlbedo(pCfg.name, pCfg.texturePath);
   return {
     kind: KIND_BY_ENUM[pCfg.planetType] ?? 'rocky',
     au: pCfg.sma,
@@ -135,6 +143,7 @@ export function genPlanetFromCatalog(pCfg: PlanetConfig, starLuminositySolar: nu
     hasAtmosphere: pCfg.hasAtmosphere,
     axialTilt: pCfg.axialTilt,
     rampOverride: MARS_RAMP_OVERRIDE_BY_NAME[pCfg.name],
+    realTextureBody: pCfg.texturePath ? pCfg.name : undefined,
   };
 }
 
@@ -218,6 +227,9 @@ const DWARF_MASS_RADIUS_EXP = 3.7;
  */
 export function genPlanetFromMoonCatalog(mCfg: MoonConfig, parentInsolation: number): GenPlanet {
   const radiusEarth = MOON_REP_R_EARTH;
+  // Real-texture wiring (Audit fix) — same rationale as the planet adapter's
+  // preloadRealAlbedo call above.
+  if (mCfg.texturePath) preloadRealAlbedo(mCfg.name, mCfg.texturePath);
   return {
     kind: 'dwarf',
     au: mCfg.sma,
@@ -230,6 +242,7 @@ export function genPlanetFromMoonCatalog(mCfg: MoonConfig, parentInsolation: num
     hasRings: false,
     seed: stableSeed(`${mCfg.parentName}:${mCfg.name}`),
     hasAtmosphere: false,
+    realTextureBody: mCfg.texturePath ? mCfg.name : undefined,
   };
 }
 

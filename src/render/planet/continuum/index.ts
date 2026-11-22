@@ -3,7 +3,7 @@
 import {
   Group, IcosahedronGeometry, Mesh, PlaneGeometry, RingGeometry, DataTexture,
   ShaderMaterial, Vector3, Quaternion, BackSide, DoubleSide, AdditiveBlending,
-  RedFormat, FloatType,
+  RedFormat, FloatType, RGBAFormat, UnsignedByteType,
 } from 'three';
 import type { GenPlanet } from '../../../data/system-gen';
 import { channel, range } from '../rng';
@@ -17,16 +17,103 @@ import { createBodyChunkCache, releaseBodyChunkCache, type BodyChunkCache } from
 import { ContinuumClouds } from './cloud-voxels';
 import { ContinuumSurfaceVoxels } from './surface-voxels';
 import { applyApproachFlightCamera, type ApproachCameraLike } from './approach-camera';
+import { earthEquivalentAu } from './body-scale';
 import { removeChunkHud, updateChunkHud } from './debug-chunks';
 import type { Vec3 } from '../cube-sphere';
 import { continuumAtmosFrag, continuumAtmosVert } from './shaders';
 import { generateRings, densityLUT, type RingSystem } from '../rings';
 import { GIANT_VERT, GIANT_FRAG, RING_VERT, RING_FRAG } from '../shaders';
+import { getRealAlbedoTexture, onRealAlbedoReady } from './real-albedo';
 
 /** Same authoring convention as globe.ts's ring mount (rings.test.ts +
  *  globe.test.ts already exercise this LUT resolution / segment count). */
 const RING_SEGMENTS = 96;
 const LUT_N = 128;
+
+/** Giant band shader (shaders.ts GIANT_FRAG) storm/streak population cap —
+ *  MUST equal that shader's own `const int MAX_STORMS`. */
+const MAX_GIANT_STORMS = 6;
+
+interface GiantFeature {
+  pos: [number, number, number];
+  radius: number;
+  aspect: number;
+  spiral: number;
+  color: [number, number, number];
+}
+
+/** Unit sphere direction from a sin-latitude (-1..1, matches vDir.y's
+ *  convention in GIANT_FRAG) and a longitude in radians. */
+function giantDirFromLatLon(latY: number, lon: number): [number, number, number] {
+  const r = Math.sqrt(Math.max(0, 1 - latY * latY));
+  return [r * Math.cos(lon), latY, r * Math.sin(lon)];
+}
+
+/** Seeded storm/streak population for the giant band shader (Audit fix —
+ *  replaces the single hardcoded great-spot boolean/position). Per
+ *  docs/planet-visual-realism.md §2.1: gas giants get at most one giant
+ *  anticyclone (gated by `stormChance`) plus 2-5 medium ovals with
+ *  power-law sizes, placed at band-shear latitudes (a boundary between two
+ *  adjacent bands). Per §2.2: ice giants instead get a seeded ~30% chance
+ *  (`stormChance`) of 1-3 bright transient methane-cloud streaks near
+ *  30-40° latitude. */
+function buildGiantFeatures(
+  seed: number, isIce: boolean, bandCount: number, stormChance: number,
+): GiantFeature[] {
+  const rng = channel(seed, 'giant-storms');
+  const features: GiantFeature[] = [];
+  const bandGap = 1 / Math.max(bandCount, 1);
+  const shearLat = (): number => {
+    const k = Math.max(1, Math.floor(range(rng, 1, Math.max(bandCount, 2))));
+    const lat01 = k * bandGap + range(rng, -bandGap * 0.25, bandGap * 0.25);
+    // Keep storms inside the ~50°-latitude polar cutoff band.
+    return Math.max(-0.82, Math.min(0.82, lat01 * 2 - 1));
+  };
+  if (!isIce) {
+    if (stormChance > 0 && rng() < stormChance) {
+      features.push({
+        pos: giantDirFromLatLon(shearLat(), range(rng, 0, Math.PI * 2)),
+        radius: range(rng, 0.20, 0.26),
+        aspect: 1,
+        spiral: range(rng, 1.6, 2.6),
+        color: [0.72, 0.36, 0.24],
+      });
+    }
+    const mediumCount = Math.floor(range(rng, 2, 6)); // 2..5
+    for (let i = 0; i < mediumCount && features.length < MAX_GIANT_STORMS; i++) {
+      const sizeT = Math.pow(rng(), 1.8); // power-law: small ovals far more common
+      features.push({
+        pos: giantDirFromLatLon(shearLat(), range(rng, 0, Math.PI * 2)),
+        radius: 0.05 + sizeT * 0.09,
+        aspect: 1,
+        spiral: range(rng, 0.6, 1.4),
+        color: [0.66 + range(rng, -0.05, 0.05), 0.40 + range(rng, -0.05, 0.05), 0.30],
+      });
+    }
+  } else if (stormChance > 0 && rng() < stormChance) {
+    const count = Math.floor(range(rng, 1, 4)); // 1..3 bright streaks
+    for (let i = 0; i < count && features.length < MAX_GIANT_STORMS; i++) {
+      const latDeg = range(rng, 30, 40) * (rng() < 0.5 ? -1 : 1);
+      const latY = Math.sin((latDeg * Math.PI) / 180);
+      features.push({
+        pos: giantDirFromLatLon(latY, range(rng, 0, Math.PI * 2)),
+        radius: range(rng, 0.10, 0.20),
+        aspect: range(rng, 3, 5),
+        spiral: 0,
+        color: [0.92, 0.98, 0.98],
+      });
+    }
+  }
+  return features;
+}
+
+/** Jónsson-model oblateness (§2.1/§2.2): gas giants squash ~6.5-10%
+ *  (scale.y 0.90-0.935), ice giants ~2% (0.975-0.985) — seeded within each
+ *  class's documented range so same-archetype bodies aren't visual clones. */
+function giantOblateness(seed: number, isIce: boolean): number {
+  const rng = channel(seed, 'giant-oblateness');
+  return isIce ? range(rng, 0.975, 0.985) : range(rng, 0.90, 0.935);
+}
 
 const _planetWorld = new Vector3();
 const _worldScale = new Vector3();
@@ -138,6 +225,11 @@ export class ContinuumGlobe {
       // — no bands, no storm, no lighting response at all.
       this.giantMesh = new Mesh(new IcosahedronGeometry(radius, 5), this.buildGiantMat());
       this.spinGroup.add(this.giantMesh);
+      // Oblateness (§2.1/§2.2 — real Jupiter ~6.5% flattened, Saturn ~9.8%,
+      // Uranus/Neptune ~2%): scale ONLY the spin group, which for a giant
+      // holds nothing but the giant mesh itself — rings mount on the
+      // sibling tiltGroup and stay perfectly circular.
+      this.spinGroup.scale.y = giantOblateness(planet.seed >>> 0, this.params.type === 'ice');
     } else {
       // (P2-3) Preload is async/fire-and-forget-but-tracked; construction
       // happens well before the camera can reach `near` and start calling
@@ -194,6 +286,45 @@ export class ContinuumGlobe {
     this.impostorMesh = new Mesh(new PlaneGeometry(2, 2), this.impostorMat);
     this.impostorMesh.frustumCulled = false;
     this.root.add(this.impostorMesh);
+
+    // Real-texture wiring (Audit fix — curated Sol bodies/moons only).
+    // Non-giants already pick the real photo up through sampleSurface (see
+    // generators/index.ts) the moment it's loaded; ready or not at
+    // construction time, register the same "rebuild once it lands" hook so a
+    // body baked from its procedural fallback before the network load
+    // resolved doesn't stay stuck that way for the rest of the session.
+    // Giants have no chunk pool to rebuild — wire the GPU texture straight
+    // onto the giant material instead (see onRealAlbedoLoaded below).
+    if (planet.realTextureBody) {
+      onRealAlbedoReady(planet.realTextureBody, () => this.onRealAlbedoLoaded());
+    }
+  }
+
+  /** Fires once, the moment this body's real photo (continuum/real-albedo.ts)
+   *  finishes loading — immediately, inline, if it was already loaded by the
+   *  time the constructor above registered the callback. */
+  private onRealAlbedoLoaded(): void {
+    const name = this.planet.realTextureBody;
+    if (!name) return;
+    if (this.giantMesh) {
+      const tex = getRealAlbedoTexture(name);
+      if (!tex) return;
+      const u = (this.giantMesh.material as ShaderMaterial).uniforms;
+      u.uAlbedoMap.value = tex;
+      u.uUseAlbedoMap.value = 1;
+      return;
+    }
+    // Rocky/moon: bump the chunk-bake identity (fingerprint now folds in
+    // isRealAlbedoReady — see generators/index.ts's surfaceFingerprint) so
+    // body-asset-store.ts's persisted cache can't keep serving pre-photo
+    // procedural bytes baked in the brief pending window before this fired,
+    // then force every resident chunk/voxel brick to rebuild against it.
+    const fp = this.bundle.fingerprint();
+    if (fp !== this.lastFp) {
+      this.lastFp = fp;
+      void this.chunkAssetCache?.preload(fp);
+    }
+    this.invalidateChunks();
   }
 
   setSpinPaused(p: boolean): void { this.spinPaused = p; }
@@ -211,8 +342,17 @@ export class ContinuumGlobe {
   }
   get showChunksOn(): boolean { return this.showChunks; }
 
+  /** P2-24 — `au` is the SAME body-agnostic global camera distance every
+   *  registered globe receives (registry.ts / planet-lab.ts derive it once
+   *  from `physicalAuFromZoom`). Normalize it to this body's own authored
+   *  radius here — the one boundary where that shared value enters a
+   *  per-body module — so every downstream approach/LOD/voxel tier this
+   *  feeds (this.viewAu → applyApproachFlightCamera's blend; the child
+   *  modules' own copies) becomes body-relative instead of comparing the
+   *  same absolute AU number for a Mercury-class and a GasGiant-class body
+   *  alike (see body-scale.ts doc comment for the full derivation). */
   setViewDistanceAu(au: number): void {
-    this.viewAu = au;
+    this.viewAu = earthEquivalentAu(au, this.radius);
     this.clouds?.setViewDistanceAu(au);
     this.surfaceVoxels?.setViewDistanceAu(au);
     this.chunkPool?.setViewDistanceAu(au);
@@ -341,6 +481,7 @@ export class ContinuumGlobe {
       (u.uBandA.value as Vector3).set(...this.params.bandColorA);
       (u.uBandB.value as Vector3).set(...this.params.bandColorB);
       u.uBandCount.value = Math.max(1, this.params.bandCount);
+      u.uBandContrast.value = this.params.bandContrast;
       u.uTurbulence.value = this.params.bandTurbulence;
     }
     // Only remesh when heightfield / albedo identity moved (cloud-only is live).
@@ -570,13 +711,35 @@ export class ContinuumGlobe {
     });
   }
 
-  /** Legacy PlanetGlobe's exact banded/turbulent/storm shader (shaders.ts) —
-   *  ported, not reimplemented, per Audit A1's recommendation that the giant
-   *  gap is "a bounded, well-scoped port... not new R&D." */
+  /** Photographic-realism giant band material (docs/planet-visual-realism.md
+   *  §2.1/§2.2) — seeded irregular bands + polar-cutoff vortex crossfade +
+   *  a seeded storm/streak population (buildGiantFeatures) + Jónsson limb
+   *  darkening, all in shaders.ts GIANT_VERT/FRAG. Replaces the old single
+   *  constant-frequency sin() stripe + one hardcoded great-spot boolean
+   *  (Audit A1 gap #1 follow-up). */
   private buildGiantMat(): ShaderMaterial {
     const p = this.params;
-    const rng = channel(this.planet.seed >>> 0, 'storm');
-    const storm = p.stormChance > 0 && rng() < p.stormChance ? 1 : 0;
+    const isIce = p.type === 'ice';
+    const features = buildGiantFeatures(this.planet.seed >>> 0, isIce, Math.max(1, p.bandCount), p.stormChance);
+    const fill = MAX_GIANT_STORMS - features.length;
+    const posArr = features.map((f) => new Vector3(...f.pos)).concat(Array.from({ length: fill }, () => new Vector3()));
+    const radiusArr = features.map((f) => f.radius).concat(Array(fill).fill(0));
+    const aspectArr = features.map((f) => f.aspect).concat(Array(fill).fill(1));
+    const spiralArr = features.map((f) => f.spiral).concat(Array(fill).fill(0));
+    const colorArr = features.map((f) => new Vector3(...f.color)).concat(Array.from({ length: fill }, () => new Vector3()));
+    // Real-texture wiring (Audit fix — Jupiter/Saturn/Uranus/Neptune): a
+    // giant has no chunk pool to bake a real photo into (unlike rocky
+    // bodies/moons — see sampleSurface's realAlbedo override), so this
+    // whole-sphere shader samples the loaded photo directly via an equirect
+    // UV computed from its own vDir (GIANT_FRAG). Dummy 1x1 opaque texture +
+    // uUseAlbedoMap=0 keeps every non-curated giant (EE's Jotunheim/
+    // Niflheim, no bundled photo) byte-identical to before this uniform
+    // existed; `realTextureBody` set + already-loaded (Stage A preload had
+    // time to land before construction) flips it on immediately, otherwise
+    // onRealAlbedoLoaded() flips it on once the load resolves.
+    const dummyAlbedo = new DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1, RGBAFormat, UnsignedByteType);
+    dummyAlbedo.needsUpdate = true;
+    const realTex = this.planet.realTextureBody ? getRealAlbedoTexture(this.planet.realTextureBody) : undefined;
     return new ShaderMaterial({
       vertexShader: GIANT_VERT, fragmentShader: GIANT_FRAG,
       uniforms: {
@@ -584,11 +747,19 @@ export class ContinuumGlobe {
         uBandA: { value: new Vector3(...p.bandColorA) },
         uBandB: { value: new Vector3(...p.bandColorB) },
         uBandCount: { value: Math.max(1, p.bandCount) },
+        uBandContrast: { value: p.bandContrast },
         uTurbulence: { value: p.bandTurbulence },
-        uStorm: { value: storm },
         uNoiseSeed: { value: new Vector3(...p.noiseSeed) },
         uTime: { value: 0 },
         uTerminator: { value: 0.12 },
+        uStormCount: { value: features.length },
+        uStormPos: { value: posArr },
+        uStormRadius: { value: radiusArr },
+        uStormAspect: { value: aspectArr },
+        uStormSpiral: { value: spiralArr },
+        uStormColor: { value: colorArr },
+        uAlbedoMap: { value: realTex ?? dummyAlbedo },
+        uUseAlbedoMap: { value: realTex ? 1 : 0 },
       },
     });
   }

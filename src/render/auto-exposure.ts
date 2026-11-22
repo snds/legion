@@ -29,6 +29,26 @@ const LOG_MIN = -12;           // encoded log2-luminance range (L ≈ 2.4e-4 …
 const LOG_MAX = 12;
 const LIT_THRESHOLD = 0.015;   // luminance below this is treated as empty space (not metered)
 const KEY = 0.18;              // middle-grey target
+// P2-24/isolation task — root cause of small-isolated-disc overexposure (confirmed
+// via scripts/p2-24-agx-diagnostic.mjs + direct exposure readback on Mercury/Vulcan:
+// KarisBloomPass disabled entirely still left ~90% of the postNoAgx brightening
+// intact, but live `autoExposurePass.exposure` measured 1.36× — i.e. metering
+// decided the framed disc was TOO DARK and amplified it, when the disc's own
+// brightest (sub-solar) pixels were already well-lit). A sunlit SPHERE's visible
+// luminance is dominated by grazing-incidence (near-terminator) pixels — cos(θ)
+// falloff means most of the disc's area sits far below its sub-solar peak. The
+// UNWEIGHTED geometric mean of all "lit" pixels below therefore skews low for
+// ANY compact, isolated sunlit body (independent of archetype/size), dragging
+// `smoothedLum` under KEY and driving exposure UP — over-brightening the parts
+// that were already correctly exposed. A busier/larger-on-screen scene (Earth
+// with clouds, multiple bodies) dilutes this skew; an isolated close-zoom disc
+// does not. Fix: meter a highlight-weighted PERCENTILE of the lit-pixel
+// log-luminance distribution instead of its mean — this targets "how bright is
+// the well-lit part of the subject" rather than "what's the average over the
+// whole shading gradient", so it no longer over-reacts to a sphere's inherent
+// dark-pixel majority while still reacting normally to genuinely dim/uniform
+// scenes (percentile ≈ mean when the distribution isn't skewed).
+const METER_PERCENTILE = 0.98;
 const EXP_MIN = 0.04;          // exposure clamp — never fully black or blown out
 const EXP_MAX = 1.6;           // capped so dark/empty space views don't wash the background out
 const CENTER_SIGMA = 0.28;     // Gaussian center-weight: meter the framed subject, not dark periphery
@@ -76,6 +96,13 @@ export class AutoExposurePass extends Pass {
   private lastTime = -1;
   private frame = 0;
   private readonly exposureBias: () => number;
+  // Scratch buffer for the weighted-percentile metering pass below — reused every
+  // call (this runs at ~20 Hz) so it doesn't allocate/GC per frame. Sized to the
+  // metering grid's pixel count; only the first `sampleCount` entries are valid
+  // after each fill.
+  private readonly meterLogL = new Float32Array(LUM_RES * LUM_RES);
+  private readonly meterWeight = new Float32Array(LUM_RES * LUM_RES);
+  private readonly meterOrder = new Uint16Array(LUM_RES * LUM_RES);
 
   /** Last computed exposure — exposed for debug/telemetry. */
   exposure = 1;
@@ -137,10 +164,13 @@ export class AutoExposurePass extends Pass {
     const litLog = Math.log2(LIT_THRESHOLD);
     const twoSigma2 = 2 * CENTER_SIGMA * CENTER_SIGMA;
 
-    // Center-weighted geometric mean of LIT pixels. Center weighting makes the
-    // exposure track the framed subject (a sun/planet, usually centered) instead
-    // of the mostly-dark frame — the average-metering-fails-in-space fix (docs §5.8).
-    let sumLog = 0;
+    // Center-weighted metering of LIT pixels. Center weighting makes the exposure
+    // track the framed subject (a sun/planet, usually centered) instead of the
+    // mostly-dark frame — the average-metering-fails-in-space fix (docs §5.8).
+    // Collect (logL, weight) samples first — the target is a weighted PERCENTILE
+    // of this distribution (see METER_PERCENTILE above), not its mean, so a
+    // sunlit sphere's grazing-incidence majority can't drag exposure up.
+    let sampleCount = 0;
     let sumW = 0;
     for (let i = 0, p = 0; i < this.pixels.length; i += 4, p += 1) {
       const logL = (this.pixels[i] / 255) * logRange + LOG_MIN;
@@ -148,12 +178,31 @@ export class AutoExposurePass extends Pass {
       const dx = ((p % LUM_RES) + 0.5) / LUM_RES - 0.5;
       const dy = (Math.floor(p / LUM_RES) + 0.5) / LUM_RES - 0.5;
       const w = Math.exp(-(dx * dx + dy * dy) / twoSigma2);
-      sumLog += w * logL;
+      this.meterLogL[sampleCount] = logL;
+      this.meterWeight[sampleCount] = w;
+      this.meterOrder[sampleCount] = sampleCount;
       sumW += w;
+      sampleCount += 1;
     }
 
     // Hold steady when nothing lit is in view (avoids drifting on empty space).
-    const targetLum = sumW > 1e-3 ? Math.pow(2, sumLog / sumW) : this.smoothedLum;
+    let targetLum = this.smoothedLum;
+    if (sumW > 1e-3) {
+      const order = this.meterOrder.subarray(0, sampleCount);
+      const logL = this.meterLogL;
+      // TypedArray#sort supports a custom comparator (ES2015+) — sort the index
+      // view by the logL each index points at, without allocating a plain array.
+      order.sort((a, b) => logL[a] - logL[b]);
+      const targetCum = METER_PERCENTILE * sumW;
+      let cum = 0;
+      let percentileLog = logL[order[sampleCount - 1]];
+      for (let k = 0; k < sampleCount; k++) {
+        const idx = order[k];
+        cum += this.meterWeight[idx];
+        if (cum >= targetCum) { percentileLog = logL[idx]; break; }
+      }
+      targetLum = Math.pow(2, percentileLog);
+    }
 
     const now = performance.now();
     let dt = this.lastTime < 0 ? 0 : (now - this.lastTime) / 1000;

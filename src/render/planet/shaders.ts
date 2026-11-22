@@ -458,55 +458,208 @@ void main(){
 
 export const GIANT_FRAG = /* glsl */ `
 ${GLSL_SIMPLEX}
+// docs/planet-visual-realism.md §2.1 (GasGiant) / §2.2 (IceGiant) — seeded
+// irregular band profile + polar-cutoff vortex crossfade + a seeded storm/
+// streak population + Jónsson limb darkening, replacing the old single
+// constant-frequency sin() stripe + one hardcoded great-spot boolean.
+const int MAX_BANDS = 16;
+const int MAX_STORMS = 6; // keep in sync with continuum/index.ts MAX_GIANT_STORMS
+
 uniform vec3  uSunDir;
 uniform vec3  uBandA;
 uniform vec3  uBandB;
 uniform float uBandCount;
+uniform float uBandContrast; // 0..1 — how strongly the band profile reads (ice: ~0.06)
 uniform float uTurbulence;
-uniform float uStorm;       // 0/1 — has a great spot
 uniform vec3  uNoiseSeed;
 uniform float uTime;
 uniform float uTerminator;
+// Seeded storm/streak population (CPU-placed at band-shear latitudes, see
+// continuum/index.ts buildGiantFeatures — at most 1 giant anticyclone + 2-5
+// medium ovals for gas giants, or 0-3 bright zonal streaks for ice giants).
+uniform int   uStormCount;
+uniform vec3  uStormPos[MAX_STORMS];    // unit sphere direction (object space)
+uniform float uStormRadius[MAX_STORMS]; // chord-distance influence radius
+uniform float uStormAspect[MAX_STORMS]; // 1 = round oval; >1 = zonal streak
+uniform float uStormSpiral[MAX_STORMS]; // >0 = analytic spiral warp strength
+uniform vec3  uStormColor[MAX_STORMS];
+// Real-photo override (Audit fix — curated Sol giants: Jupiter/Saturn/
+// Uranus/Neptune). continuum/index.ts's buildGiantMat sets uUseAlbedoMap=1
+// once continuum/real-albedo.ts finishes loading that body's bundled photo;
+// EE's fictional giants (Jotunheim/Niflheim, no real photo) keep
+// uUseAlbedoMap=0 and this whole block is a no-op — byte-identical band
+// shading to before this uniform existed.
+uniform sampler2D uAlbedoMap;
+uniform float uUseAlbedoMap;
 varying vec3  vWorldPos;
 varying vec3  vWorldNormal;
 varying vec3  vDir;
+
+// Dave Hoskins cheap decorrelated hash (duplicated from GLSL_FBM — that
+// chunk also declares uNoiseSeed/uRidged/uWarp, which would collide with
+// this material's own uniform block, so it isn't included here).
+float hash13(vec3 p3){ p3 = fract(p3 * 0.1031); p3 += dot(p3, p3.zyx + 31.32); return fract((p3.x + p3.y) * p3.z); }
+
+// Seeded per-band interval width (0.5..1.5 — irregular, not uniform 1/N
+// spacing), matching §2.1's "divide latitude into N seeded intervals,
+// perturb interior boundaries with seeded noise" structure rule.
+float bandWeight(float i, vec3 seed){
+  return 0.5 + hash13(vec3(i * 12.9898 + seed.x * 0.013, i * 4.1414 + seed.y * 0.017, seed.z * 0.011));
+}
+
+// Finds which seeded band [0, bandCount) a 0..1 latitude coordinate falls
+// into, plus its local position (0..1) within that band's width — the
+// cumulative-weighted-interval walk that makes band widths vary instead of
+// every band spanning an identical 1/bandCount slice.
+vec2 bandLookup(float latN, float bandCount, vec3 seed){
+  float total = 0.0;
+  for (int i = 0; i < MAX_BANDS; i++){
+    if (float(i) >= bandCount) break;
+    total += bandWeight(float(i), seed);
+  }
+  total = max(total, 1e-4);
+  float acc = 0.0;
+  for (int i = 0; i < MAX_BANDS; i++){
+    if (float(i) >= bandCount) break;
+    float wn = bandWeight(float(i), seed) / total;
+    float next = acc + wn;
+    if (latN <= next || float(i) >= bandCount - 1.0){
+      return vec2(float(i), wn > 1e-5 ? clamp((latN - acc) / wn, 0.0, 1.0) : 0.5);
+    }
+    acc = next;
+  }
+  return vec2(0.0, 0.5);
+}
+
+// Per-band colour: alternates the two ramp colours by parity, then a small
+// seeded value jitter — "variation lives in VALUE, not hue" (§2.1 palette).
+vec3 bandColorAt(float idx, vec3 seed){
+  vec3 base = mix(uBandA, uBandB, mod(idx, 2.0));
+  float h = hash13(vec3(idx * 7.31 + seed.z, idx * 2.17, seed.x * 0.005));
+  return base * (0.82 + 0.36 * h);
+}
 
 void main(){
   vec3 N = normalize(vWorldNormal);
   float ndl = dot(N, uSunDir);
   float day = smoothstep(-uTerminator, uTerminator, ndl);
 
-  float lat = vDir.y; // -1..1
+  float lat = vDir.y; // sin(latitude), -1..1
   // Turbulent latitude warp so bands aren't ruler-straight. P2-7: the warp's
   // amplitude MUST stay a bounded fraction of one band's period (1/uBandCount)
-  // or its phase shift exceeds a full band cycle and the sin() below stops
-  // reading as latitude-aligned stripes at all — it degenerates into isotropic
-  // wavy/contour "wood-grain" noise instead (confirmed: at a high band count
-  // like Saturn's, the old fixed "* uTurbulence * 0.15" amplitude already
-  // exceeded 1/uBandCount, i.e. it could shift the sin() phase by more than one
-  // full band before the very next sample). Scaling by 1/uBandCount keeps the
-  // warp's worst case a fraction of one band's width for ANY band count, so
-  // bands stay zonal while their edges still snake turbulently.
+  // or its phase shift exceeds a full band cycle and degenerates into
+  // isotropic wavy/contour "wood-grain" noise instead of latitude-aligned
+  // bands. Scaling by 1/uBandCount keeps the warp's worst case a fraction of
+  // one band's width for ANY band count.
   vec3 sp = vDir * 3.0 + uNoiseSeed;
   float warp = snoise(vec3(sp.x, sp.y * 0.5, sp.z + uTime * 0.02))
     * uTurbulence * (0.35 / max(uBandCount, 1.0));
-  float bands = sin((lat + warp) * uBandCount * 3.14159);
-  float t = smoothstep(-0.6, 0.6, bands);
-  vec3 col = mix(uBandA, uBandB, t);
+  float latN = clamp((lat + warp) * 0.5 + 0.5, 0.0, 1.0);
+
+  vec2 bp = bandLookup(latN, max(uBandCount, 1.0), uNoiseSeed);
+  vec3 thisCol = bandColorAt(bp.x, uNoiseSeed);
+  // Soften the seam between adjacent bands (a hard step reads as "mushy" at
+  // the exact boundary either way — this blends only the outer ~1/5th of
+  // each band's width into its neighbour, per §2.1's smoothstep-steepness note).
+  float distToEdge = min(bp.y, 1.0 - bp.y);
+  float edgeBlend = 1.0 - smoothstep(0.0, 0.22, distToEdge);
+  float nIdx = clamp(bp.x + (bp.y < 0.5 ? -1.0 : 1.0), 0.0, max(uBandCount - 1.0, 0.0));
+  vec3 neighborCol = bandColorAt(nIdx, uNoiseSeed);
+  vec3 bandCol = mix(thisCol, neighborCol, edgeBlend * 0.5);
+
+  // Contrast gate: ice giants collapse almost to the ramp midpoint (≤0.06 —
+  // "almost featureless is correct"), gas giants keep near-full contrast.
+  vec3 midCol = mix(uBandA, uBandB, 0.5);
+  vec3 col = mix(midCol, bandCol, clamp(uBandContrast, 0.0, 1.0));
 
   // Fine cloud turbulence.
   float fine = snoise(vDir * 12.0 + uNoiseSeed + vec3(uTime * 0.03, 0.0, 0.0));
   col *= 0.9 + 0.1 * fine;
 
-  // Great-spot storm — an off-equator oval.
-  if (uStorm > 0.5){
-    vec3 c = normalize(vec3(0.6, -0.35, 0.72));
-    float d = distance(vDir, c);
-    float storm = smoothstep(0.28, 0.05, d);
-    col = mix(col, vec3(0.75, 0.35, 0.25), storm * 0.8);
+  // Polar cutoff (~|lat| 50°, §2.1/§2.2): bands fade to mottled vortex fBm
+  // instead of running stripes pole-to-pole.
+  float latDeg = degrees(asin(clamp(vDir.y, -1.0, 1.0)));
+  float polarMix = smoothstep(45.0, 55.0, abs(latDeg));
+  if (polarMix > 0.001){
+    vec3 vp = vDir * 6.0 + uNoiseSeed * 1.3;
+    float v1 = snoise(vp + vec3(uTime * 0.01, 0.0, 0.0));
+    float v2 = snoise(vp * 2.3 + 11.0);
+    float vf = v1 * 0.6 + v2 * 0.4;
+    vec3 vortexCol = mix(uBandA, uBandB, 0.5 + 0.5 * vf) * (0.85 + 0.25 * vf);
+    col = mix(col, vortexCol, polarMix);
   }
 
-  vec3 lit = col * (0.06 + 0.94 * day * max(ndl, 0.0));
+  // Seeded storm/streak population (§2.1's "a RULE, not noise") — at most one
+  // giant anticyclone + 2-5 medium ovals with a one-shot analytic spiral warp
+  // for gas giants, or a handful of bright zonal streaks (elongated via the
+  // aspect stretch below) for ice giants. Placement is CPU-seeded at
+  // band-shear latitudes (continuum/index.ts), not drawn here.
+  for (int i = 0; i < MAX_STORMS; i++){
+    if (i >= uStormCount) break;
+    vec3 center = uStormPos[i];
+    float aspect = max(uStormAspect[i], 1e-3);
+    vec3 up = abs(center.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+    vec3 zonal = normalize(cross(up, center));  // east-west (constant-latitude) tangent
+    vec3 merid = cross(center, zonal);          // north-south tangent
+    vec3 delta = vDir - center;
+    float az = dot(delta, zonal) / aspect;      // aspect > 1 stretches reach zonally
+    float am = dot(delta, merid);
+    float d = length(vec2(az, am));
+    float r = max(uStormRadius[i], 1e-3);
+    float influence = smoothstep(r, r * 0.15, d);
+    if (influence <= 0.001) continue;
+    if (uStormSpiral[i] > 0.0){
+      // One-shot analytic spiral warp: theta += strength * exp(-d^2/r^2)
+      // (§2.1) via a Rodrigues rotation of the sample direction around the
+      // storm's own axis, so the interior noise reads as a spiral, not a
+      // flat oval.
+      float ang = uStormSpiral[i] * exp(-(d * d) / (r * r));
+      float ca = cos(ang), sa = sin(ang);
+      vec3 warped = vDir * ca + cross(center, vDir) * sa + center * dot(center, vDir) * (1.0 - ca);
+      float swirl = snoise(warped * 16.0 + uNoiseSeed * 1.7) * 0.5 + 0.5;
+      vec3 stormCol = mix(uStormColor[i] * 0.75, uStormColor[i] * 1.15, swirl);
+      col = mix(col, stormCol, influence * 0.9);
+    } else {
+      // Bright transient streak (ice giants): additive, not a replace-mix,
+      // so it reads as a lit cloud on top of the haze rather than a patch.
+      col += uStormColor[i] * influence * 0.55;
+    }
+  }
+
+  // Real-photo override: replaces the procedural band colour with the real
+  // bundled photo (sampled via a standard equirect projection of this
+  // fragment's own object-space direction — same lon=atan2(z,x)/lat=asin(y)
+  // convention continuum/real-albedo.ts's CPU sampler and generators/
+  // climate-provider.ts's band lookup already share) BEFORE the lighting
+  // below — the limb-darkening/day-night terms still apply on top exactly as
+  // they do for the procedural band colour, so real Jupiter/Saturn/Uranus/
+  // Neptune still get this shader's own lighting treatment, not a bypass.
+  if (uUseAlbedoMap > 0.5){
+    float rLon = atan(vDir.z, vDir.x);
+    float rLat = asin(clamp(vDir.y, -1.0, 1.0));
+    vec2 rUv = vec2(rLon / 6.28318530718 + 0.5, 0.5 - rLat / 3.14159265359);
+    col = texture2D(uAlbedoMap, rUv).rgb;
+  }
+
+  // Jónsson limb-darkening model (§2.1/§2.2, https://bjj.mmedia.is/3dtest/jup_shading.html):
+  // cos(i)^0.85 diffuse power, plus a per-channel multiplier that kicks in
+  // past cos(e) < 0.75 and is strongest at zero phase angle — the B channel's
+  // much larger residual (rc=0.5) is what gives the limb its faint blue tint.
+  vec3 V = normalize(cameraPosition - vWorldPos);
+  float nde = max(dot(N, V), 0.0001);              // cos(e)
+  float cosA = clamp(dot(uSunDir, V), -1.0, 1.0);  // cos(phase angle), approx
+  float diffuse = pow(clamp(ndl, 0.0, 1.0), 0.85);
+  vec3 limbMul = vec3(1.0);
+  if (nde < 0.75){
+    float ratio = clamp(nde, 0.0001, 0.75) / 0.75;
+    float phaseF = clamp((cosA + 1.0) * 0.5, 0.0, 1.0);
+    vec3 rp = vec3(0.2, 0.125, 0.04);
+    vec3 rc = vec3(0.1, 0.07, 0.5);
+    vec3 mulFull = pow(vec3(ratio), rp * (1.0 - rc)) + rc;
+    limbMul = mix(vec3(1.0), mulFull, phaseF);
+  }
+
+  vec3 lit = col * limbMul * (0.06 + 0.94 * day * diffuse);
   gl_FragColor = vec4(lit, 1.0);
 }
 `;

@@ -188,6 +188,11 @@ async function boot(): Promise<void> {
   // ── 2b. Post-Processing ──
   const postCtx = createPostProcessing(renderCtx.renderer, scene, camera);
 
+  // TEMP P2-24 diagnostic — revert before task end (not a shipped change).
+  if (import.meta.env?.DEV) {
+    (globalThis as Record<string, unknown>).__p24 = { renderer: renderCtx.renderer, scene, camera, postCtx };
+  }
+
   // Sync post-processing size and orbit line resolution on window resize
   _hmr.resizeHandler = () => {
     postCtx.resize(window.innerWidth, window.innerHeight);

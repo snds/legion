@@ -77,6 +77,13 @@ export interface GeneratorBundle {
   climate: ClimateProvider;
   weather: WeatherProvider;
   authoring: AuthoringStore;
+  /** Real-photo colour override (curated Sol bodies/moons only — see
+   *  continuum/real-albedo.ts). `sampleSurface` uses this to replace the
+   *  procedural `SurfaceSample.color` when a real texture is loaded;
+   *  `undefined` for every procedurally-generated body, and returns `null`
+   *  per-sample until the body's photo finishes loading (procedural bake
+   *  keeps rendering in the meantime). */
+  realAlbedo?: (dir: Vec3) => [number, number, number] | null;
   /** Combined fingerprint for chunk cache invalidation. */
   fingerprint(): string;
   refreshParams(params: PlanetRenderParams, macro: MacroParams): void;
